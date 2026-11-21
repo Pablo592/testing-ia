@@ -75,17 +75,32 @@ terminal, error). Para que nunca se pierda más de una tarea:
 ### Durante el trabajo
 - **Tareas pequeñas:** una historia, un componente o una revisión por vez.
 - **Antes de lanzar un agente:** marcar su tarea como "En curso" en `docs/estado.md`.
-- **Al terminar cada tarea:** marcarla como "Hecha" y hacer un **commit**:
-  `git add -A && git commit -m "<etapa> <agente>: <tarea>"`
-  (por ejemplo `"E2 developer: HU-02 tomar pedido"`). Antes del commit,
-  comprobar con `git status` que no se incluye nada de `.secrets/` ni otros secretos.
-- **Push** al remoto (`git push`) al cerrar cada puerta de etapa, o cuando el
-  humano lo pida.
+- **Al terminar cada tarea:** marcarla como "Hecha" en `docs/estado.md`, hacer
+  un **commit y un push inmediato**:
+  ```
+  git add -A
+  git status --short          # comprobar que no entra .secrets/, .env ni claves
+  git commit -m "<etapa> <agente>: <tarea>"   # p. ej. "E2 developer: HU-02 tomar pedido"
+  git push
+  ```
+  El push en cada tarea es obligatorio: si se acaban los tokens o se corta la
+  sesión, el trabajo terminado ya está en GitHub y se puede reanudar desde
+  cualquier máquina.
+- **Quién hace el commit y el push:** el Orquestador, justo después de que cada
+  subagente termine su tarea. Los subagentes no hacen commits por su cuenta
+  (así no se mezclan cambios de tareas distintas en un mismo commit).
+- **Si el push falla** (sin red, credenciales, remoto con cambios nuevos):
+  - Remoto con cambios nuevos → `git pull --rebase` y volver a hacer `git push`.
+    Si el rebase tiene conflictos, detenerse y avisar al humano.
+  - Sin red o credenciales → anotarlo en `docs/estado.md` ("push pendiente"),
+    avisar al humano y reintentar el push al terminar la siguiente tarea.
 - Nunca `git push --force`, `git reset --hard` ni borrar ramas sin aprobación humana.
 
 ### Al iniciar o reanudar una sesión
 1. Leer `docs/estado.md` y `docs/reglas-equipo.md`.
-2. Ejecutar `git status` y `git log --oneline -5`.
+2. Ejecutar `git status`, `git log --oneline -5` y `git fetch`. Si el remoto
+   tiene commits que no están en local (p. ej. se trabajó desde otra máquina),
+   `git pull --rebase`. Si hay commits locales sin subir, `git push`.
 3. Si hay cambios **sin commit** de una tarea "En curso":
    - Revisar con `git diff` si la tarea quedó completa.
    - Completa → ejecutar los tests y hacer el commit.
