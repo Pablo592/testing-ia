@@ -46,9 +46,11 @@
   1. Busca el usuario (nombre sin distinguir mayúsculas). Si no existe, verifica
      contra un hash ficticio (tiempo constante) y responde `401 INVALID_CREDENTIALS`.
   2. Si `locked_until > now()` → `423` con `retryAfterSeconds`, sin verificar.
-  3. Verifica argon2id(pin + pepper). Fallo: `failed_attempts += 1`; al llegar a
-     5, `locked_until = now() + 5 min` y `failed_attempts = 0`. Responde `401`;
-     el sexto intento (y siguientes durante el bloqueo) recibe `423` (HU-01).
+  3. Verifica argon2id(pin + pepper). Fallo: `failed_attempts += 1` y se aplica
+     la escala progresiva 5/10/15/20 de la revisión (b) (el contador **no** se
+     reinicia al bloquear). Responde `401`; los intentos durante el bloqueo
+     reciben `423` (HU-01). *(Texto original: bloqueo fijo de 5 min con
+     reinicio del contador; sustituido por SEC-001.)*
   4. Éxito: reinicia el contador. Si `active = false` → `403 USER_DISABLED`.
      Si no, crea la sesión.
   5. Además, límite de intentos por IP de origen (en memoria) para frenar el
@@ -61,8 +63,9 @@
   cualquier petición REST y `POST /session/activity` (el cliente lo envía como
   mucho una vez por minuto si hay toques sin otras peticiones). No cuentan el
   flujo SSE ni los `ping`. **Rol `kitchen`:** mientras su flujo SSE esté
-  conectado, no caduca por inactividad. **Caducidad absoluta** de 14 h
-  (configurable) para todas las sesiones, a validar por Cybersecurity.
+  conectado, no caduca por inactividad. **Caducidad absoluta** de 12 h para
+  todas las sesiones, configurable solo a la baja (antes 14 h; cambiado por
+  SEC-004, ver revisión (b)).
 - **Revocación:** logout, desactivación, restablecimiento de PIN y cambio de
   PIN propio marcan `revoked_at` y cierran el flujo SSE de las sesiones afectadas
   (ADR-004). Cambio de rol: no revoca; envía `session.updated`.
@@ -114,7 +117,9 @@ La decisión (sesión opaca + argon2id + RBAC) **no cambia**. Ajustes:
   encargado o PIN incorrecto. Límites y bloqueo: Cybersecurity.
 - **Nuevos permisos:** `order:serve` (W, M; barra recibe `403`),
   `approval:request` (W, M), `settings:read`/`settings:manage` (M, HU-09),
-  `telemetry:write` (todos). Matriz en `docs/arquitectura.md` §7.
+  `telemetry:write` (todos), además de los que separa `docs/permisos.md`
+  (`staff:read`, `staff:unlock`, `reports:close`, `session:self`,
+  `events:subscribe`). Matriz en `docs/arquitectura.md` §7.
 - `POST /telemetry` no cuenta como actividad para la inactividad de 15 min.
 
 ## Revisión 2026-11-21 (b): decisiones de Cybersecurity (`docs/seguridad.md` §6)
