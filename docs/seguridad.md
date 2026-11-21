@@ -6,9 +6,12 @@
 > en curso: `flujos.md`, wireframes 01–05), `docs/reglas-equipo.md` §3.
 > Permisos y roles: `docs/permisos.md`.
 >
-> Todavía no hay código, Containerfile ni compose: la revisión de contenedores
-> es **de diseño** (arquitectura §10). Se repetirá sobre los ficheros reales de
-> `deploy/` en cuanto Infrastructure los entregue (tarea 1.5).
+> Todavía no hay código ni compose; de `deploy/` solo existen, en curso,
+> `dev/Containerfile`, `dev/generar-secretos.sh` y `db/initdb/10-roles.sh`
+> (revisados: SEC-014, SEC-015; el Containerfile de DEV cumple §3: base por
+> digest, `USER 1000:1000`, `HEALTHCHECK` en forma exec, sin secretos). La
+> revisión completa de contenedores se repetirá sobre `deploy/` cuando
+> Infrastructure cierre la tarea 1.5.
 
 ## Índice
 1. Alcance y método
@@ -16,7 +19,7 @@
 3. Actores de amenaza
 4. Superficies de ataque y fronteras de confianza
 5. Amenazas (STRIDE)
-6. Decisiones sobre los hallazgos abiertos de `docs/estado.md`
+6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos)
 7. Requisitos de seguridad verificables (para Testing)
 8. Revisión de la arquitectura frente a la política de contenedores (§3)
 9. Hallazgos (SEC-xxx)
@@ -209,7 +212,7 @@ valioso es el **encargado** (anular cobros, crear usuarios, ver la caja).
    - El encargado inicial (`create-initial-manager`) también exige 6 dígitos.
 2. **Reglas de composición** (función pura en `packages/shared`, validada en
    servidor): no todos iguales; sin secuencias ascendentes ni descendentes de 4
-   o más dígitos consecutivos (1234, 9876, 345678); no formado por un bloque
+   o más dígitos consecutivos **en cualquier posición** (1234, 9876, 381234); no formado por un bloque
    repetido (1212, 123123, 121212); no incluido en la **lista de PIN prohibidos**
    (≥ 100 PIN más frecuentes de 4 y 6 dígitos según estudios públicos de
    frecuencia de PIN, p. ej. 2580, 1004, 2000, 6969, 1122, 0852, 112233,
@@ -327,6 +330,74 @@ de desbloqueo; responsable software-engineer).
 - En cualquiera de los casos, la red rootless debe **conservar la IP de origen**
   del dispositivo (SEC-003).
 
+### 6.3 Respuestas a otros puntos de `docs/estado.md` que tocan a Cybersecurity
+
+**UX — rejilla de usuarios en el login (P-01).** Aceptada, condicionada a
+SEC-002 (login solo alcanzable desde la red del personal) y a SEC-005
+(endpoint público que devuelve solo nombre y rol de usuarios activos). Se
+mantiene "Escribir mi usuario". La enumeración de nombres no aporta nada a
+quien ya está dentro del local; el control real es el bloqueo de §6.1.
+
+**UX/PO — parte de seguridad de la aprobación con PIN de encargado (HU-06).**
+- Encargado + PIN (no solo PIN): correcto; evita que los PIN de encargado
+  tengan que ser únicos y que un PIN cualquiera "valga" para algún encargado.
+- Intentos y bloqueo: cuentan en el contador del encargado elegido, misma
+  escala 5/10/15/20 (§6.1.3 y §6.1.4); además 5 fallos por sesión en 10 min →
+  `429` (evita usar una tablet de camarero para bloquear al encargado).
+  Cuenta bloqueada, desactivada o con PIN provisional no aprueba, con el mismo
+  error genérico.
+- Longitud: 6 dígitos (es un encargado, §6.1.1).
+- Válida para **una sola acción**: el servidor no guarda la aprobación ni emite
+  ningún token reutilizable; el cliente borra el PIN tras la respuesta (RS-29b).
+- Encargado con sesión propia: **no** se le pide PIN para las acciones de HU-06
+  (de acuerdo con el PO); **sí** para anular cobros y las escrituras de
+  Personal (SEC-007).
+
+**Testing T-12 — `chromiumSandbox: false` en el contenedor de Playwright.**
+**Aprobado con condiciones**, solo si la opción (1) de `docs/testing.md` §7.2
+no funciona: (a) solo en el contenedor efímero de e2e de TESTING (nunca en
+DEV interactivo, DEMO ni PROD, ni fuera de contenedor); (b) el contenedor sigue
+con UID ≥ 1000, `cap-drop=ALL`, `no-new-privileges`, el perfil seccomp por
+defecto (no `unconfined`), sin `--privileged` ni `--ipc=host`; (c) el
+navegador solo navega a la app bajo prueba, en la red interna de TESTING sin
+salida a internet; (d) el contenedor no recibe más secretos que los aleatorios
+de esa ejecución. Motivo: sin *sandbox*, un fallo del motor de render daría
+ejecución dentro del contenedor; con contenido propio, sin salida a internet y
+contenedor desechable, el riesgo es bajo. No se aprueba añadir `SYS_ADMIN` ni
+desactivar seccomp para conseguir el *sandbox*.
+
+**Monitoring M-03 — `POST /api/v1/telemetry`.** **Aprobado con condiciones**
+(RS-43): sesión obligatoria (cualquier rol, permiso `telemetry:write`; con PIN
+provisional, rechazado); comprobación de `Origin`; esquema zod `.strict()` solo
+con enums y números acotados (sin texto libre salvo `client.js_error`, filtrado
+como `docs/logging.md` §4.4); cuerpo ≤ 16 KiB y ≤ 50 elementos por lote;
+≤ 1 petición cada 30 s por sesión (`429`); **no** cuenta como actividad para la
+inactividad de 15 min; no se guarda en tablas de negocio ni en `audit_log`; no
+admite ni devuelve importes. `emittedAt` en eventos SSE: sin objeción.
+
+**Monitoring M-06 — excepción a §3.4 para montar `/var/log/journal`.**
+**Cybersecurity no recomienda la excepción (a); recomienda la opción (b)**, que
+cumple las reglas sin excepciones: log driver `k8s-file` con rotación
+(`log_size_max`) en el `$HOME` del usuario de servicio, leído en solo lectura
+por Alloy, y métricas de contenedores con el temporizador de usuario +
+`node_exporter` solo con el colector `textfile` (sin `/proc`, `/sys` ni socket).
+Motivo: (a) monta un directorio del sistema y, si el usuario de servicio está
+en `systemd-journal`/`adm`, da acceso a todo el diario del host (incluidos los
+logs de autenticación SSH). Si el humano aprueba (a) igualmente, condiciones
+mínimas: solo `/var/log/journal` en solo lectura (nunca `/var` ni `/run/log`);
+el usuario de servicio **no** pertenece a `systemd-journal`, `adm` ni `wheel`
+(solo lee su propio diario); contenedor de Alloy con todas las restricciones de
+§3.4. Hay discrepancia con Monitoring: **decide el humano**.
+
+**Monitoring M-05 — logs de PostgreSQL.** De acuerdo (la severidad alta es
+correcta). Se añade `log_statement = none` y que las sentencias con contraseñas
+de la inicialización no se registren (SEC-015).
+
+**Monitoring M-08 — Grafana sin publicar a la LAN.** De acuerdo: `127.0.0.1` +
+túnel SSH. Si se publica por Caddy, solo con autenticación propia de Grafana
+(sin usuario anónimo), desde la red del personal y con la contraseña de
+administración como `podman secret`.
+
 ---
 
 ## 7. Requisitos de seguridad verificables (para Testing)
@@ -339,7 +410,7 @@ contra TESTING/DEMO), **S** estático (SAST/lint/CI), **C** contenedores/host.
 | ID | Requisito | Verificación |
 |---|---|---|
 | RS-01 | Encargado: PIN de exactamente 6 dígitos; camarero y barra: 4 a 6. Aplica en alta, restablecimiento, cambio propio, promoción a encargado y encargado inicial. Error `400` con la regla | U (tabla de casos en `packages/shared`) + I (cada endpoint) |
-| RS-02 | Reglas de composición de §6.1.2 y lista de PIN prohibidos | U con tabla: 1111, 1234, 9876, 345678, 1212, 123123, 2580, 112233 rechazados; 4831, 739164 aceptados |
+| RS-02 | Reglas de composición de §6.1.2 y lista de PIN prohibidos | U con tabla: 1111, 1234, 9876, 381234, 1212, 123123, 2580, 112233 rechazados; 4831, 739164 aceptados |
 | RS-03 | Bloqueo progresivo 5/10/15/20 de §6.1.3; el contador no se reinicia al expirar el bloqueo; durante el bloqueo no se verifica el PIN | I con reloj inyectable: 25 intentos fallidos → tiempos 5, 15, 60 min y `423 ACCOUNT_LOCKED_MANUAL`; luego PIN correcto sigue rechazado |
 | RS-04 | `managerApproval` fallido suma al contador del encargado; cuenta bloqueada/desactivada/PIN provisional no aprueba; error genérico idéntico en todos los casos | I |
 | RS-05 | 10 fallos/10 min desde una IP → `429` 10 min antes de verificar el hash; 5 aprobaciones fallidas/10 min por sesión → `429` | I (medir que no se llama al hasher) |
@@ -387,6 +458,7 @@ contra TESTING/DEMO), **S** estático (SAST/lint/CI), **C** contenedores/host.
 | RS-29 | Ni PIN, ni token, ni cookie en ningún log (`app`, Caddy, `db`, journald): se usa un PIN centinela (p. ej. 908172) en login, aprobación, alta, restablecimiento, cambio propio y peticiones inválidas, y se buscan el centinela y el valor de `sid` en todos los logs → 0 coincidencias. Caddy sin `log_credentials` | I/C |
 | RS-29b | El cliente no conserva PIN (propio ni `managerApproval`) en estado, `localStorage` ni `sessionStorage` tras la respuesta | E (inspeccionar almacenamiento) |
 | RS-30 | Eventos de seguridad (sin PIN): `auth.login_failed` (usuario si existe, IP, motivo), `auth.locked` (nivel), `auth.locked_manual`, `auth.unlocked`, `auth.ip_throttled`, `auth.approval_granted`/`auth.approval_failed`, `session.created`/`session.revoked` (motivo), `staff.*`, `payment.voided`, `price.changed` | I |
+| RS-43 | Telemetría (`POST /telemetry`): sesión obligatoria, `Origin`, esquema estricto solo con enums/números, ≤ 16 KiB y ≤ 50 elementos, ≤ 1 petición/30 s por sesión (`429`), no cuenta como actividad, sin importes | I |
 | RS-31 | Los errores de validación de campos `pin`, `currentPin`, `newPin`, `confirmPin`, `managerApproval.pin` no repiten el valor recibido | I |
 
 ### Base de datos
@@ -564,11 +636,31 @@ aprobar los ficheros de `deploy/` cuando existan.
 - Cómo verificar: RS-40.
 - Estado: abierto
 
+## SEC-014: El generador de PIN de DEV no aplica todas las reglas de PIN
+- Severidad: baja
+- Ubicación: deploy/dev/generar-secretos.sh:30-41
+- Descripción: `random_pin` solo descarta 6 dígitos iguales y 10 secuencias completas; puede generar PIN que la regla de §6.1.2 rechaza (p. ej. con una secuencia de 4 dentro, `381234`, o un bloque repetido, `121212`), y `create-initial-manager` fallaría en DEV de forma intermitente. No hay riesgo de exposición: el PIN es aleatorio y el fichero tiene permisos 0600.
+- Responsable: infrastructure
+- Cómo corregir: generar el PIN con la función de reglas de `packages/shared` cuando exista (p. ej. un script de Node en la imagen de herramientas) o reintentar hasta que `create-initial-manager` lo acepte; mientras tanto, ampliar el filtro a cualquier subsecuencia de 4 consecutivos y a bloques repetidos.
+- Cómo verificar: generar 1 000 PIN con el script y validarlos con la función de reglas: 0 rechazos.
+- Estado: abierto
+
+## SEC-015: Contraseñas de roles de BD en claro en las sentencias de inicialización
+- Severidad: media
+- Ubicación: deploy/db/initdb/10-roles.sh:27-28 y :49
+- Descripción: `CREATE ROLE … PASSWORD '<valor>'` lleva la contraseña en claro en el texto SQL. Si la sentencia falla (p. ej. el rol ya existe), PostgreSQL la escribe en su log por `log_min_error_statement = error` (valor por defecto), y también con `log_statement = ddl|all`. Leerla desde fichero con `\set` es correcto; el problema es el log del servidor. Faltan además el rol `app_backup` (SEC-011) y los `CONNECTION LIMIT` de `docs/permisos.md` §6.
+- Responsable: infrastructure
+- Cómo corregir: al inicio de cada bloque `psql` (como superusuario), `SET log_statement = 'none'; SET log_min_error_statement = 'panic';` (solo afecta a esa sesión), o enviar el verificador SCRAM ya calculado en lugar de la contraseña; añadir `app_backup` y los límites de conexión.
+- Cómo verificar: forzar el error ejecutando la inicialización dos veces sobre el mismo volumen ("role already exists") y buscar las contraseñas de `.secrets/dev/` en los logs de `db` → 0 coincidencias; `\du` muestra `app_backup` y los límites.
+- Estado: abierto
+
 ---
 
 ### Resumen para la puerta de la Etapa 1
 - **Altos abiertos (bloquean la puerta):** SEC-001, SEC-002.
 - Medios abiertos: SEC-003, SEC-004, SEC-005, SEC-006, SEC-007, SEC-009,
-  SEC-010, SEC-011, SEC-013. Bajos: SEC-008, SEC-012.
+  SEC-010, SEC-011, SEC-013, SEC-015. Bajos: SEC-008, SEC-012, SEC-014.
+- Decisiones sobre otros puntos de `docs/estado.md`: §6.3 (rejilla de login,
+  aprobación de encargado, Chromium sin *sandbox*, telemetría, M-05, M-06, M-08).
 - Contenedores: sin incumplimientos en el diseño (§8); revisión de `deploy/`
   pendiente.

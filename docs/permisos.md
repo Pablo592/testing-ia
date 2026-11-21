@@ -92,11 +92,12 @@ contenedor y Caddy no lo reenvía.
 | `settings:manage` | `PATCH /settings` | ✗ | ✗ | ✓ | HU-02, HU-03 | |
 | `reports:read` | `GET /reports/daily` | ✗ | ✗ | ✓ | HU-08 | Últimos 90 días |
 | `reports:close` | `POST /reports/daily/:date/closing` | ✗ | ✗ | ✓ | HU-08 | Inmutable; `409` si ya cerrado |
+| `telemetry:write` (M-03) | `POST /telemetry` | ✓ | ✓ | ✓ | — | Condiciones de `docs/seguridad.md` §6.3 (RS-43); no cuenta como actividad |
 | `approval:grant` | (campo `managerApproval` en las rutas marcadas **A**) | ✗ | ✗ | ✓ | HU-06 | Cuenta para el bloqueo del encargado |
 
 **Cambio respecto a `docs/arquitectura.md` §7:** se separan `staff:read`,
-`staff:unlock`, `reports:close`, `settings:read`, `session:self` y
-`events:subscribe` para que cada ruta tenga un permiso explícito (necesario
+`staff:unlock`, `reports:close`, `settings:read`, `session:self`,
+`events:subscribe` y `telemetry:write` para que cada ruta tenga un permiso explícito (necesario
 para RS-17). La matriz de la arquitectura queda como resumen.
 
 ### 3.3 Comandos de host (`system`)
@@ -144,8 +145,9 @@ sesión afectada.
 
 Todos `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` salvo
 `postgres`. Autenticación `scram-sha-256` (sin `trust`), solo desde la red
-interna. `REVOKE ALL ON SCHEMA public FROM PUBLIC`; esquema propio `app`
-propiedad de `app_owner`. Los privilegios se conceden **explícitamente en cada
+interna. `REVOKE ALL ON DATABASE … FROM PUBLIC` y `REVOKE ALL ON SCHEMA public FROM
+PUBLIC`; el esquema de la aplicación (`public`, propiedad de `app_owner`, como
+hace `deploy/db/initdb/10-roles.sh`). Los privilegios se conceden **explícitamente en cada
 migración** (nada de `GRANT ALL`).
 
 | Usuario | Lo usa | Privilegios | Límite de conexiones |
@@ -153,7 +155,8 @@ migración** (nada de `GRANT ALL`).
 | `postgres` (superusuario) | Solo la inicialización del contenedor `db` (crear roles y BD) | Todo. Su contraseña no la recibe ningún otro contenedor | — |
 | `app_owner` | Solo el contenedor efímero `migrate` | Propietario del esquema `app`: DDL y `GRANT` sobre sus objetos | 2 |
 | `app_rw` | `app` (incluidos `create-initial-manager` y `unlock-user`) | Tabla siguiente | 20 |
-| `app_backup` | Tarea de copia (`pg_dump`) | `SELECT` en todas las tablas del esquema `app` y `USAGE` del esquema; nada más | 2 |
+| `app_backup` [SEC-011, SEC-015] | Tarea de copia (`pg_dump`) | `CONNECT`, `USAGE` del esquema y `SELECT` en sus tablas y secuencias; nada más | 2 |
+| `monitoring` (M-05) | `postgres_exporter` (DEMO/PROD) | `pg_monitor` y `CONNECT`; ningún privilegio sobre tablas de la aplicación | 2 |
 
 Privilegios de `app_rw` (además de `USAGE` en el esquema y en las secuencias):
 
@@ -186,6 +189,7 @@ imagen, el repositorio o `docs/`.
 | Contraseña de `app_owner` | ✓ (solo init) | ✓ | ✗ | ✗ | ✗ |
 | Contraseña de `app_rw` | ✓ (solo init) | ✗ | ✓ | ✗ | ✗ |
 | Contraseña de `app_backup` | ✓ (solo init) | ✗ | ✗ | ✗ | ✓ |
+| Contraseña de `monitoring` | ✓ (solo init) | ✗ | ✗ | ✗ | ✗ (solo `postgres_exporter`) |
 | *Pepper* de PIN | ✗ | ✗ | ✓ | ✗ | ✗ (se custodia aparte) |
 | Encargado inicial (nombre + PIN provisional) | ✗ | ✗ | ✓ (solo el comando; se borra después) | ✗ | ✗ |
 | Clave pública de cifrado de copias | ✗ | ✗ | ✗ | ✗ | ✓ (la privada, fuera del host) |
