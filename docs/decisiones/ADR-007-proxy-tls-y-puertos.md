@@ -39,7 +39,9 @@ b. `net.ipv4.ip_unprivileged_port_start=80` en el host: URLs limpias; es un
 - **Caddy** (imagen oficial, sin modificar, `Caddyfile` montado en solo lectura)
   como único servicio publicado al host. Dentro del contenedor escucha en
   **8443** (HTTPS) y **8080** (redirección a HTTPS). Reenvía todo a `app:3000`
-  por la red interna; no expone `/healthz`.
+  por la red interna; no expone `/healthz` ni `/readyz` (responde `404`) y no
+  enruta el puerto interno de métricas 9464 de `app` (revisión 2026-11-21,
+  hallazgos M-01/M-02). Genera `X-Request-Id` por petición (M-04).
 - **Certificados:**
   - PROD en VM con dominio: ACME automático (Let's Encrypt).
   - PROD/DEMO en red local sin dominio: `tls internal`; la CA raíz de Caddy se
@@ -64,3 +66,23 @@ b. `net.ipv4.ip_unprivileged_port_start=80` en el host: URLs limpias; es un
   Cybersecurity.
 - La imagen oficial de Caddy se ejecuta con `--user` ≥ 1000 y volumen `/data`
   propiedad de ese UID.
+
+## Revisión 2026-11-21 (tarea 1.3b, decisiones de Cybersecurity §6.2)
+
+- **Condición de despliegue (SEC-002, bloqueante):** el login y la API **nunca**
+  son alcanzables desde internet ni desde la Wi-Fi de clientes. PROD en el
+  local: Wi-Fi del personal separada (SSID/VLAN, WPA2-AES/WPA3) y cortafuegos
+  del host que solo admite 80/443 (u 8080/8443) desde la subred del personal.
+  PROD en VM: lista blanca de la IP fija del local o túnel WireGuard; sin una de
+  las dos no se despliega. Infrastructure lo documenta como requisito previo en
+  `docs/infraestructura.md`; Cybersecurity lo verifica (RS-41).
+- **TLS:** solo 1.2/1.3; `:8080` solo `308` a HTTPS. Cabeceras: lista RS-26.
+- **`ip_unprivileged_port_start`:** solo valor exacto **80** y solo en host
+  dedicado; si no lo es, se usa la opción (a) o una redirección `nftables`
+  443→8443 / 80→8080 del aprovisionamiento.
+- La red rootless debe conservar la IP de origen (SEC-003, Infrastructure) y
+  `app` solo confía en `X-Forwarded-For` de `proxy` (necesario para el límite
+  por IP de ADR-005).
+- Si la imagen oficial de Caddy no arranca con `cap-drop=ALL` por su capacidad
+  de fichero (SEC-009), se usa una imagen derivada mínima sin capacidades
+  (Infrastructure); "sin modificar" deja de aplicarse en ese caso.

@@ -1,0 +1,60 @@
+# Caddyfile común de TESTING, DEMO y PROD (imagen oficial de Caddy sin
+# modificar, montado en solo lectura). Solo cambia la configuración por
+# variables de entorno:
+#   SITE_ADDRESS  nombres servidos, separados por comas (p. ej. "caja.local")
+#   CADDY_TLS     "internal" (CA interna, red local) o un correo para ACME
+# ADR-007, docs/seguridad.md §6.2 b) y RS-26, docs/logging.md §5.1 y §8.2.
+{
+	# Sin API de administración: la configuración es inmutable dentro del contenedor.
+	admin off
+	# Puertos > 1024 dentro del contenedor (reglas-equipo.md §3.3/§3.6).
+	http_port 8080
+	https_port 8443
+	# No intentar instalar la CA en el almacén del sistema (no hay root).
+	skip_install_trust
+	# Caddy es el borde: no se confía en X-Forwarded-For de los clientes
+	# (sin trusted_proxies), así la app ve la IP que ve Caddy (SEC-003).
+}
+
+(security_headers) {
+	# RS-26 (docs/seguridad.md). Cualquier cambio lo decide Cybersecurity.
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=(self)"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+		-Server
+	}
+}
+
+{$SITE_ADDRESS:localhost} {
+	tls {$CADDY_TLS:internal}
+	import security_headers
+
+	# Logs JSON a stdout (docs/logging.md §5.1). Prohibido log_credentials.
+	log {
+		output stdout
+		format json
+	}
+
+	# Correlación (M-04): Caddy genera el identificador; el del cliente se ignora.
+	request_header X-Request-Id {http.request.uuid}
+
+	# Endpoints internos: nunca expuestos por el proxy (arquitectura §5.1, M-02).
+	@internal path /healthz /readyz /metrics /metrics/*
+	respond @internal 404
+
+	reverse_proxy app:3000 {
+		# SSE (ADR-004): sin búfer.
+		flush_interval -1
+	}
+}
+
+# Sitio interno de salud, sin TLS, no publicado al host (docs/logging.md §8.2).
+http://:9180 {
+	respond /health 200
+}

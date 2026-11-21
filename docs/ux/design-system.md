@@ -1,6 +1,7 @@
 # Design system — Toma de pedidos (cafetería)
 
-Autor: UX/UI Designer · Etapa 1, tarea 1.2 · Fecha: 2026-11-21
+Autor: UX/UI Designer · Etapa 1, tareas 1.2 y 1.2b · Fecha: 2026-11-21
+Los cambios de la tarea 1.2b (hallazgos resueltos por el PO en la ronda 1.1c) van marcados **[1.2b]**.
 Estado: **propuesta, pendiente de aprobación humana** (dirección visual).
 
 ## 0. Principios
@@ -45,15 +46,21 @@ Un solo tema claro en el MVP (también en barra; un tema oscuro queda fuera del 
 | Pendiente | `#334155` | `#e2e8f0` | `#64748b` | ○ (círculo vacío) | PENDIENTE | 2 px continuo |
 | En preparación | `#1e3a8a` | `#dbeafe` | `#2563eb` | ◐ (medio círculo) | EN PREPARACIÓN | 4 px continuo a la izquierda |
 | Listo | `#14532d` | `#dcfce7` | `#16a34a` | ✓ | LISTO | 4 px continuo completo |
+| **Servido** (solo sala) [1.2b] | `#166534` | `#ffffff` (sin relleno) | `#16a34a`, 2 px | ✓✓ (doble check) | SERVIDO | **insignia de contorno, sin relleno** (el resto de insignias están rellenas) |
 | **Retrasado** (se suma al estado) | `#7f1d1d` | `#fee2e2` | `#dc2626` | ⚠ (triángulo) | RETRASADO · 12 min | 6 px **discontinuo** + franja superior |
 | Modificado | `#4c1d95` | `#ede9fe` | `#7c3aed` | ✎ | MODIFICADO | franja superior |
 | Cancelado | `#0f172a` | `#cbd5e1` | `#0f172a` | ✕ | CANCELADO | contenido tachado + franja |
 | Cobrado (solo sala) | `#134e4a` | `#ccfbf1` | — | € | COBRADO | — |
+| Anulado (cobro; solo "Cobrados hoy" y ticket) [1.2b] | `#0f172a` | `#cbd5e1` | — | ⊘ | ANULADO | importe tachado + línea "Motivo: …" |
 | Aviso | `#78350f` | `#fef3c7` | — | ⚠ | (texto del aviso) | — |
 
 "Retrasado" no es un estado del pedido sino un **modificador**: la tarjeta sigue mostrando PENDIENTE o EN PREPARACIÓN y además lleva la franja "⚠ RETRASADO · N min". Así se cumple HU-03 (icono y texto, no solo color).
 
-Los iconos son de una librería (Lucide en shadcn/ui: `circle`, `circle-dashed`/`loader`, `check`, `triangle-alert`, `pencil`, `x`, `euro`); los símbolos de esta tabla solo los representan en los wireframes. Los iconos son decorativos (`aria-hidden`) porque el texto de la etiqueta siempre está presente.
+**Servido [1.2b]** es el estado final de preparación y solo se ve en sala (P-02; barra nunca lo muestra). Se distingue de LISTO de cuatro formas: texto (SERVIDO), icono (doble check), relleno (contorno frente a fondo verde) y sección (LISTO va en "Listos para servir"; SERVIDO, en "Resto de pedidos"). Comparte el tono verde con LISTO a propósito, porque es su continuación; la diferencia que no depende del color es el relleno, que también se ve en escala de grises. Frente a PENDIENTE (gris relleno) cambian el tono, el relleno, el icono y el texto.
+
+**Anulado [1.2b]** usa los colores de Cancelado (neutro oscuro, ya verificado), pero con otro icono (⊘) y otro texto. Nunca coinciden en la misma vista: CANCELADO es un estado del pedido (barra y detalle) y ANULADO, un estado del cobro ("Cobrados hoy" y ticket).
+
+Los iconos son de una librería (Lucide en shadcn/ui: `circle`, `circle-dashed`/`loader`, `check`, `check-check` (Servido), `ban` (Anulado), `triangle-alert`, `pencil`, `x`, `euro`, `undo-2` (Deshacer), `lock` (bloqueo)); los símbolos de esta tabla solo los representan en los wireframes. Los iconos son decorativos (`aria-hidden`) porque el texto de la etiqueta siempre está presente.
 
 ### 1.3 Contrastes verificados
 
@@ -78,6 +85,10 @@ Los iconos son de una librería (Lucide en shadcn/ui: `circle`, `circle-dashed`/
 | Modificado fg / bg | 9,23 | 4,5 | Cumple |
 | Cancelado fg / bg | 12,02 | 4,5 | Cumple |
 | Cobrado fg / bg | 8,41 | 4,5 | Cumple |
+| **Servido** fg `#166534` / `surface` [1.2b] | 7,13 | 4,5 | Cumple |
+| **Servido** fg `#166534` / `bg` (si la fila no tiene fondo propio) [1.2b] | 6,81 | 4,5 | Cumple |
+| **Servido** fg `#166534` / `surface-muted` (fila pulsada) [1.2b] | 6,51 | 4,5 | Cumple |
+| **Anulado** fg / bg (= Cancelado) [1.2b] | 12,02 | 4,5 | Cumple |
 | Aviso fg / bg | 8,15 | 4,5 | Cumple |
 | Blanco / `toast` | 17,85 | 4,5 | Cumple |
 | Blanco / `offline` | 8,31 | 4,5 | Cumple |
@@ -86,8 +97,10 @@ Los iconos son de una librería (Lucide en shadcn/ui: `circle`, `circle-dashed`/
 | Borde retrasado `#dc2626` / `surface` | 4,83 | 3 | Cumple |
 | Borde en preparación `#2563eb` / `surface` | 5,17 | 3 | Cumple |
 | Borde listo `#16a34a` / `surface` | 3,30 | 3 | Cumple (justo) |
+| Contorno de la insignia **Servido** `#16a34a` / `surface` (2 px, identifica el componente) [1.2b] | 3,30 | 3 | Cumple (justo) |
 | Borde modificado `#7c3aed` / `surface` | 5,70 | 3 | Cumple |
 
+Descartado [1.2b]: para Servido, contorno `#16a34a` sobre el fondo de Listo `#dcfce7` (3,00:1, en el límite exacto), y por eso la insignia de Servido no lleva relleno verde.
 Descartado: `#64748b` como texto sobre `surface-muted` (4,34:1, **no cumple**). Por eso el texto de un producto agotado usa `text-secondary`, no un gris más claro. **No se usa opacidad** para deshabilitar: cambia el contraste de forma impredecible.
 
 ## 2. Tipografía
@@ -107,24 +120,35 @@ Descartado: `#64748b` como texto sobre `surface-muted` (4,34:1, **no cumple**). 
 | `--text-2xl` | 24 / 32 | 700 | Título de pantalla, total del pedido |
 | `--text-3xl` | 32 / 40 | 700 | **Cambio a devolver** (HU-04 exige >= 32), total en cobro |
 | `--text-4xl` | 40 / 48 | 800 | Número de pedido en la confirmación de envío |
-| `--text-bar-meta` | 24 / 32 | 600 | Barra: notas de línea, hora, minutos de espera |
-| `--text-bar-item` | 36 / 44 | 700 | Barra: cantidad y nombre de producto |
+| `--text-bar-meta` | 24 / 32 | 600 | Barra: notas de línea, hora, minutos de espera, insignias, franjas de modificador |
+| `--text-bar-item` | **38** / 44 | 700 | Barra: cantidad y nombre de producto [1.2b: pasa de 36 a 38 px, ver §2.1] |
 | `--text-bar-title` | 40 / 48 | 800 | Barra: número de pedido y mesa/cliente |
+| `--text-bar-action` | 28 / 32 | 800 | Barra: texto de los botones de 72 px (Empezar, Marcar listo, Entendido, Deshacer) [1.2b] |
 
-### 2.1 Legibilidad a distancia en barra (cálculo)
+### 2.1 Legibilidad a distancia en barra (cálculo) [actualizado 1.2b]
 
-HU-03 pide "legible a 1,5 m: mínimo 18 px en pantalla de 15 pulgadas o mayor". He comprobado el tamaño físico (pantalla 1920x1080 a zoom 100 %, altura de mayúscula aprox. 0,72 em):
+**Criterio (HU-03, supuesto 21):** altura de mayúscula >= 7 mm (unos 16 arcmin a 1,5 m) en el nombre de producto, la cantidad, el número de pedido y la mesa o cliente, en la pantalla de barra de 24" FHD (1920x1080) a zoom 100 %.
 
-| Pantalla FHD | Tamaño de píxel | 18 px: mayúscula / ángulo a 1,5 m | 36 px: mayúscula / ángulo a 1,5 m |
-|---|---|---|---|
-| 15" | 0,173 mm | 2,2 mm / 5 arcmin | 4,5 mm / 10 arcmin |
-| 21,5" | 0,248 mm | 3,2 mm / 7 arcmin | 6,4 mm / 15 arcmin |
-| 24" | 0,277 mm | 3,6 mm / 8 arcmin | 7,2 mm / 16 arcmin |
+**Datos:**
+- Tamaño de píxel de 24" 16:9 FHD: ancho = 609,6 mm x 16 / √(16² + 9²) = 531,3 mm, y 531,3 / 1920 = **0,2767 mm/px**.
+- Altura de mayúscula de la fuente, como fracción del tamaño (`cap-height / em`), según la fuente que use `system-ui` en el equipo de barra: Ubuntu 0,693; **Segoe UI 0,700** (Windows); SF Pro 0,705; Roboto 0,711; Noto Sans 0,714; DejaVu Sans 0,729. Para el cálculo se toma la peor: **0,69**.
+- Ángulo = atan(altura / 1500 mm).
 
-La referencia habitual de ergonomía de pantallas (ISO 9241-303) pide unos **16 arcmin como mínimo** (20-22 recomendado) de altura de carácter para lectura. **18 px en 15" se queda en unos 5 arcmin, la tercera parte de ese mínimo.** Por eso:
+| Tamaño | Mayúscula con 0,69 | Mayúscula con 0,70 (Segoe UI) | Ángulo a 1,5 m (0,69) | >= 7 mm |
+|---|---|---|---|---|
+| 24 px (`text-bar-meta`) | 4,58 mm | 4,65 mm | 10,5 arcmin | No (no se le exige, ver abajo) |
+| 32 px | 6,11 mm | 6,20 mm | 14,0 arcmin | No |
+| 36 px (valor anterior de `text-bar-item`) | 6,87 mm | **6,97 mm** | 15,8 arcmin | **No** con Ubuntu ni Segoe UI |
+| **38 px (`text-bar-item`, nuevo)** | **7,26 mm** | 7,36 mm | 16,6 arcmin | **Sí** con todas |
+| **40 px (`text-bar-title`)** | **7,64 mm** | 7,75 mm | 17,5 arcmin | **Sí** con todas |
 
-- El diseño usa **36 px** para productos y **40 px** para el número de pedido y la mesa (el doble de lo que pide la historia, así que también cumple el criterio literal).
-- Con 36 px, la lectura a 1,5 m cumple el mínimo ergonómico en una pantalla de **24" FHD**. En 15" cumple a aprox. 1 m. Lo he reportado al PO en `docs/estado.md` para que reformule el criterio (en mm o en ángulo, junto con el tamaño de pantalla).
+**Resultado:** con 36 px el criterio de 7 mm solo se cumple si la fuente tiene `cap-height` >= 0,703 em (falla por 0,03-0,13 mm con Segoe UI y Ubuntu). Por eso `text-bar-item` sube a **38 px** con la misma altura de línea de 44 px: el presupuesto de alto de la tarjeta no cambia (ver `wireframes/04-cola-barra.md`) y el ancho útil pasa de unos 30 a unos 28 caracteres por línea. La equivalencia "36 px" que cita HU-03 queda en el límite; manda el criterio en mm (reportado al PO en `docs/estado.md`).
+
+**Cómo se verifica (Testing, etapa 3):** a 1920x1080 y zoom 100 %, medir en el navegador la altura de mayúscula renderizada de cada texto obligado (p. ej. `canvas.measureText('H').actualBoundingBoxAscent` con la fuente calculada del elemento) y exigir **>= 25,3 px** (7 mm / 0,2767 mm). En la pantalla instalada, medir con regla una "H" mayúscula: >= 7 mm.
+
+**Condiciones de instalación:** el sistema operativo de la pantalla de barra debe tener la escala de pantalla al 100 % y el navegador a zoom 100 %. Una pantalla mayor de 24" con 1920x1080 da píxeles más grandes (27" FHD: 0,311 mm/px) y cumple con más margen. Una pantalla de 24" con más resolución (QHD o 4K) solo cumple si la escala del sistema hace que 1 px CSS mida >= 0,2767 mm (QHD de 24" al 133 %, 4K de 24" al 200 %).
+
+**Qué queda fuera del criterio de 7 mm:** notas de línea, hora, minutos de espera, insignias de estado, franjas de modificador (RETRASADO, MODIFICADO, CANCELADO) y etiquetas AÑADIDO/ELIMINADO, a 24 px (unos 11 arcmin, legibles a aprox. 1 m). Las insignias y franjas se refuerzan con color, icono y patrón de borde, que se distinguen a más distancia que el texto, y una línea ELIMINADA se ve tachada a 38 px. **Las notas no tienen refuerzo** y pueden cambiar la preparación ("sin lactosa"): he propuesto al PO incluirlas en el criterio (`docs/estado.md`). Mientras el PO no decida, el diseño las mantiene a 24 px.
 
 ## 3. Espaciado y retícula
 
@@ -153,7 +177,7 @@ Puntos de corte (los mismos de la revisión visual): **375 px** (móvil, solo us
 | `--touch-md` | 56 px de alto | Botones secundarios, pestañas de categoría, inputs | — |
 | `--touch-lg` | 64 px de alto | Botón principal en sala; teclas del teclado de PIN e importe (64x64 o más) | HU-01 (>= 44) |
 | `--touch-product` | mín. 120x88 px | Botón de producto (nombre + precio) | HU-02 (>= 44, nombre y precio visibles) |
-| `--touch-bar` | 72 px de alto, mín. 160 px de ancho | Botones de barra (Empezar, Marcar listo, Entendido, Deshacer) | HU-03 (>= 60x60) |
+| `--touch-bar` | 72 px de alto, mín. 160 px de ancho | Botones de barra (Empezar, Marcar listo, Entendido, Deshacer, Activar sonido) | HU-03 (>= 60x60) |
 
 Separación mínima entre objetivos: 8 px (16 px en barra). Ningún control destructivo (Descartar, Cancelar pedido, Eliminar línea) se coloca junto al botón principal: va en el lado opuesto o detrás de un diálogo.
 
@@ -192,10 +216,23 @@ Todos con estados: **reposo, hover (solo puntero), pulsado, foco visible, deshab
 - **Error:** borde de 2 px `danger`, icono ⚠ y mensaje `danger` bajo el campo, enlazado con `aria-describedby`, y `aria-invalid="true"`. Al enviar un formulario con errores, el foco va al primer campo erróneo y arriba aparece un resumen con enlaces a cada campo.
 
 ### 5.5 Tarjeta de pedido (barra)
-Ver wireframe `04-cola-barra.md`. Estructura fija: (1) franja de modificador opcional (RETRASADO / MODIFICADO / CANCELADO); (2) cabecera con número, mesa o cliente, hora y minutos de espera; (3) insignia de estado; (4) líneas: cantidad en negrita + nombre en `text-bar-item`, con la nota debajo en `text-bar-meta` y cursiva precedida de "Nota:"; las líneas añadidas llevan la etiqueta "AÑADIDO" y las eliminadas, tachado + "ELIMINADO"; (5) un único botón de acción `touch-bar` a todo el ancho. **Sin importes.**
+Ver wireframe `04-cola-barra.md`. Estructura fija: (1) franja de modificador opcional (RETRASADO / MODIFICADO / CANCELADO); (2) cabecera con número, mesa o cliente, hora y minutos de espera; (3) insignia de estado; (4) líneas: cantidad en negrita + nombre en `text-bar-item` (38 px), con la nota debajo en `text-bar-meta` y cursiva precedida de "Nota:"; las líneas añadidas llevan la etiqueta "AÑADIDO" y las eliminadas, tachado + "ELIMINADO"; (5) un único botón de acción `touch-bar` a todo el ancho. **Sin importes.**
 
-### 5.6 Fila de pedido (sala)
-Número, mesa/cliente, hora, insignia de estado (incluida LISTO, destacada arriba), total y botón "Cobrar". Toda la fila (mín. 72 px de alto) abre el detalle; "Cobrar" es un objetivo táctil propio de 56 px, separado 16 px.
+### 5.6 Fila de pedido (sala) [actualizado 1.2b]
+Número, mesa/cliente, hora de envío, insignia de estado de preparación, insignia "€ COBRADO" si el cobro está registrado, total con IVA y, a la derecha, el grupo de acciones. Toda la fila (mín. 72 px de alto) abre el detalle; cada acción es un objetivo táctil propio de 56 px de alto, separado 16 px de la siguiente.
+
+| Preparación \ Cobro | Abierto | Cobrado |
+|---|---|---|
+| Pendiente / En preparación | `[Cobrar]` | (sin acciones; solo la insignia COBRADO) |
+| Listo | `[✓✓ Servido]` `[Cobrar]` | `[✓✓ Servido]` |
+| Servido | `[Cobrar]` | (no aparece en la lista) |
+
+- "Servido" es un botón **secundario** (no rompe la regla de un solo primario: el primario de P-02 es "Nuevo pedido") con icono `check-check` y la etiqueta "Servido". Su `aria-label` es completo: "Marcar servido el pedido 42, mesa 7".
+- "Servido" va a la izquierda de "Cobrar" y siempre en el mismo sitio, para que la posición no cambie entre filas con y sin cobro.
+- Cuando un pedido está esperando la respuesta del servidor, el botón pasa a "Guardando…" y se deshabilita (contra el doble toque).
+
+### 5.6b Pestañas de la lista de sala [1.2b]
+Mismo componente que §5.8 (56 px, la activa con fondo `primary` y subrayado de 4 px): "Pedidos activos (N)" y "Cobrados hoy". Cambiar de pestaña = 1 toque (HU-04).
 
 ### 5.7 Insignia de estado
 Texto en mayúsculas `text-base` (`text-bar-meta` en barra), peso 700, icono a la izquierda, colores de la tabla 1.2, `radius-sm`, padding 4x8 px.
@@ -210,12 +247,50 @@ Fila horizontal desplazable (vertical en el lateral si es horizontal y caben). A
 
 ### 5.10 Avisos
 - **Toast** (`toast`): éxito o información, no bloquea, se muestra al menos 3 s (5 s por defecto), `role="status"`. Ej.: "Pedido 42 enviado a barra".
-- **Toast con acción**: "Pedido 42 marcado listo · Deshacer (27 s)" en barra, con la cuenta atrás visible.
+- **Toast con acción** [actualizado 1.2b]: "Pedido 42 servido · Deshacer (27 s)" en sala. Botón "Deshacer" de 56 px (secundario invertido: borde y texto blancos sobre `toast`, contraste 17,85:1) y cuenta atrás visible en texto; el toast dura lo que dure la ventana de deshacer (30 s) y no tapa el foco (WCAG 2.4.11: se coloca abajo y la lista reserva su alto con padding inferior). Solo hay **un** "Deshacer" a la vez: la acción nueva sustituye a la anterior (HU-03: "solo la última acción").
+- **Zona Deshacer de barra** [1.2b]: no es un toast, es una zona fija de la barra superior de P-05 (ver wireframe). Muestra "Pedido 41 empezado" o "Pedido 39 listo" + botón `touch-bar` "↶ DESHACER · 27 s". Al terminar los 30 s o si sala marca "Servido", el botón desaparece y la zona muestra 5 s el motivo ("Pedido 39 ya servido: no se puede deshacer").
 - **Error en línea** (bloque `danger` con icono) junto a la acción que falla: "No se ha podido enviar, reintenta" + botón "Reintentar". `role="alert"`.
 - **Banner de conexión** fijo arriba, `offline`: "⚠ Sin conexión. Reintentando…" (HU-03: visible en <= 5 s). Al recuperarse, cambia 3 s a "Conexión recuperada" en estilo Listo.
 
+### 5.10b Diálogo de PIN del encargado: autorización y reconfirmación [1.2b] (HU-06, supuesto 22, SEC-007, `docs/seguridad.md` §6.1 y §6.3)
+Componente reutilizable con dos variantes:
+
+| Variante | Cuándo | Quién escribe el PIN |
+|---|---|---|
+| **Autorización** | Acción de HU-06 (quitar líneas o cancelar un pedido no Pendiente) pedida desde una sesión de camarero/cajero | Un encargado que elige su nombre en la tablet del camarero |
+| **Reconfirmación** (SEC-007) | Desde una sesión de encargado: anular un cobro (HU-04) y toda escritura en Personal (alta, cambio de rol, activar/desactivar, restablecer PIN, desbloquear; HU-07) | El propio encargado de la sesión; su nombre va fijo |
+
+Con una sesión de encargado, las acciones de HU-06 **no** muestran el diálogo (supuesto 22, confirmado por Cybersecurity). Un camarero/cajero nunca llega a la reconfirmación porque no tiene esas acciones.
+
+Estructura fija:
+1. **Título con la acción concreta**: "Autorizar: quitar 1 × Zumo naranja del pedido 42", "Confirma con tu PIN: anular el cobro de las 10:41 (12,60 €)" o "Confirma con tu PIN: desbloquear a Lucía". Quien escribe el PIN ve qué aprueba.
+2. **Contexto** (solo en autorización): Aviso "⚠ El pedido está en preparación: la línea puede estar ya preparada" (o "ya servida").
+3. **Encargado**: en autorización, con un solo encargado activo, texto fijo "Encargado: Marta" (preseleccionado). Con 2 o más, botones de opción de 56 px, uno por encargado (no una lista desplegable: es 1 toque y se ven todos), **sin preselección**, y el teclado se habilita al elegir uno (`role="radiogroup"`, etiqueta "Encargado que autoriza"). En reconfirmación, siempre texto fijo con el usuario de la sesión.
+4. **PIN**: etiqueta visible "PIN de Marta (6 dígitos)" (los encargados tienen exactamente 6 dígitos, `seguridad.md` §6.1.1), 6 indicadores ● y el teclado de §5.3 (72 px). El botón de acción se habilita con 6 dígitos.
+5. **Zona de mensaje** bajo el PIN (`role="alert"` para errores).
+6. Botones: "Volver" (secundario, izquierda) y el verbo de la acción a la derecha ("Autorizar y quitar", "Autorizar y cancelar pedido", "Confirmar y anular cobro", "Confirmar y desbloquear"), en estilo primario o de peligro según la acción.
+
+Tras cualquier respuesta, el PIN se vacía de la pantalla y de la memoria del cliente (RS-29b). El cambio pendiente **nunca** se pierde por un error: solo se descarta con "Volver".
+
+**Mensajes de error y bloqueo** (política de `docs/seguridad.md` §6.1: bloqueo progresivo 5/15/60 min y después indefinido, límite por sesión y por dispositivo). Los tiempos los da el servidor (`retryAfterSeconds` o `Retry-After`); la cuenta atrás se muestra como "m:ss" por debajo de 10 min y como "N min" por encima, y el lector de pantalla la anuncia al aparecer y cada minuto, no cada segundo.
+
+| Respuesta del servidor | Variante | Mensaje (junto al PIN) | Teclado y botones |
+|---|---|---|---|
+| `403 MANAGER_APPROVAL_INVALID` (PIN incorrecto; también si el encargado está bloqueado, desactivado o con PIN provisional: error genérico idéntico, RS-04) | Autorización | "⚠ PIN de encargado incorrecto" (texto de HU-06). Desde el 2.º fallo seguido en el diálogo se añade la ayuda: "Si estás seguro del PIN, inicia sesión con tu usuario para comprobar si tu cuenta está bloqueada." | Activo; PIN vaciado; foco en el primer dígito |
+| `423 MANAGER_LOCKED {retryAfterSeconds}` (solo si el contrato de la arquitectura lo mantiene; ver discrepancia en `docs/estado.md`) | Autorización | "🔒 Marta no puede autorizar ahora: demasiados intentos. Podrás intentarlo en 4:59. Puedes elegir otro encargado." | Deshabilitado para ese encargado; los demás siguen elegibles |
+| `429` por sesión (5 aprobaciones fallidas en 10 min) | Autorización | "🔒 Demasiados intentos de autorización desde esta sesión. Espera 9:12." | Deshabilitado para todos los encargados; "Volver" activo |
+| `429` por dispositivo (10 fallos en 10 min) | Las dos | "🔒 Demasiados intentos desde este dispositivo. Espera 9 min." (mismo texto que el login, HU-01) | Deshabilitado; "Volver" activo |
+| `401`/`403` PIN incorrecto | Reconfirmación | "⚠ PIN incorrecto. No se ha hecho ningún cambio." + "Cuenta para el bloqueo de tu usuario." | Activo; PIN vaciado |
+| `423` bloqueo temporal (5, 15 o 60 min) del encargado de la sesión | Reconfirmación | "🔒 Demasiados intentos fallidos. Podrás confirmar de nuevo en 4:59. No se ha hecho ningún cambio." | Deshabilitado; "Volver" activo |
+| `423 ACCOUNT_LOCKED_MANUAL` del encargado de la sesión | Reconfirmación | "🔒 Tu cuenta ha quedado bloqueada. Pide a otro encargado que la desbloquee en Personal." (qué pasa con la sesión abierta lo decide Cybersecurity, ver `docs/estado.md`) | Deshabilitado; "Volver" activo |
+| Sin conexión / `5xx` | Las dos | "No se ha podido comprobar el PIN. No se ha hecho ningún cambio. · Reintentar" (no cuenta como intento) | Activo |
+| `409` el pedido o el cobro ha cambiado | Las dos | Se cierra el diálogo y se muestra el aviso de conflicto de la pantalla; la aprobación no se usa | — |
+| Correcto | Las dos | Se cierra el diálogo y se aplica la acción; toast con el resultado y, en autorización, "· autorizado por Marta" | — |
+
+Los iconos 🔒 y ⚠ son `lock` y `triangle-alert` de Lucide. Bloqueo = bloque de estilo Aviso; error = texto `danger`. Los dos llevan texto, así que nunca dependen solo del color.
+
 ### 5.11 Barra superior (en todas las pantallas)
-64 px. Izquierda: título de la pantalla. Derecha: **"Lucía · Camarero"** (nombre y rol en texto, HU-01) y el botón "Cerrar sesión" (icono + texto, 48 px). El encargado tiene además el botón "Menú de gestión". En barra se añaden el interruptor de sonido ("Sonido: activado") y el indicador de conexión.
+64 px. Izquierda: título de la pantalla. Derecha: **"Lucía · Camarero"** (nombre y rol en texto, HU-01) y el botón "Cerrar sesión" (icono + texto, 48 px). El encargado tiene además el botón "Menú de gestión". En barra se añaden el interruptor de sonido ("Sonido: activado") y el indicador de conexión. [1.2b] Si el navegador bloquea el audio (tras recargar sin interacción), el interruptor se sustituye por el botón `touch-bar` "🔇 Activar sonido" con fondo de Aviso hasta que se pulse; y si la pantalla no puede mantenerse encendida (Wake Lock no disponible), un aviso fijo "La pantalla puede apagarse sola: revisa el ahorro de energía" (hallazgo del Software Engineer en `docs/estado.md`).
 
 ### 5.12 Estados vacío, cargando y error (obligatorios en cada lista)
 | Estado | Patrón |

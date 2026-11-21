@@ -100,3 +100,65 @@
   `docs/estado.md`.
 - Requiere HTTPS en cualquier entorno que no sea `localhost` (cookie `Secure`),
   ver ADR-007.
+
+## Revisión 2026-11-21 (tarea 1.3b)
+
+La decisión (sesión opaca + argon2id + RBAC) **no cambia**. Ajustes:
+- **Aprobación de encargado (supuesto 22):** `managerApproval {managerId, pin}`
+  (se elige el encargado de `GET /staff/managers` y se teclea su PIN). Vale para
+  **una sola acción por construcción**: viaja dentro de la petición de esa
+  acción y no deja token ni estado en servidor. Si la sesión ya es de
+  encargado, se omite y `authorized_by = actor`, salvo que Cybersecurity exija
+  reautenticación (el contrato ya lo admite). Fallo: `403
+  MANAGER_APPROVAL_INVALID` con la misma respuesta para id inexistente, no
+  encargado o PIN incorrecto. Límites y bloqueo: Cybersecurity.
+- **Nuevos permisos:** `order:serve` (W, M; barra recibe `403`),
+  `approval:request` (W, M), `settings:read`/`settings:manage` (M, HU-09),
+  `telemetry:write` (todos). Matriz en `docs/arquitectura.md` §7.
+- `POST /telemetry` no cuenta como actividad para la inactividad de 15 min.
+
+## Revisión 2026-11-21 (b): decisiones de Cybersecurity (`docs/seguridad.md` §6)
+
+Estas reglas **sustituyen** a las equivalentes de la sección "Decisión":
+
+- **Longitud de PIN (SEC-001):** encargado exactamente 6 dígitos (también el
+  encargado inicial); camarero/cajero y barra 4–6. Reglas de composición en
+  `packages/shared`: no todos iguales, sin secuencias de 4+ en cualquier
+  posición, no un bloque repetido, no en la **lista de PIN prohibidos**
+  versionada (≥ 100 más frecuentes). `users.pin_digits` guarda la longitud: al
+  promocionar a encargado a un usuario con menos de 6 → `must_change_pin = true`.
+- **Bloqueo progresivo (SEC-001):** `failed_attempts` cuenta fallos
+  consecutivos acumulados y **no** se reinicia al expirar un bloqueo; solo lo
+  reinician un acceso correcto, `POST /staff/:id/unlock`, el restablecimiento
+  de PIN o el comando `unlock-user`. Al llegar a 5 / 10 / 15 → bloqueo 5 / 15 /
+  60 min (`423 LOCKED {retryAfterSeconds}`); a 20 → `locked_manual = true`
+  (`423 ACCOUNT_LOCKED_MANUAL`). Durante un bloqueo no se verifica el PIN ni
+  cuentan intentos.
+- **Límite por origen (SEC-001):** 10 fallos (login + aprobaciones +
+  reconfirmaciones) en 10 min desde una IP → `429` 10 min para cualquier
+  usuario desde esa IP, comprobado **antes** del hash (en memoria; una sola
+  instancia). Aprobaciones: además 5 fallos por sesión en 10 min → `429`.
+  Requiere IP real (SEC-003, ADR-007).
+- **Aprobaciones de encargado:** cuentan en el mismo contador del encargado
+  elegido; una cuenta bloqueada, desactivada o con PIN provisional no aprueba
+  (mismo error genérico).
+- **Reconfirmación de PIN del encargado (SEC-007):** campo `confirmPin` (PIN
+  del propio encargado de la sesión) obligatorio en: anular cobro, alta de
+  usuario, cambio de rol, activar/desactivar, restablecer PIN y desbloquear.
+  Se verifica con el mismo mecanismo que `managerApproval` (mismo contador,
+  mismos límites) y no crea estado. Para las acciones de HU-06 el encargado con
+  sesión propia **no** reconfirma.
+- **Desbloqueo:** `POST /staff/:id/unlock` (M, `staff:unlock`, con `confirmPin`)
+  y comando `unlock-user <nombre>` en la imagen (operador del host, sin root),
+  auditado con actor `system`.
+- **Caducidad absoluta (SEC-004):** **12 h** para todos los roles (incluida
+  barra); configurable solo a la baja: `config.ts` no arranca con un valor
+  mayor. Inactividad 15 min sin cambios; la exención es solo del rol `kitchen`
+  con flujo SSE abierto (un encargado con la cola abierta no la hereda).
+- **Rejilla de login (SEC-005):** `GET /auth/login-options` público: solo
+  `[{name, role}]` de usuarios activos, sin `id`, bloqueo ni `mustChangePin`;
+  `Cache-Control: no-store`; mismo límite por IP que el login. Aceptable solo
+  con la red restringida de SEC-002.
+- Consecuencia: el riesgo residual de la sección anterior (~1 440 intentos/día)
+  queda acotado a **20 intentos** por cuenta antes de exigir intervención
+  humana, con alertas (Monitoring).

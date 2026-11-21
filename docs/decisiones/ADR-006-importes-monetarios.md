@@ -31,8 +31,16 @@ desglose de IVA ni descuentos en el MVP (no hay divisiones).
 - Salida con una única función `formatCents(cents)` en `packages/shared`
   (formato es-ES: "1.234,50 €"), construida con aritmética entera.
 - Validación zod `z.number().int()` en todos los campos `*Cents`.
-- Límites: el mayor pedido razonable (cientos de líneas × 999,99 €) queda muy
-  por debajo de 2³¹ − 1 céntimos (≈ 21 millones de €).
+- Límites (revisión 2026-11-21, SEC-006): sin límites explícitos, una línea
+  con `quantity` 32 767 desbordaría `integer`. Se fijan en BD y zod:
+  `quantity` 1–99 (`CHECK`), como mucho **100 líneas no eliminadas** por pedido
+  (`422 ORDER_TOO_MANY_LINES`) → total por pedido ≤ 99 × 99 999 × 100 =
+  989 990 100 < 2³¹ − 1. Un cobro de varios pedidos ("Cobrar mesa") podría
+  superar 2³¹ − 1 en teoría: el servicio suma en `number` (exacto hasta 2⁵³) y
+  rechaza con `422 PAYMENT_AMOUNT_TOO_HIGH` si supera el máximo de `integer`
+  (inalcanzable en la práctica); `tenderedCents` ≤ 10 000 000 (100 000 €).
+  Los `SUM()` de HU-08 devuelven `bigint` en PostgreSQL (sin desbordamiento) y
+  se convierten a `number` en el repositorio.
 
 ## Consecuencias
 

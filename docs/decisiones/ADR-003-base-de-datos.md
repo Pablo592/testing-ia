@@ -47,7 +47,9 @@ digest), en su propio contenedor con volumen persistente.
   `audit_log`, `payments` salvo columnas de anulación, `payment_orders` salvo
   `voided`, `cash_closings`). Trigger que rechaza `UPDATE/DELETE` en `audit_log`.
 - Importes en `integer` (céntimos, ADR-006); fechas en `timestamptz`; fecha de
-  negocio calculada con la zona `Europe/Madrid`.
+  negocio = día natural en `Europe/Madrid`, **calculada en la aplicación** con
+  el `Clock` inyectado y pasada como parámetro (revisión 2026-11-21, hallazgo
+  T-10); la lógica de negocio no usa `now()` de SQL.
 - Sin purga: 90 días es la ventana de consulta (HU-08), no de borrado.
 
 ## Consecuencias
@@ -60,3 +62,14 @@ digest), en su propio contenedor con volumen persistente.
 - (−) La imagen oficial arranca como root por defecto: se ejecutará con
   `--user` ≥ 1000 y el volumen de datos propiedad de ese UID (detalle en
   `docs/infraestructura.md`).
+
+## Revisión 2026-11-21 (tarea 1.3b)
+
+La elección (PostgreSQL + Kysely) **no cambia**. Ajustes del modelo por los
+cambios del PO, que refuerzan la necesidad de ACID:
+- Preparación con cuatro estados (`served` añadido) y cobro como dimensiones
+  separadas; la anulación de un "Cobrar mesa" reabre varios pedidos en una sola
+  transacción.
+- Tabla `settings` de una fila con `CHECK` de rangos (1–99 mesas, 1–60 min);
+  sus cambios se auditan en `audit_log` (HU-09, solo si el humano la aprueba).
+- Fecha de negocio desde el `Clock` (T-10), ver `docs/arquitectura.md` §4.

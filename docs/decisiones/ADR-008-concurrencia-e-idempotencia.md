@@ -51,3 +51,20 @@
   (se guardan con el borrador en `localStorage`).
 - (−) Un camarero puede recibir `409` si barra o un compañero tocó el pedido
   justo antes; la UI debe mostrar el aviso y la versión nueva (UX).
+
+## Revisión 2026-11-21 (tarea 1.3b)
+
+La decisión **no cambia**; se extiende a los estados nuevos:
+- **"Servido" y los "Deshacer"** son transiciones de preparación: se validan
+  con la máquina de estados bajo `SELECT … FOR UPDATE` del pedido, no con
+  `expectedVersion`. Cada pedido guarda `prep_last_action`, `prep_changed_at` y
+  `prep_changed_by`; un "Deshacer" solo vale si deshace la última acción, en
+  ≤ 30 s (tolerancia de servidor 32 s) y, para "Servido", si lo pide quien lo
+  marcó. Si barra deshace "Listo" a la vez que sala marca "Servido", el bloqueo
+  serializa ambas y la segunda recibe `409`.
+- **Vuelta a la cola** (añadir a un pedido Listo/Servido) se decide en la misma
+  transacción que añade las líneas.
+- **Anulación del cobro completo:** una transacción con bloqueo del cobro y de
+  todos sus pedidos; segunda anulación → `409 PAYMENT_ALREADY_VOIDED`.
+- **Ajustes (HU-09):** `PATCH /settings` con `expectedVersion` y `FOR UPDATE`;
+  la creación de pedidos de mesa lee `table_count` con `FOR SHARE`.

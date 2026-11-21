@@ -2,7 +2,7 @@
 # Inicialización de la BD (solo se ejecuta la primera vez, con el volumen vacío).
 # La ejecuta el entrypoint oficial de postgres como UID 1000 (no root).
 #
-# Crea los dos roles de ADR-003 y la base de datos de la aplicación:
+# Crea los roles de ADR-003 y la base de datos de la aplicación:
 #   - app_owner: propietario de la BD y del esquema public (DDL; lo usa migrate).
 #   - app_rw:    solo CONNECT + USAGE; los permisos DML sobre las tablas los
 #                concede la propia migración (Developer), ADR-003.
@@ -35,6 +35,23 @@ GRANT CONNECT ON DATABASE :"dbname" TO app_rw;
 ALTER SCHEMA public OWNER TO app_owner;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO app_rw;
+-- Consultas normalizadas sin valores (docs/logging.md §5.4). Requiere
+-- shared_preload_libraries=pg_stat_statements en el comando del contenedor.
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 SQL
+
+# Rol de solo lectura de métricas para postgres_exporter (M-05). Solo se crea si
+# el entorno monta el secreto (DEMO/PROD con el stack de monitorización).
+if [ -s /run/secrets/db_monitor_password ]; then
+  psql -v ON_ERROR_STOP=1 -v dbname="$APP_DB_NAME" \
+       --username "$POSTGRES_USER" --dbname postgres <<'SQL'
+\set mon_pw `cat /run/secrets/db_monitor_password`
+CREATE ROLE monitoring LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'mon_pw';
+\unset mon_pw
+GRANT pg_monitor TO monitoring;
+GRANT CONNECT ON DATABASE :"dbname" TO monitoring;
+SQL
+  echo "10-roles.sh: rol monitoring (pg_monitor) creado"
+fi
 
 echo "10-roles.sh: roles app_owner/app_rw y BD ${APP_DB_NAME} creados"

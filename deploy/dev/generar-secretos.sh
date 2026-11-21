@@ -25,18 +25,43 @@ random_b64() {
   head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n'
 }
 
-# PIN provisional de 6 dígitos que cumple las reglas básicas de HU-01:
-# no todos iguales y no secuencia ascendente/descendente.
+# PIN provisional de 6 dígitos que cumple las reglas de docs/seguridad.md
+# §6.1.2 (SEC-014): no todos iguales; sin 4+ dígitos consecutivos ascendentes o
+# descendentes en cualquier posición; no formado por un bloque repetido
+# (121212, 123123); no "aabbcc"; al menos 4 dígitos distintos (descarta la
+# mayoría de PIN frecuentes) y fuera de una lista de PIN frecuentes de 6 dígitos.
+# Cuando exista la función de reglas de packages/shared, la validación
+# definitiva la hace create-initial-manager (que rechaza el PIN si no cumple).
+pin_ok() {
+  printf '%s\n' "$1" | awk '
+    BEGIN { split("112233 147258 159753 696969 123321 654456 101010 202020 520520 789456 147369 258369 159357 000000", b, " "); for (i in b) bad[b[i]] = 1 }
+    {
+      p = $0
+      if (length(p) != 6 || p !~ /^[0-9]+$/ || (p in bad)) { exit 1 }
+      for (i = 1; i <= 6; i++) d[i] = substr(p, i, 1) + 0
+      up = 1; dn = 1
+      for (i = 2; i <= 6; i++) {
+        up = (d[i] == d[i-1] + 1) ? up + 1 : 1
+        dn = (d[i] == d[i-1] - 1) ? dn + 1 : 1
+        if (up >= 4 || dn >= 4) exit 1
+      }
+      if (substr(p,1,2) == substr(p,3,2) && substr(p,3,2) == substr(p,5,2)) exit 1
+      if (substr(p,1,3) == substr(p,4,3)) exit 1
+      if (d[1] == d[2] && d[3] == d[4] && d[5] == d[6]) exit 1
+      n = 0; for (i = 1; i <= 6; i++) if (!(d[i] in seen)) { seen[d[i]] = 1; n++ }
+      if (n < 4) exit 1
+      exit 0
+    }'
+}
+
 random_pin() {
   while :; do
     pin=$(od -An -N8 -tu8 /dev/urandom | tr -d ' \n' | tail -c 6)
     [ "${#pin}" -eq 6 ] || continue
-    case "$pin" in
-      000000|111111|222222|333333|444444|555555|666666|777777|888888|999999) continue ;;
-      012345|123456|234567|345678|456789|987654|876543|765432|654321|543210) continue ;;
-    esac
-    printf '%s' "$pin"
-    return 0
+    if pin_ok "$pin"; then
+      printf '%s' "$pin"
+      return 0
+    fi
   done
 }
 
@@ -59,6 +84,7 @@ echo "Secretos de DEV en $DIR"
 write_secret db_superuser_password random_b64
 write_secret db_owner_password     random_b64
 write_secret db_app_password       random_b64
+write_secret db_backup_password    random_b64
 write_secret pin_pepper            random_b64
 write_secret initial_manager_name  manager_name
 write_secret initial_manager_pin   random_pin

@@ -65,3 +65,18 @@ acciones del usuario ya van por HTTP (REST). Una sola instancia de backend
   inactividad de 15 min (ver ADR-005); el flujo SSE se excluye de ese cálculo.
 - El proxy no debe almacenar en búfer `text/event-stream` (Caddy lo vacía
   inmediatamente por defecto; Infrastructure lo verifica).
+
+## Revisión 2026-11-21 (tarea 1.3b)
+
+La decisión (SSE + snapshot) **no cambia**. Se amplía el contrato:
+- Nuevos eventos `payment.created` y `payment.voided` (solo W y M) para
+  "Cobrados hoy" (HU-04). `order.updated` lleva un campo `change`
+  (`prep_ready`, `served`, `requeued`, `paid`, …) con el que el cliente decide
+  avisos y sonido; los cambios de cobro no se envían a barra.
+- Destinatarios por rol y por tipo de cambio en `docs/arquitectura.md` §6
+  (barra recibe `served` para retirar "Deshacer Listo"; `settings.updated` va
+  filtrado por rol).
+- Todos los eventos de dominio llevan `emittedAt` (hallazgo M-03) para medir la
+  propagación extremo a extremo en el cliente.
+- `hello` y `ping` llevan `businessDate`: el cliente recarga la lista de sala al
+  cambiar el día (HU-03, cobrados sin servir), sin temporizador en servidor.

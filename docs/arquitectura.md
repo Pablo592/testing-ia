@@ -1,10 +1,17 @@
 # Arquitectura — Toma de pedidos para cafetería (MVP)
 
-> Responsable: Software Engineer. Entradas: `docs/historias/` (HU-01 a HU-08 y
-> supuestos del README), `docs/reglas-equipo.md` (sección 3). Los entregables de
-> UX (`docs/ux/`) aún no existían al redactar esto; la arquitectura solo asume
-> una **UI web táctil** que funciona en navegador (tablets de 10", pantalla de
-> barra de 15"+, TPV u ordenador).
+> Responsable: Software Engineer. Entradas: `docs/historias/` (HU-01 a HU-08,
+> HU-09 como **propuesta** y supuestos del README, incluidos los marcados
+> "[Cambio 2026-11-21]"), `docs/ux/`, `docs/testing.md`, `docs/logging.md` y
+> `docs/reglas-equipo.md` (sección 3). La arquitectura asume una **UI web
+> táctil** que funciona en navegador (tablets de 10", pantalla de barra de 24"
+> FHD o mayor —supuesto 21—, TPV u ordenador).
+>
+> Revisión 2026-11-21 (tarea 1.3b): dos dimensiones de estado, estado "Servido",
+> deshacer, vuelta a la cola, lista de sala, "Cobrados hoy", anulación del cobro
+> completo, día natural `Europe/Madrid`, autorización de encargado para una sola
+> acción, ajustes del local (condicionado a HU-09) y hallazgos T-10, T-11,
+> M-01..M-04. Registro de decisiones en la §14.
 
 ## 1. Visión general
 
@@ -17,8 +24,8 @@ contenedores en ejecución:
 
 | Servicio | Imagen | Función |
 |---|---|---|
-| `proxy` | Caddy (oficial, sin modificar) | TLS, HTTP/2, proxy inverso hacia `app` |
-| `app` | Imagen propia (Node.js distroless) | API REST + flujo SSE de tiempo real + archivos estáticos de la SPA |
+| `proxy` | Caddy (oficial, sin modificar) | TLS, HTTP/2, proxy inverso hacia `app`, genera `X-Request-Id` |
+| `app` | Imagen propia (Node.js distroless) | API REST + flujo SSE de tiempo real + archivos estáticos de la SPA (puerto 3000); métricas Prometheus en puerto interno 9464 |
 | `db` | PostgreSQL (oficial, alpine) | Persistencia |
 
 Más un contenedor efímero `migrate` (misma imagen que `app`, otro comando) que
@@ -35,7 +42,7 @@ Stack (ver ADRs):
 | Autenticación/autorización | Usuario + PIN (argon2id), sesión opaca en servidor, RBAC en servidor | [ADR-005](decisiones/ADR-005-autenticacion-y-autorizacion.md) |
 | Dinero | Enteros en céntimos de euro | [ADR-006](decisiones/ADR-006-importes-monetarios.md) |
 | Exposición/TLS | Caddy como proxy inverso, puertos > 1024 | [ADR-007](decisiones/ADR-007-proxy-tls-y-puertos.md) |
-| Concurrencia | IDs generados por el cliente (idempotencia) + versión optimista | [ADR-008](decisiones/ADR-008-concurrencia-e-idempotencia.md) |
+| Concurrencia | IDs generados por el cliente (idempotencia) + versión optimista + máquina de estados | [ADR-008](decisiones/ADR-008-concurrencia-e-idempotencia.md) |
 
 Rust no se usa: no hay ningún componente con carga de CPU, latencia sub-ms o
 memoria restringida; el cuello de botella sería la BD/red (justificación en ADR-001).
@@ -51,49 +58,61 @@ flowchart LR
   end
 
   subgraph Host["Host con Podman rootless (usuario sin privilegios)"]
-    P["proxy (Caddy)<br/>:8443 TLS / :8080 redirección"]
-    subgraph APP["app (Node.js + Fastify) :3000"]
-      R["Rutas HTTP /api/v1<br/>(validación zod)"]
-      MW["Middleware: sesión,<br/>actividad, permisos (RBAC)"]
-      S["Servicios de dominio<br/>auth · menu · orders · payments · staff · reports · settings"]
+    P["proxy (Caddy)<br/>:8443 TLS / :8080 redirección<br/>genera X-Request-Id"]
+    subgraph APP["app (Node.js + Fastify)"]
+      R["Rutas HTTP /api/v1 :3000<br/>(validación zod)"]
+      MW["Middleware: request_id, sesión,<br/>actividad, permisos (RBAC)"]
+      S["Servicios de dominio<br/>auth · menu · orders · payments · staff · reports · settings · telemetry"]
+      CLK["Clock inyectable<br/>(instante + fecha de negocio)"]
       BUS["Bus de eventos en memoria"]
-      SSE["Hub SSE /api/v1/events<br/>(filtrado por rol)"]
+      SSE["Hub SSE /api/v1/events<br/>(filtrado y serializado por rol)"]
       REPO["Repositorios (Kysely)"]
       ST["Estáticos SPA"]
+      MET["/metrics :9464<br/>(solo red interna)"]
+      HC["/healthz · /readyz :3000<br/>(no enrutados por Caddy)"]
     end
     DB[("db (PostgreSQL) :5432<br/>volumen persistente")]
     M["migrate (efímero)"]
+    PROM["Prometheus (Monitoring)"]
   end
 
   T & B & E -- "HTTPS (REST + SSE)" --> P
-  P -- "HTTP interno" --> R
+  P -- "HTTP interno + X-Request-Id" --> R
   P --> ST
   R --> MW --> S
+  S --> CLK
   S --> REPO --> DB
   S -- "tras COMMIT" --> BUS --> SSE
   SSE -- "eventos" --> P
   M --> DB
+  PROM -. "scrape red interna" .-> MET
 ```
 
 Capas dentro de `app` (dependencias solo hacia abajo):
 
 1. **Rutas (HTTP/SSE):** parseo y validación de entrada con esquemas zod,
    serialización de salida por rol. Sin lógica de negocio.
-2. **Middleware:** resolución de sesión, control de inactividad, comprobación
-   de permiso de la ruta.
+2. **Middleware:** `request_id`, resolución de sesión, control de inactividad,
+   comprobación de permiso de la ruta.
 3. **Servicios de dominio:** reglas de negocio (máquina de estados del pedido,
-   cálculo de totales, bloqueo de PIN, cobro, cierre). Reciben sus dependencias
-   por constructor (repositorios, reloj, bus, hasher) → testeables sin BD.
-4. **Repositorios:** acceso a PostgreSQL con Kysely; transacciones.
+   cálculo de totales, bloqueo de PIN, cobro, anulación, cierre). Reciben sus
+   dependencias por constructor (repositorios, `Clock`, bus, hasher) →
+   testeables sin BD y con reloj falso.
+4. **Repositorios:** acceso a PostgreSQL con Kysely; transacciones. Reciben las
+   marcas de tiempo y la fecha de negocio como **parámetros** (§4, T-10).
 5. **Bus de eventos:** el servicio publica **después del COMMIT**; el hub SSE
    reenvía a los clientes conectados. En memoria porque hay **una sola
    instancia** (si algún día hay varias, se sustituye por `LISTEN/NOTIFY` de
    PostgreSQL sin tocar los servicios).
 
-Funciones puras en `packages/shared`: dinero, máquina de estados, reglas de PIN,
-matriz de permisos. Las usa el servidor (autoridad) y el cliente (feedback
-inmediato, p. ej. total en ≤ 200 ms en HU-02), pero **el servidor siempre
-recalcula**.
+La aplicación se construye con una factoría `buildApp(deps)` (en `main.ts` se
+compone con `SystemClock`; los tests de integración la componen en proceso con
+un `FakeClock` y la BD real). No hay endpoints de prueba en la imagen.
+
+Funciones puras en `packages/shared`: dinero, máquina de estados del pedido
+(preparación y cobro), deshacer, fecha de negocio, reglas de PIN, matriz de
+permisos. Las usa el servidor (autoridad) y el cliente (feedback inmediato,
+p. ej. total en ≤ 200 ms en HU-02), pero **el servidor siempre recalcula**.
 
 ## 3. Estructura de carpetas
 
@@ -101,53 +120,66 @@ recalcula**.
 mi-app/
 ├── apps/
 │   ├── api/                      # Backend Fastify
-│   │   ├── src/
-│   │   │   ├── main.ts           # arranque, composición de dependencias (DI manual)
-│   │   │   ├── config.ts         # lectura de variables/secretos (fallo si faltan)
-│   │   │   ├── http/             # rutas por módulo + plugins (sesión, rbac, errores)
-│   │   │   ├── realtime/         # hub SSE, serializadores por rol, heartbeat
-│   │   │   ├── modules/
-│   │   │   │   ├── auth/         # login, logout, sesiones, bloqueo, cambio de PIN
-│   │   │   │   ├── staff/        # HU-07
-│   │   │   │   ├── menu/         # HU-05
-│   │   │   │   ├── orders/       # HU-02, HU-03, HU-06
-│   │   │   │   ├── payments/     # HU-04
-│   │   │   │   ├── reports/      # HU-08
-│   │   │   │   ├── settings/
-│   │   │   │   └── audit/
-│   │   │   ├── db/               # cliente Kysely, tipos de tablas, migraciones
-│   │   │   └── healthcheck.ts    # usado por HEALTHCHECK de la imagen
-│   │   └── test/
+│   │   └── src/
+│   │       ├── main.ts           # arranque: compone buildApp() con SystemClock (DI manual)
+│   │       ├── app.ts            # buildApp(deps): factoría usada por main y por los tests
+│   │       ├── config.ts         # lectura de variables/secretos (fallo si faltan)
+│   │       ├── http/             # rutas por módulo + plugins (request_id, sesión, rbac, errores)
+│   │       ├── realtime/         # hub SSE, serializadores por rol, ping
+│   │       ├── metrics/          # registro prom-client y servidor interno :9464
+│   │       ├── modules/
+│   │       │   ├── auth/         # login, logout, sesiones, bloqueo, cambio de PIN, aprobación de encargado
+│   │       │   ├── staff/        # HU-07
+│   │       │   ├── menu/         # HU-05
+│   │       │   ├── orders/       # HU-02, HU-03, HU-06 (cola, lista de sala, servido)
+│   │       │   ├── payments/     # HU-04 (cobro, anulación, cobrados hoy)
+│   │       │   ├── reports/      # HU-08
+│   │       │   ├── settings/     # ajustes del local (HU-09 si se aprueba; si no, solo lectura)
+│   │       │   ├── telemetry/    # POST /telemetry → métricas (M-03)
+│   │       │   └── audit/
+│   │       ├── db/               # cliente Kysely, tipos de tablas, migraciones
+│   │       └── healthcheck.ts    # usado por HEALTHCHECK de la imagen (GET /healthz)
 │   └── web/                      # SPA React + Vite
-│       ├── src/
-│       │   ├── app/              # router, layout por rol, guardas de ruta
-│       │   ├── features/         # login, pedido, cola, cobro, menu, personal, resumen
-│       │   ├── realtime/         # cliente SSE, watchdog "Sin conexión", resync
-│       │   ├── api/              # cliente HTTP tipado
-│       │   └── ui/               # componentes del design system (de docs/ux)
-│       └── test/
+│       └── src/
+│           ├── app/              # router, layout por rol, guardas de ruta
+│           ├── features/         # login, pedidos (sala), toma, cola, cobro, cobrados-hoy, menu, personal, resumen, ajustes
+│           ├── realtime/         # cliente SSE, vigilante "Sin conexión", resync, cambio de día
+│           ├── telemetry/        # cola de métricas del cliente, envío por lotes
+│           ├── api/              # cliente HTTP tipado
+│           └── ui/               # componentes del design system (de docs/ux)
 ├── packages/
-│   └── shared/                   # esquemas zod/DTOs, dinero, permisos, estados, reglas PIN
+│   └── shared/                   # esquemas zod/DTOs, dinero, permisos, estados, deshacer, fecha de negocio, reglas PIN
+├── tests/                        # (Testing) todos los tests: estructura en docs/testing.md §4.1
 ├── deploy/                       # (Infrastructure) Containerfile, compose.*.yaml, Caddyfile, quadlet/
 ├── infra/                        # (Infrastructure) Terraform PROD
 ├── docs/
-└── package.json                  # workspaces (pnpm)
+└── package.json                  # workspaces (pnpm): apps/*, packages/*, tests
 ```
 
 Gestor de paquetes: **pnpm workspaces** (un único lockfile, versiones fijadas).
+Los tests **no** viven dentro de `apps/*` (T-11): así se ejecutan como imagen de
+pruebas independiente sin tocar las imágenes de producción.
 
 ## 4. Modelo de datos
 
-Convenciones: claves `uuid` (las de pedidos, líneas y cobros las **genera el
-cliente**, ver ADR-008); fechas `timestamptz` en UTC; **fecha de negocio**
-(`business_date`) = día natural en `Europe/Madrid`, calculada en SQL
-(`(now() AT TIME ZONE 'Europe/Madrid')::date`); importes `integer` en céntimos
-con `CHECK`; nombres de tabla en inglés, `snake_case`.
+Convenciones:
+- Claves `uuid` (las de pedidos, líneas y cobros las **genera el cliente**,
+  ver ADR-008). Nombres de tabla en inglés, `snake_case`.
+- Fechas `timestamptz` en UTC; importes `integer` en céntimos con `CHECK`.
+- **Fecha de negocio** (`business_date`) = día natural en `Europe/Madrid`
+  (supuesto 15), de 00:00:00 a 23:59:59. **Se calcula en la aplicación** con la
+  función pura `businessDate(instant)` de `packages/shared` sobre el instante
+  que da el `Clock` inyectado, y se pasa como parámetro a las consultas junto
+  con las marcas de tiempo (`sent_at`, `paid_at`…). La lógica de negocio no usa
+  `now()` de SQL; `DEFAULT now()` solo existe como red de seguridad en columnas
+  de auditoría técnica (`created_at`). Así los tests de integración controlan
+  el paso de medianoche y los cambios de hora (T-10). La zona horaria es una
+  constante (`Europe/Madrid`), no un ajuste (YAGNI; pregunta 14 del README).
 
 ```mermaid
 erDiagram
   users ||--o{ sessions : "tiene"
-  users ||--o{ orders : "crea"
+  users ||--o{ orders : "crea / marca servido"
   categories ||--o{ products : "contiene"
   products ||--o{ order_lines : "referenciado (snapshot)"
   orders ||--|{ order_lines : "contiene"
@@ -157,6 +189,7 @@ erDiagram
   users ||--o{ audit_log : "actor / autoriza"
   daily_counters ||--o{ orders : "numera"
   cash_closings }o--|| users : "cierra"
+  settings }o--o| users : "último cambio"
 ```
 
 ### 4.1 Tablas
@@ -170,8 +203,8 @@ erDiagram
 | pin_hash | text | argon2id con pepper (ADR-005) |
 | must_change_pin | boolean | true tras alta o restablecimiento |
 | active | boolean | |
-| failed_attempts | smallint | intentos fallidos consecutivos |
-| locked_until | timestamptz null | bloqueo de 5 min |
+| failed_attempts | smallint | intentos fallidos consecutivos (login y aprobaciones de encargado) |
+| locked_until | timestamptz null | bloqueo de 5 min (valores finales: Cybersecurity) |
 | created_at, updated_at | timestamptz | |
 
 **sessions** (ADR-005)
@@ -186,8 +219,25 @@ erDiagram
 | revoked_at | timestamptz null | logout, desactivación, restablecimiento de PIN |
 | user_agent | varchar(200) | solo diagnóstico |
 
-**settings** — una sola fila (`id = 1`): `table_count` (N mesas, por defecto 20),
-`delay_threshold_minutes` (10), `undo_ready_seconds` (30).
+**settings** — ajustes del local, **una sola fila** (`id smallint PK CHECK (id = 1)`).
+| Columna | Tipo | Notas |
+|---|---|---|
+| table_count | smallint `CHECK (table_count BETWEEN 1 AND 99)` | N mesas, por defecto 20 (supuestos 1 y 20) |
+| delay_threshold_minutes | smallint `CHECK (delay_threshold_minutes BETWEEN 1 AND 60)` | umbral "retrasado", por defecto 10 (supuesto 11) |
+| version | integer | control optimista del formulario de HU-09 |
+| updated_at | timestamptz | |
+| updated_by | uuid FK users null | null = valor de instalación |
+
+- La fila la crea `migrate` en la instalación con los valores de las variables
+  `TABLE_COUNT` y `DELAY_THRESHOLD_MINUTES` (por defecto 20 y 10) **solo si no
+  existe**; reinstalar o actualizar no la sobrescribe.
+- **Condicionado a HU-09:** si el humano la aprueba, el encargado la cambia con
+  `PATCH /settings` y cada cambio se audita en `audit_log` (`settings.changed`,
+  `details = {field, old, new}` por campo, actor, hora). No hay tabla de
+  historial propia: `audit_log` ya cumple "usuario, fecha/hora, valor anterior y
+  nuevo" (DRY). **Si no se aprueba**, la ruta `PATCH /settings` no se implementa
+  y los valores solo cambian por soporte técnico (supuesto 20). El tiempo de
+  "Deshacer" (30 s) **no** es un ajuste: es una constante de `packages/shared`.
 
 **categories**: `id`, `name varchar(30)`, `position int`, `archived_at null`.
 Único `lower(name)` entre no archivadas (índice parcial). "Borrar" = archivar,
@@ -200,31 +250,39 @@ y solo si no tiene productos activos (HU-05).
 
 **daily_counters**: `business_date date PK`, `last_number int`. El número
 correlativo se obtiene con
-`INSERT … ON CONFLICT (business_date) DO UPDATE SET last_number = last_number + 1 RETURNING last_number`
-dentro de la transacción que crea el pedido (sin huecos por concurrencia).
+`INSERT … VALUES ($businessDate, 1) ON CONFLICT (business_date) DO UPDATE SET last_number = daily_counters.last_number + 1 RETURNING last_number`
+dentro de la transacción que crea el pedido (sin huecos ni repeticiones por
+concurrencia; los cancelados conservan su número). `$businessDate` viene del
+`Clock` (HU-02: 23:59:59 → número siguiente; 00:00:00 → 1 del día nuevo).
 
 **orders** (HU-02, HU-03, HU-06)
 | Columna | Tipo | Notas |
 |---|---|---|
 | id | uuid PK | generado por el cliente (idempotencia del envío) |
-| business_date | date | del envío |
+| business_date | date | del envío; **no cambia** aunque se modifique o cobre otro día |
 | daily_number | int | `UNIQUE (business_date, daily_number)` |
 | type | enum `table` \| `counter` | Mesa / Mostrador-Para llevar |
-| table_number | smallint null | `CHECK` coherente con `type`; ≤ `settings.table_count` (validado en servicio) |
+| table_number | smallint null | `CHECK` coherente con `type`; ≤ `settings.table_count` al crear (validado en servicio, §9) |
 | customer_ref | varchar(30) null | |
-| status | enum `open` \| `paid` \| `cancelled` | ciclo económico |
-| prep_status | enum `pending` \| `in_progress` \| `ready` | ciclo de preparación (independiente, ver 4.2) |
+| status | enum `open` \| `paid` \| `cancelled` | **dimensión de cobro** (Abierto / Cobrado / Cancelado) |
+| prep_status | enum `pending` \| `in_progress` \| `ready` \| `served` | **dimensión de preparación** (Pendiente / En preparación / Listo / Servido) |
+| prep_last_action | enum `start` \| `ready` \| `serve` \| `requeue` \| `undo` null | última transición de preparación; decide qué "Deshacer" es válido (§4.2) |
+| prep_changed_at | timestamptz null | hora de la última transición de preparación (ventana de 30 s) |
+| prep_changed_by | uuid FK users null | quién la hizo ("Deshacer Servido" solo por quien lo marcó) |
 | kitchen_flag | enum `none` \| `modified` \| `cancelled` | etiqueta pendiente de confirmar por barra |
 | total_cents | integer ≥ 0 | recalculado en servidor en cada cambio de líneas, misma transacción |
-| version | integer | control optimista (ADR-008) |
+| version | integer | control optimista (ADR-008); sube con **cualquier** cambio |
 | created_by | uuid FK users | |
-| sent_at | timestamptz | |
-| prep_started_at, ready_at | timestamptz null | `ready_at` habilita "Deshacer" 30 s |
+| sent_at | timestamptz | hora de envío original (se muestra siempre) |
+| queued_at | timestamptz | hora de entrada en la cola vigente: `= sent_at` al enviar; se actualiza al **volver a la cola** (§4.2). Ordena la cola y cuenta la espera |
+| prep_started_at, ready_at, served_at | timestamptz null | del ciclo de preparación vigente |
+| served_by | uuid FK users null | |
 | cancelled_at, cancelled_by, cancel_authorized_by, cancel_reason_code, cancel_reason_text | | motivo: `customer_left` \| `entry_error` \| `other` (+ texto ≤ 100) |
 
-Índices: `(status) WHERE status = 'open'`, `(prep_status, sent_at)` para la cola,
-`(table_number) WHERE status = 'open'` para el aviso de mesa ocupada,
-`(business_date)`.
+Índices: `(status) WHERE status = 'open'` (por cobrar y lista de sala),
+`(queued_at) WHERE prep_status IN ('pending','in_progress')` (cola),
+`(business_date, status)` (lista de sala del día y HU-08),
+`(table_number) WHERE status = 'open'` (aviso de mesa ocupada y HU-09).
 
 **order_lines**
 | Columna | Tipo | Notas |
@@ -233,11 +291,17 @@ dentro de la transacción que crea el pedido (sin huecos por concurrencia).
 | order_id | uuid FK | |
 | product_id | uuid FK | |
 | product_name | varchar(40) | **snapshot** al enviar |
-| unit_price_cents | integer | **snapshot** del precio vigente al enviar (HU-02, HU-05) |
+| unit_price_cents | integer | **snapshot** del precio vigente al enviar/añadir (HU-02, HU-05) |
 | quantity | smallint > 0 | |
 | note | varchar(100) null | |
-| added_after_send | boolean | etiqueta "AÑADIDO" (HU-06) |
+| added_at | timestamptz null | null = línea del envío original; con valor = añadida después (HU-06) |
 | removed_at, removed_by, removal_authorized_by | null | línea "ELIMINADO" (se conserva, no se borra) |
+
+Etiquetas en barra: una línea se marca **"AÑADIDO"** si `added_at >= queued_at`
+y **"ELIMINADO"** si `removed_at >= queued_at` (cambios del ciclo de cola
+vigente). Las líneas añadidas o eliminadas en ciclos anteriores (ya preparadas)
+se muestran sin etiqueta o no se muestran (eliminadas), para que barra no
+confunda lo ya servido con lo nuevo. La vista de sala muestra todo el historial.
 
 **payments** (HU-04)
 | Columna | Tipo | Notas |
@@ -246,87 +310,187 @@ dentro de la transacción que crea el pedido (sin huecos por concurrencia).
 | method | enum `cash` \| `card` | |
 | amount_cents | integer > 0 | suma de los pedidos cubiertos, calculada en servidor |
 | tendered_cents, change_cents | integer null | solo efectivo; `tendered ≥ amount` |
-| business_date | date | del cobro |
+| business_date | date | **del cobro** (HU-08: un cobro a las 00:05 cuenta en el día nuevo) |
 | paid_at, paid_by | | |
-| voided_at, voided_by, void_reason | null | anulación por encargado (motivo ≥ 5 caracteres) |
+| voided_at, voided_by, void_reason | null | anulación por encargado (motivo ≥ 5 caracteres); `CHECK` todos nulos o todos con valor |
 
 **payment_orders**: `payment_id`, `order_id`, `voided boolean`. Índice único
 parcial `UNIQUE (order_id) WHERE NOT voided` → **la BD impide cobrar dos veces**
 el mismo pedido aunque falle la lógica de aplicación. "Cobrar mesa" = un
-`payment` con varias filas aquí.
+`payment` con varias filas aquí. La anulación marca `voided = true` en **todas**
+las filas del cobro a la vez (no existe operación para anular una sola).
 
 **cash_closings** (HU-08): `business_date PK`, `expected_cash_cents`,
 `counted_cash_cents`, `difference_cents`, `summary jsonb` (cifras congeladas),
-`closed_by`, `closed_at`. Inmutable.
+`closed_by`, `closed_at`. Inmutable. Los cobros de un día cerrado anulados
+después se detectan con `payments.voided_at > cash_closings.closed_at` y se
+muestran aparte, sin tocar el cierre.
 
-**audit_log** (HU-04, HU-05, HU-06, HU-07): `id bigserial`, `at`, `actor_id`,
-`authorized_by null` (PIN de encargado), `action` (p. ej. `price.changed`,
-`order.line_removed`, `payment.voided`, `user.role_changed`), `entity_type`,
-`entity_id`, `details jsonb` (p. ej. precio anterior y nuevo). **Nunca contiene
-PIN ni hashes.** Inmutable a dos niveles: el rol de BD de la aplicación solo
-tiene `INSERT, SELECT` y un trigger rechaza `UPDATE/DELETE`. Las mismas
-restricciones (sin `DELETE`) aplican a `payments`, `payment_orders` y
-`cash_closings`.
+**audit_log** (HU-04, HU-05, HU-06, HU-07, HU-09): `id bigserial`, `at`,
+`actor_id`, `authorized_by null` (encargado que autorizó), `action` (p. ej.
+`price.changed`, `order.line_removed`, `order.cancelled`, `payment.voided`,
+`user.role_changed`, `settings.changed`), `entity_type`, `entity_id`,
+`details jsonb` (p. ej. valor anterior y nuevo). **Nunca contiene PIN ni
+hashes.** Inmutable a dos niveles: el rol de BD de la aplicación solo tiene
+`INSERT, SELECT` y un trigger rechaza `UPDATE/DELETE`. Las mismas restricciones
+(sin `DELETE`) aplican a `payments`, `payment_orders` y `cash_closings`
+(en `payments` y `payment_orders` solo se permite `UPDATE` de las columnas de
+anulación).
 
 ### 4.2 Estados del pedido
 
-Se separan dos dimensiones porque un pedido de mostrador se puede **cobrar antes
-de prepararse** (supuesto 9) y no debe desaparecer de la cola de barra:
+Dos dimensiones **independientes** (supuesto 14): cobrar no saca un pedido de la
+cola, y ninguna transición de preparación cambia el cobro (ni al revés).
 
 ```mermaid
 stateDiagram-v2
   direction LR
-  state "prep_status" as P {
+  state "Preparación (prep_status)" as P {
     [*] --> pending: Enviar (HU-02)
-    pending --> in_progress: Empezar
-    in_progress --> ready: Listo
-    ready --> in_progress: Deshacer (≤ 30 s)
+    pending --> in_progress: Empezar [K, M]
+    in_progress --> pending: Deshacer Empezar ≤30 s [K, M]
+    in_progress --> ready: Listo [K, M]
+    ready --> in_progress: Deshacer Listo ≤30 s [K, M]
+    ready --> served: Servido [W, M]
+    served --> ready: Deshacer Servido ≤30 s [quien lo marcó]
+    ready --> pending: Añadir productos (HU-06)
+    served --> pending: Añadir productos (HU-06)
   }
-  state "status" as S {
+  state "Cobro (status)" as S {
     [*] --> open
-    open --> paid: Cobrar (HU-04)
-    paid --> open: Anular cobro (encargado) *
-    open --> cancelled: Cancelar (HU-06)
+    open --> paid: Cobrar / Cobrar mesa (HU-04) [W, M]
+    paid --> open: Anular cobro completo (HU-04) [M]
+    open --> cancelled: Cancelar (HU-06) [W, M]
+    cancelled --> [*]
   }
 ```
 
-\* Pendiente de confirmar por el PO (ver `docs/estado.md`).
+**Transiciones de preparación** (función pura `prepTransition(order, action, actor, now)`):
 
-- **Cola de barra** = `status <> 'cancelled' AND prep_status <> 'ready'`, más los
-  cancelados con `kitchen_flag = 'cancelled'` hasta que barra los confirme.
-- **Pedidos abiertos** del camarero = `status = 'open'`.
-- Reglas de HU-06 (necesita PIN de encargado si `prep_status ∈ {in_progress, ready}`)
-  y HU-04 (no se modifica si `status = 'paid'`) viven en la máquina de estados
-  de `packages/shared`, que el servicio aplica en servidor.
+| Acción | Desde → hasta | Quién | Condición | Efecto |
+|---|---|---|---|---|
+| `start` | pending → in_progress | K, M | `status <> 'cancelled'` | `prep_started_at = now` |
+| `ready` | in_progress → ready | K, M | `status <> 'cancelled'` | `ready_at = now`; aviso a sala |
+| `serve` | ready → served | W, M (**nunca K**: `403`) | cualquier `status` salvo `cancelled` | `served_at = now`, `served_by = actor` |
+| `undo` (barra) | in_progress → pending / ready → in_progress | K, M | `prep_last_action ∈ {start, ready}` y `now − prep_changed_at ≤ 30 s` | limpia `prep_started_at` / `ready_at` |
+| `undo_serve` | served → ready | W, M | `prep_last_action = 'serve'`, `prep_changed_by = actor` y ≤ 30 s | limpia `served_at`, `served_by` |
+| `requeue` (interna) | ready/served → pending | al añadir líneas (HU-06) | `status = 'open'` | `queued_at = now`; limpia `prep_started_at`, `ready_at`, `served_at` |
+
+- Toda transición fija `prep_last_action`, `prep_changed_at`, `prep_changed_by`
+  y sube `version`. Un `undo` deja `prep_last_action = 'undo'`: no se puede
+  deshacer un deshacer ni deshacer dos veces.
+- Consecuencia directa: si sala marca "Servido", la última acción ya es `serve`
+  y el "Deshacer Listo" de barra deja de ser válido (HU-03). Si se añaden
+  productos, la última acción es `requeue` y ningún "Deshacer" anterior vale.
+- Ventana de 30 s: constante `UNDO_WINDOW_SECONDS = 30`; el servidor acepta
+  hasta 32 s (tolerancia de red), el cliente oculta el botón a los 30 s según
+  `serverTime`. "Solo la última acción de esa pantalla" lo gestiona el cliente;
+  el servidor garantiza que el pedido sigue en el estado que se quiere deshacer.
+
+**Transiciones de cobro:**
+- `open → paid`: cobro (HU-04), en cualquier estado de preparación.
+- `paid → open`: **anulación del cobro completo** (supuesto 16): todos los
+  pedidos del cobro vuelven a `open` en una transacción; la preparación no
+  cambia; el cobro se conserva marcado como anulado y no se puede anular otra
+  vez. Se vuelven a cobrar con un cobro **nuevo**.
+- `open → cancelled`: definitivo; un pedido cancelado no se modifica, no se
+  cobra y no se reabre (no hay transición de salida).
+
+**Reglas de HU-06** (en la misma máquina de estados):
+- Solo con `status = 'open'`. Con `paid` → `409 ORDER_PAID` (la UI indica que el
+  encargado debe anular el cobro); con `cancelled` → `409 ORDER_CANCELLED`.
+- Quitar líneas, reducir cantidades o cancelar exige autorización de encargado
+  si `prep_status ∈ {in_progress, ready, served}`; añadir nunca la exige.
+- Añadir con `prep_status ∈ {pending, in_progress}`: el pedido sigue en su sitio
+  de la cola y `kitchen_flag = 'modified'`. Con `ready` o `served`: **vuelta a
+  la cola** (`requeue`), sin etiqueta MODIFICADO (no estaba en la cola); barra
+  lo recibe como entrada nueva (con aviso sonoro) y líneas "AÑADIDO".
+- Cancelar un pedido que está en la cola (`pending`/`in_progress`) pone
+  `kitchen_flag = 'cancelled'`; si ya no estaba en la cola (`ready`/`served`),
+  `kitchen_flag` no cambia (barra no tiene nada que confirmar).
+
+**Orden de la cola al volver un pedido (decisión técnica, reportada al PO):**
+un pedido que vuelve a la cola se ordena por **`queued_at` (hora de la
+modificación)**, no por la hora de envío original, y los minutos de espera y el
+"retrasado" se cuentan desde `queued_at`. Motivo: ordenado por el envío
+original, un pedido servido hace 20 min y ampliado con un cruasán se colaría el
+primero y saldría como "RETRASADO" al instante, aunque lo nuevo lleva segundos
+esperando; barra atendería antes un añadido que pedidos completos que llevan
+más tiempo. La tarjeta sigue mostrando el número y la hora de envío original y
+añade la hora del añadido. Añadir productos a un pedido que **sigue** en la
+cola no cambia su posición. Pendiente de confirmar por el PO (`docs/estado.md`).
+
+**Vistas derivadas** (consultas en servidor; `today` = `businessDate(clock.now())`):
+
+| Vista | Condición | Roles | Endpoint |
+|---|---|---|---|
+| Cola de barra | (`prep_status IN ('pending','in_progress') AND status <> 'cancelled'`) OR (`status = 'cancelled' AND kitchen_flag = 'cancelled'`), orden `queued_at` ASC | K, M | `GET /kitchen/queue` |
+| Lista de sala "Pedidos" | `status = 'open'` (cualquier preparación y fecha) OR (`status = 'paid' AND prep_status <> 'served' AND business_date = today`), orden `sent_at` ASC; el cliente agrupa por mesa | W, M | `GET /orders/floor` |
+| "Listos para servir" | subconjunto de la lista de sala con `prep_status = 'ready'` (se pinta delante) | W, M | incluido en `/orders/floor` |
+| Por cobrar | `status = 'open'` | W, M | incluido en `/orders/floor` |
+| "Cobrados hoy" | `payments.business_date = today`, orden `paid_at` DESC, con anulados marcados | W, M | `GET /payments/today` |
+
+Un pedido cobrado y "Listo" que nadie marca "Servido" deja de cumplir la
+condición de la lista de sala a las 00:00 `Europe/Madrid` (HU-03); el cliente lo
+detecta porque el `ping` lleva `businessDate` (§6) y recarga el snapshot.
+
+| Preparación \ Cobro | open | paid | cancelled |
+|---|---|---|---|
+| pending / in_progress | Cola + sala | Cola + sala (COBRADO) | Cola hasta confirmar CANCELADO |
+| ready | Sala: "Listos para servir" | Sala: "Listos para servir" (COBRADO), hasta fin del día de envío | — |
+| served | Sala (por cobrar) | Solo "Cobrados hoy" | — |
 
 ### 4.3 Conservación de datos
 
-90 días es la **ventana de consulta** del resumen (HU-08), no un borrado. No hay
-purga en el MVP: ~500 pedidos/día ≈ 180 000 pedidos/año, unos pocos cientos de
-MB como mucho. La conservación legal la decide el humano (pregunta 10 del README).
-Las copias de seguridad (`pg_dump` diario) son tarea de Infrastructure.
+90 días es la **ventana de consulta** del resumen (HU-08, supuesto 11), no un
+borrado. No hay purga en el MVP: ~500 pedidos/día ≈ 180 000 pedidos/año, unos
+pocos cientos de MB como mucho. La conservación legal la decide el humano
+(pregunta 10 del README). Las copias de seguridad (`pg_dump` diario) son tarea
+de Infrastructure. La validación de la ventana (`today − 90 ≤ date ≤ today`) se
+hace en servidor con el `Clock`.
 
 ## 5. API principal
 
 REST JSON bajo `/api/v1`, mismo origen que la SPA (sin CORS). Importes siempre
-en **céntimos enteros** (`…Cents`). Fechas ISO 8601 UTC. Toda respuesta que el
-cliente use para calcular tiempos de espera incluye `serverTime` (el cliente
-calcula su desfase de reloj; los minutos de espera y el "retrasado" no dependen
-del reloj de la tablet).
+en **céntimos enteros** (`…Cents`). Fechas ISO 8601 UTC; fechas de negocio
+`YYYY-MM-DD`. Toda respuesta que el cliente use para calcular tiempos de espera
+o ventanas de deshacer incluye `serverTime` (el cliente calcula su desfase de
+reloj; los minutos de espera, el "retrasado" y los 30 s no dependen del reloj
+de la tablet).
+
+**Correlación (M-04):** Caddy genera un UUID por petición en `X-Request-Id`;
+`app` lo acepta solo si es un UUID válido (si falta —DEV, tests— genera uno),
+lo devuelve en la cabecera `X-Request-Id` de todas las respuestas y en
+`error.requestId`.
 
 Errores con formato único:
 ```json
-{ "error": { "code": "ORDER_VERSION_CONFLICT", "message": "El pedido ha cambiado", "details": { } } }
+{ "error": { "code": "ORDER_VERSION_CONFLICT", "message": "El pedido ha cambiado", "requestId": "6f1c2b0e-…", "details": { } } }
 ```
-Códigos HTTP: `400` validación (con campo y regla, para los mensajes de HU-05/HU-07),
-`401` sin sesión o caducada, `403` sin permiso, `404`, `409` conflicto de
-estado/versión (incluye la versión actual del recurso), `423` usuario bloqueado
-(con `retryAfterSeconds`), `429` límite de peticiones.
+Códigos HTTP: `400` validación (con campo y regla, para los mensajes de
+HU-05/HU-07/HU-09), `401` sin sesión o caducada, `403` sin permiso, `404`,
+`409` conflicto de estado/versión (incluye el recurso actual), `422` regla de
+negocio sobre datos válidos, `423` usuario bloqueado (con `retryAfterSeconds`),
+`429` límite de peticiones.
 
-Autorización puntual de encargado (HU-06): las operaciones que la requieren
-aceptan en el cuerpo `"managerApproval": { "name": "...", "pin": "..." }`. Se
-valida en servidor, cuenta para el bloqueo por intentos de ese encargado y se
-guarda en `authorized_by`.
+**Autorización del encargado (HU-06, supuesto 22).** Las operaciones que la
+requieren aceptan en el cuerpo
+`"managerApproval": { "managerId": "uuid", "pin": "1234" }`:
+- `managerId` se elige de `GET /staff/managers` (solo encargados activos; si hay
+  uno, la UI lo preselecciona).
+- **Vale para una sola acción por construcción:** va dentro de la petición de
+  esa acción, se verifica en esa petición y no deja ningún estado en servidor
+  (ni token ni "modo autorizado"). La siguiente acción la vuelve a necesitar.
+  El cliente vacía el PIN tras la respuesta (éxito o error) y nunca lo guarda
+  en el borrador ni en `localStorage`.
+- Si la sesión es de un encargado, se omite y `authorized_by = actor`. Si
+  Cybersecurity exige reautenticación, el campo pasa a ser obligatorio también
+  para el rol M sin cambiar el contrato.
+- Errores: `403 MANAGER_APPROVAL_REQUIRED` (falta), `403 MANAGER_APPROVAL_INVALID`
+  ("PIN de encargado incorrecto"; la misma respuesta si el id no es un encargado
+  activo, para no revelar nada), `423 MANAGER_LOCKED {retryAfterSeconds}`. El
+  cambio pendiente no se aplica y el cliente lo conserva. Intentos, bloqueo y
+  longitud del PIN: los define Cybersecurity (`docs/seguridad.md`).
 
 ### 5.1 Endpoints
 
@@ -335,127 +499,161 @@ Permisos: **W** = camarero/cajero, **K** = barra/cocina, **M** = encargado
 
 | Método y ruta | Permiso | Historia | Descripción |
 |---|---|---|---|
-| `POST /auth/login` | público | HU-01 | `{name, pin}` → `200 {user:{id,name,role,mustChangePin}}` + cookie; `401 INVALID_CREDENTIALS` ("Usuario o PIN incorrectos"); `423 LOCKED {retryAfterSeconds}`; `403 USER_DISABLED` (solo si el PIN es correcto) |
+| `POST /auth/login` | público | HU-01 | `{name, pin}` → `200 {user:{id,name,role,mustChangePin}}` + cookie; `401 INVALID_CREDENTIALS`; `423 LOCKED {retryAfterSeconds}`; `403 USER_DISABLED` (solo si el PIN es correcto) |
 | `POST /auth/logout` | sesión | HU-01 | revoca la sesión |
-| `GET /auth/me` | sesión | HU-01 | usuario, rol, permisos efectivos, `serverTime` |
-| `POST /auth/pin` | sesión | HU-07 | `{currentPin, newPin}`; única ruta permitida con `mustChangePin` |
-| `POST /session/activity` | sesión | HU-01 | latido de interacción del usuario (el cliente lo envía como mucho 1/min si hay toques sin otras peticiones) |
-| `GET /events` | sesión | HU-03, HU-05 | flujo SSE (sección 6) |
-| `GET /menu` | W, K, M | HU-02, HU-05 | categorías y productos activos ordenados, con `available` (K los recibe sin precio) |
+| `GET /auth/me` | sesión | HU-01 | usuario, rol, permisos efectivos, `serverTime`, `businessDate`, `localConfig` filtrado por rol: W `{tableCount}`, K `{delayThresholdMinutes}`, M ambos |
+| `POST /auth/pin` | sesión | HU-07 | `{currentPin, newPin}`; única ruta (con `/auth/me` y logout) permitida con `mustChangePin` |
+| `POST /session/activity` | sesión | HU-01 | latido de interacción (como mucho 1/min si hay toques sin otras peticiones) |
+| `GET /events` | sesión | HU-02..HU-06 | flujo SSE (§6) |
+| `GET /menu` | W, K, M | HU-02, HU-05 | categorías y productos activos ordenados, con `available` (K sin precio) |
 | `PATCH /products/:id/availability` | W, M | HU-05 | `{available}` |
 | `POST /categories` · `PATCH /categories/:id` · `DELETE /categories/:id` | M | HU-05 | `DELETE` archiva; `409 CATEGORY_HAS_ACTIVE_PRODUCTS {count}` |
 | `POST /products` · `PATCH /products/:id` | M | HU-05 | precio en `priceCents`; cambio de precio auditado; `active:false` desactiva |
-| `PUT /menu/order` | M | HU-05 | `{categories:[id…], products:{categoryId:[id…]}}` reordenación |
-| `GET /tables/:n/open-orders` | W, M | HU-02 | para el aviso "La mesa X ya tiene un pedido abierto" |
-| `POST /orders` | W, M | HU-02 | `{id, type, tableNumber?, customerRef?, lines:[{id, productId, quantity, note?}]}` → `201` pedido con número del día y precios del servidor; si el `id` ya existe del mismo usuario → `200` con el mismo pedido (reintento) |
-| `GET /orders?status=open` | W, M | HU-02, HU-04 | lista de abiertos con `prepStatus` (el camarero ve "Listo") |
-| `GET /orders/:id` | W, M | HU-04 | detalle con importes |
-| `GET /kitchen/queue` | K, M | HU-03 | snapshot de la cola **sin importes**, `serverTime`, `delayThresholdMinutes` |
-| `POST /orders/:id/prep` | K, M | HU-03 | `{action: "start" \| "ready" \| "undo_ready"}`; transición validada; `409 INVALID_TRANSITION`; `undo_ready` solo en ≤ 30 s desde `ready_at` |
-| `POST /orders/:id/kitchen-ack` | K, M | HU-03 | barra confirma la etiqueta MODIFICADO/CANCELADO |
-| `PATCH /orders/:id/lines` | W, M | HU-06 | `{expectedVersion, add:[{id, productId, quantity, note?}], change:[{lineId, quantity}], remove:[lineId], managerApproval?}`; `409 ORDER_VERSION_CONFLICT {order}`; `403 MANAGER_APPROVAL_REQUIRED` |
+| `PUT /menu/order` | M | HU-05 | `{categories:[id…], products:{categoryId:[id…]}}` |
+| `GET /tables/:n/open-orders` | W, M | HU-02 | aviso "La mesa X ya tiene un pedido abierto" (`status = 'open'`) |
+| `POST /orders` | W, M | HU-02 | `{id, type, tableNumber?, customerRef?, lines:[{id, productId, quantity, note?}]}` → `201` pedido con número del día, `businessDate` y precios del servidor; `422 TABLE_OUT_OF_RANGE`; mismo `id` del mismo usuario → `200` con el mismo pedido |
+| `GET /orders/floor` | W, M | HU-02, HU-03, HU-04 | **lista de sala** (§4.2): `{serverTime, businessDate, orders:[staffDto]}`; incluye abiertos, cobrados sin servir del día y "Listos para servir" |
+| `GET /orders/:id` | W, M | HU-04, HU-06 | detalle con importes, líneas con historial y `version` |
+| `POST /orders/:id/serve` | W, M (`order:serve`) | HU-03 | marca "Servido"; `409 INVALID_TRANSITION` si no está "Listo"; K → `403` |
+| `POST /orders/:id/serve/undo` | W, M (`order:serve`) | HU-03 | Servido → Listo; `409 UNDO_NOT_AVAILABLE` si pasó la ventana, no es la última acción o no la hizo este usuario |
+| `GET /kitchen/queue` | K, M | HU-03 | snapshot de la cola **sin importes ni cobro**, orden `queued_at`, con `serverTime` y `delayThresholdMinutes` |
+| `POST /orders/:id/prep` | K, M (`kitchen:transition`) | HU-03 | `{action: "start" \| "ready" \| "undo"}`; `undo` deshace el último `start` o `ready` (≤ 30 s); `409 INVALID_TRANSITION` / `409 UNDO_NOT_AVAILABLE` |
+| `POST /orders/:id/kitchen-ack` | K, M | HU-03 | barra confirma la etiqueta MODIFICADO/CANCELADO; un cancelado sale de la cola |
+| `PATCH /orders/:id/lines` | W, M | HU-06 | `{expectedVersion, add:[{id, productId, quantity, note?}], change:[{lineId, quantity}], remove:[lineId], managerApproval?}` → pedido actualizado (`requeued: true` si volvió a la cola); `409 ORDER_VERSION_CONFLICT {order}`; `409 ORDER_PAID` / `ORDER_CANCELLED`; errores de aprobación (§5) |
 | `POST /orders/:id/cancel` | W, M | HU-06 | `{expectedVersion, reasonCode, reasonText?, managerApproval?}` |
-| `POST /payments` | W, M | HU-04 | `{id, orderIds:[…], method, tenderedCents?, expectedTotalCents}` → `201 {payment, changeCents}`; `409 TOTAL_CHANGED` si el total del servidor no coincide con lo que vio el cajero; `409 ALREADY_PAID`; `422 INSUFFICIENT_CASH {missingCents}`; reintento con el mismo `id` → `200` |
+| `GET /staff/managers` | W, M (`approval:request`) | HU-06 | `[{id, name}]` de encargados activos, para el diálogo de autorización |
+| `POST /payments` | W, M | HU-04 | `{id, orderIds:[…], method, tenderedCents?, expectedTotalCents}` → `201 {payment, changeCents}`; `409 TOTAL_CHANGED`; `409 ALREADY_PAID`; `409 ORDER_CANCELLED`; `422 INSUFFICIENT_CASH {missingCents}`; reintento con el mismo `id` → `200` |
+| `GET /payments/today` | W, M | HU-04 | "Cobrados hoy": `{serverTime, businessDate, payments:[{id, paidAt, method, amountCents, orders:[{id, dailyNumber, tableNumber?, customerRef?}], voided, voidedAt?}]}` |
+| `GET /payments/:id` | W, M | HU-04 | detalle del cobro y pedidos que cubre (para el diálogo de anulación) |
 | `GET /payments/:id/ticket` | W, M | HU-04 | resumen en pantalla |
-| `POST /payments/:id/void` | M | HU-04 | `{reason}` (≥ 5 caracteres) |
+| `POST /payments/:id/void` | M | HU-04 | `{reason}` (≥ 5 caracteres) → anula el **cobro completo**; `200 {payment, reopenedOrders:[…]}`; `409 PAYMENT_ALREADY_VOIDED`. No existe anulación por pedido |
 | `GET /staff` · `POST /staff` · `PATCH /staff/:id` | M | HU-07 | alta `{name, role, pin}`; `PATCH` cambia nombre/rol/activo; `409 LAST_MANAGER` |
 | `POST /staff/:id/reset-pin` | M | HU-07 | `{pin}` provisional; revoca sesiones del usuario |
-| `GET /settings` · `PATCH /settings` | lectura: todos; escritura: M | HU-02, HU-03 | nº de mesas, umbral de retraso |
-| `GET /reports/daily?date=YYYY-MM-DD` | M | HU-08 | fecha dentro de los últimos 90 días; totales, productos, cancelados, anulados, abiertos, cierre guardado si existe |
+| `GET /settings` | M | HU-09 | `{tableCount, delayThresholdMinutes, version, updatedAt, updatedBy}` (pantalla "Ajustes"); el resto de roles recibe sus valores en `/auth/me` |
+| `PATCH /settings` | M (`settings:manage`) | HU-09 **(solo si se aprueba)** | `{expectedVersion, tableCount?, delayThresholdMinutes?}`; `400` con el mensaje y rango de cada campo; `409 TABLES_HAVE_OPEN_ORDERS {tableNumbers}` si se reduce N con pedidos `open` en mesas > N; `409 SETTINGS_VERSION_CONFLICT` |
+| `GET /reports/daily?date=YYYY-MM-DD` | M | HU-08 | fecha en `[today − 90, today]`; totales (sin anulados), productos, cancelados (por día de cancelación), anulados (por día del cobro original), abiertos, cierre guardado y anulados posteriores al cierre |
 | `POST /reports/daily/:date/closing` | M | HU-08 | `{countedCashCents}`; `409` si ya está cerrado |
-| `GET /healthz` | interno | — | lo usa el `HEALTHCHECK`; no lo expone el proxy |
+| `POST /telemetry` | sesión (`telemetry:write`) | M-03 | lote de métricas del cliente (§11); `204`; `413` si supera el tamaño, `429` si supera la frecuencia |
+| `GET /healthz` | interno | — | **liveness** (M-01): proceso y bucle de eventos; no consulta la BD. Lo usa el `HEALTHCHECK` |
+| `GET /readyz` | interno | — | **readiness**: `SELECT 1` (timeout 1 s), migraciones al día, secretos cargados. Sin versiones ni mensajes de error |
+| `GET /metrics` (puerto 9464) | interno | — | Prometheus (M-02); no es parte de `/api/v1` |
+
+`/healthz` y `/readyz` no requieren sesión, no generan `http.request` y Caddy
+responde `404` a ambos (no se enrutan). El puerto 9464 no se publica ni lo
+enruta Caddy.
 
 **Serialización por rol:** cada recurso de pedido tiene dos serializadores,
-`toStaffDto` (con importes) y `toKitchenDto` (sin `unitPriceCents`,
-`totalCents` ni datos de cobro). La ruta y el hub SSE eligen por el rol de la
-sesión. Así "barra no ve importes" (HU-03) no depende de la UI.
+`toStaffDto` (con importes, cobro e historial completo) y `toKitchenDto` (sin
+`unitPriceCents`, `totalCents`, `status` de cobro ni datos de cobro; expone
+`cancelled: boolean`, `sentAt`, `queuedAt`, `prepStatus`, `prepLastAction`,
+`prepChangedAt`, `kitchenFlag` y las líneas del ciclo vigente con las marcas
+AÑADIDO/ELIMINADO). La ruta y el hub SSE eligen por el rol de la sesión. Así
+"barra no ve importes" (HU-03) no depende de la UI.
 
 ## 6. Tiempo real (ADR-004)
 
 - **Transporte:** Server-Sent Events en `GET /api/v1/events` (un único flujo por
   dispositivo). Las acciones van por REST; SSE solo empuja del servidor al
   cliente. El navegador reconecta solo (`EventSource`).
-- **Eventos** (`event:` / `data:` JSON, filtrados y serializados según el rol):
+- **Formato:** `event:` + `data:` JSON. Todos los eventos de dominio llevan
+  `emittedAt` (hora del servidor, tomada del `Clock` justo tras el `COMMIT`)
+  para que el cliente mida la propagación extremo a extremo con su desfase
+  respecto a `serverTime` (M-03). Los de pedido llevan además `version` y
+  `change`.
+- **Eventos y destinatarios** (W = camarero/cajero, K = barra, M = encargado):
 
-| Evento | Destinatarios | Origen |
-|---|---|---|
-| `order.created` | W, K, M | HU-02 |
-| `order.updated` (líneas, estado, prep, flag; incluye `version`) | W, K, M | HU-03, HU-04, HU-06 |
-| `product.updated` (disponibilidad/precio/activo) | W, K, M | HU-05 |
-| `menu.changed` (estructura/orden → el cliente recarga `GET /menu`) | W, K, M | HU-05 |
-| `settings.updated` | todos | — |
-| `session.revoked` (y se cierra el flujo) | la sesión afectada | HU-01, HU-07 |
-| `session.updated` (cambio de rol → el cliente recarga `/auth/me` y reconecta) | la sesión afectada | HU-07 |
-| `ping` cada 2 s (`serverTime`) | todos | latido |
+| Evento | `change` / contenido | W | K | M | Origen |
+|---|---|---|---|---|---|
+| `hello` | `serverTime`, `businessDate` | ✓ | ✓ | ✓ | conexión |
+| `order.created` | pedido nuevo | staff | kitchen (con aviso sonoro) | staff | HU-02 |
+| `order.updated` | `lines_changed` (añadir/quitar con el pedido en cola → `kitchenFlag`) | staff | kitchen | staff | HU-06 |
+| `order.updated` | `requeued` (vuelta a la cola desde Listo/Servido) | staff | kitchen (como entrada nueva, aviso sonoro) | staff | HU-06, supuesto 17 |
+| `order.updated` | `prep_started`, `prep_ready`, `prep_undone` | staff (`prep_ready` dispara el aviso "Pedido N está listo") | kitchen | staff | HU-03 |
+| `order.updated` | `served`, `served_undone` | staff | kitchen (para retirar "Deshacer Listo" y la tarjeta) | staff | HU-03, supuesto 18 |
+| `order.updated` | `kitchen_ack` | staff | kitchen | staff | HU-03 |
+| `order.updated` | `cancelled` | staff | kitchen **solo si** `kitchenFlag = cancelled` | staff | HU-06 |
+| `order.updated` | `paid`, `payment_voided` | staff | — (barra no ve cobros) | staff | HU-04 |
+| `payment.created` · `payment.voided` | fila de "Cobrados hoy" | ✓ | — | ✓ | HU-04 |
+| `product.updated` | disponibilidad/precio/activo | ✓ | ✓ (sin precio) | ✓ | HU-05 |
+| `menu.changed` | estructura/orden → recarga `GET /menu` | ✓ | ✓ | ✓ | HU-05 |
+| `settings.updated` | W `{tableCount}`, K `{delayThresholdMinutes}`, M ambos | ✓ | ✓ | ✓ | HU-09 (solo si se aprueba) |
+| `session.revoked` (y se cierra el flujo) | — | sesión afectada | sesión afectada | sesión afectada | HU-01, HU-07 |
+| `session.updated` (cambio de rol → recarga `/auth/me` y reconecta) | — | sesión afectada | sesión afectada | sesión afectada | HU-07 |
+| `ping` cada 2 s | `serverTime`, `businessDate` | ✓ | ✓ | ✓ | latido |
 
+- **Cambio de día:** no hay temporizador en servidor. El `ping` lleva
+  `businessDate`; cuando el cliente de sala ve que cambia, recarga
+  `GET /orders/floor` y `GET /payments/today` (los cobrados sin servir del día
+  anterior desaparecen a las 00:00, HU-03).
 - **"Sin conexión" en ≤ 5 s (HU-03):** el cliente tiene un vigilante; si no
   recibe nada (ni `ping`) en 5 s muestra el aviso y fuerza reconexión.
 - **Resincronización sin pérdidas:** al (re)conectar, el servidor envía primero
-  `hello`; el cliente entonces pide el snapshot (`GET /kitchen/queue` u
-  `GET /orders?status=open` + `GET /menu`) y lo **reemplaza** por completo.
-  Los eventos que lleguen durante la carga se aplican si su `version` es mayor
-  que la del snapshot. No se necesita reproducir eventos perdidos (`Last-Event-ID`)
-  porque el estado completo es pequeño (≤ decenas de pedidos abiertos).
-- **Orden y consistencia:** se publica tras el `COMMIT`; cada evento de pedido
-  lleva `version`, el cliente descarta los de versión menor o igual a la que ya
-  tiene.
+  `hello`; el cliente entonces pide el snapshot de su rol (K: `GET /kitchen/queue`;
+  W/M: `GET /orders/floor` + `GET /payments/today`; todos: `GET /menu`) y lo
+  **reemplaza** por completo. Los eventos que lleguen durante la carga se
+  aplican si su `version` es mayor que la del snapshot. No se usa
+  `Last-Event-ID`: el estado completo es pequeño (≤ decenas de pedidos).
+- **Orden y consistencia:** se publica tras el `COMMIT`; el cliente descarta los
+  eventos de pedido con `version` ≤ a la que ya tiene. Un mismo cambio que afecta
+  a varios pedidos (cobrar mesa, anular) publica un `order.updated` por pedido
+  más un `payment.*`.
 - **Capacidad:** ~10 conexiones SSE abiertas; trivial para Node. Con HTTP/2
   (Caddy) no aplica el límite de 6 conexiones por origen de HTTP/1.1.
-- **Presupuesto de latencia** (HU-02/HU-03/HU-06 ≤ 2 s p95, HU-05 ≤ 5 s):
-  transacción (< 50 ms) + publicación en memoria + entrega SSE en LAN (< 100 ms).
-  Margen amplio.
+- **Presupuesto de latencia** (HU-02/HU-03/HU-06 ≤ 2 s p95, HU-05 y HU-09 ≤ 5 s,
+  umbral de retraso ≤ 60 s): transacción (< 50 ms) + publicación en memoria +
+  entrega SSE en LAN (< 100 ms). Margen amplio.
 
 ## 7. Autenticación y autorización (ADR-005)
 
 - **Credenciales:** nombre + PIN de 4 a 6 dígitos. PIN guardado con
-  **argon2id** + *pepper* (secreto inyectado en ejecución con `podman secret`,
-  nunca en BD ni imagen). Parámetros ajustados para ≤ ~250 ms por verificación
-  (HU-01 pide ≤ 1 s p95). Reglas de PIN (no repetidos, no secuencias) en
-  `packages/shared`, validadas en servidor.
+  **argon2id** + *pepper* (secreto inyectado con `podman secret`, nunca en BD
+  ni imagen). Parámetros ajustados para ≤ ~250 ms por verificación (HU-01 pide
+  ≤ 1 s p95). Reglas de PIN en `packages/shared`, validadas en servidor.
+  Longitudes, intentos y bloqueo definitivos: Cybersecurity (`docs/seguridad.md`).
 - **Sesión:** token aleatorio de 256 bits en cookie `HttpOnly; Secure;
   SameSite=Strict; Path=/`; en BD solo su SHA-256. Se resuelve en **cada**
   petición junto con el usuario → un cambio de rol o una desactivación surte
   efecto en la siguiente petición (HU-07), y la desactivación además revoca
-  sesiones y cierra el flujo SSE al instante (HU-07 pide ≤ 1 min).
-- **Inactividad 15 min (HU-01):** cuenta como actividad cualquier petición
-  REST (no el flujo SSE ni sus `ping`) y `POST /session/activity`, que el cliente
-  envía como mucho 1/min si hay toques en pantalla. `last_activity_at` se
-  actualiza como mucho cada 30 s. El cliente también cierra la pantalla por su
-  cuenta al llegar a 15 min. **Excepción rol barra:** mientras su flujo SSE esté
-  abierto, la sesión no caduca por inactividad. Todas las sesiones tienen además
-  caducidad absoluta (14 h por defecto, configurable) — propuesta a validar por
-  Cybersecurity.
+  sesiones y cierra el flujo SSE al instante.
+- **Inactividad 15 min (HU-01):** cuenta como actividad cualquier petición REST
+  salvo `POST /telemetry` (y no el flujo SSE ni sus `ping`), más
+  `POST /session/activity`. `last_activity_at` se actualiza como mucho cada
+  30 s. El cliente también cierra la pantalla al llegar a 15 min. **Excepción
+  rol barra:** mientras su flujo SSE esté abierto, la sesión no caduca por
+  inactividad. Caducidad absoluta (14 h por defecto, configurable) — a validar
+  por Cybersecurity.
 - **Bloqueo (HU-01):** `failed_attempts` y `locked_until` por usuario; al 5.º
-  fallo consecutivo, bloqueo 5 min (`423` con tiempo restante). El contador se
-  reinicia con un acceso correcto. Se verifica el PIN incluso si el usuario no
-  existe (hash ficticio) para no filtrar por tiempo de respuesta qué nombres
-  existen. Límite adicional por IP de origen en `/auth/login` (en memoria) para
-  frenar ataques que prueben un PIN común contra todos los usuarios.
-- **CSRF:** `SameSite=Strict` + mismo origen + comprobación de cabecera `Origin`
-  en peticiones que modifican datos.
+  fallo consecutivo, bloqueo 5 min (`423`). Se verifica el PIN incluso si el
+  usuario no existe (hash ficticio). Límite adicional por IP en `/auth/login`.
+  Las aprobaciones de encargado cuentan para el bloqueo de ese encargado.
+- **CSRF:** `SameSite=Strict` + mismo origen + comprobación de `Origin` en
+  peticiones que modifican datos.
 - **Autorización (RBAC):** matriz rol → permisos en `packages/shared/permissions.ts`.
-  Cada ruta declara su permiso (`requirePermission('payment:void')`) y el
+  Cada ruta declara su permiso (`requirePermission('order:serve')`) y el
   middleware responde `403` antes de ejecutar nada (HU-01). La UI usa la misma
-  matriz solo para ocultar opciones. Matriz inicial:
+  matriz solo para ocultar opciones. Matriz:
 
 | Permiso | W | K | M |
 |---|---|---|---|
 | `menu:read` | ✓ | ✓ (sin precios) | ✓ |
 | `product:set_availability` | ✓ | | ✓ |
 | `menu:manage` | | | ✓ |
-| `order:create`, `order:read`, `order:modify`, `order:cancel` | ✓ | | ✓ |
-| `kitchen:read`, `kitchen:transition` | | ✓ | ✓ |
-| `payment:create`, `payment:read` | ✓ | | ✓ |
+| `order:create`, `order:read` (lista de sala, detalle), `order:modify`, `order:cancel` | ✓ | | ✓ |
+| `order:serve` (Servido y su deshacer) | ✓ | | ✓ |
+| `kitchen:read`, `kitchen:transition` (Empezar, Listo, Deshacer, confirmar etiqueta) | | ✓ | ✓ |
+| `payment:create`, `payment:read` (incluye "Cobrados hoy") | ✓ | | ✓ |
 | `payment:void` | | | ✓ |
-| `staff:manage`, `settings:manage`, `reports:read` | | | ✓ |
-| `approval:grant` (PIN de encargado en HU-06) | | | ✓ |
+| `approval:request` (listar encargados para autorizar) | ✓ | | ✓ |
+| `approval:grant` (ser el encargado que autoriza) | | | ✓ |
+| `staff:manage`, `reports:read` | | | ✓ |
+| `settings:read`, `settings:manage` (HU-09) | | | ✓ |
+| `telemetry:write` | ✓ | ✓ | ✓ |
 
   La versión formal de permisos la mantienen Cybersecurity y Developer en
   `docs/permisos.md`.
-- **Encargado inicial (HU-01):** comando de arranque `create-initial-manager`
-  (en la imagen de `app`) que lee el nombre y un PIN provisional de un
-  `podman secret`, solo si no existe ningún encargado; queda con
-  `must_change_pin = true`.
+- **Encargado inicial (HU-01):** comando `create-initial-manager` (en la imagen
+  de `app`) que lee nombre y PIN provisional de un `podman secret`, solo si no
+  existe ningún encargado; queda con `must_change_pin = true`.
 
 ## 8. Dinero (ADR-006)
 
@@ -463,10 +661,11 @@ sesión. Así "barra no ve importes" (HU-03) no depende de la UI.
   entero validado en TS; 99 999 × cantidad × líneas queda muy lejos de 2^31).
 - Precio de entrada del encargado ("2,50") se convierte a céntimos **parseando
   la cadena** (máx. 2 decimales, coma o punto), nunca multiplicando un float.
-- Total = Σ (`unit_price_cents` × `quantity`) en servidor; cambio =
-  `tendered − amount`. Sin divisiones → sin redondeos.
+- Total = Σ (`unit_price_cents` × `quantity`) de líneas no eliminadas, en
+  servidor; cambio = `tendered − amount`. Sin divisiones → sin redondeos.
 - Formato en pantalla con una única función `formatCents` (es-ES, "1.234,50 €").
-- Los agregados de HU-08 usan `SUM()` sobre enteros en SQL → coinciden al céntimo.
+- Los agregados de HU-08 usan `SUM()` sobre enteros en SQL, filtrando
+  `voided_at IS NULL` → coinciden al céntimo con los cobros vigentes.
 
 ## 9. Concurrencia, idempotencia y fiabilidad (ADR-008)
 
@@ -475,18 +674,30 @@ sesión. Así "barra no ve importes" (HU-03) no depende de la UI.
   reintento usa el mismo id; el servidor devuelve el recurso existente. El
   índice único parcial de `payment_orders` es la última barrera contra el doble
   cobro.
-- **Pedido en edición no se pierde (HU-02):** el borrador vive solo en el cliente
-  (estado + `localStorage` del dispositivo) hasta el `201`; "Descartar" lo borra.
-  No hay borradores en servidor.
-- **Modificaciones simultáneas (HU-06):** `orders.version` se incrementa en cada
-  cambio; las modificaciones envían `expectedVersion` y se ejecutan con
-  `UPDATE … WHERE id = $1 AND version = $2`. Si no coincide → `409` con el pedido
-  actual; la UI avisa "El pedido ha cambiado" y muestra la versión nueva.
-- **Transiciones de barra:** validadas contra el estado actual (no por versión),
-  porque son idempotentes ("Listo" sobre un pedido ya listo → `409 INVALID_TRANSITION`
-  inocuo).
+- **Pedido en edición no se pierde (HU-02):** el borrador vive solo en el
+  cliente (estado + `localStorage`) hasta el `201`; "Descartar" lo borra. No hay
+  borradores en servidor. El PIN de una autorización nunca se guarda en él.
+- **Modificaciones simultáneas (HU-06):** `orders.version` sube en cada cambio;
+  líneas y cancelación envían `expectedVersion` y se ejecutan con
+  `UPDATE … WHERE id = $1 AND version = $2`. Si no coincide → `409` con el
+  pedido actual ("El pedido ha cambiado").
+- **Transiciones de preparación (barra y Servido):** validadas contra el estado
+  actual con la máquina de estados (no por versión), bajo `SELECT … FOR UPDATE`
+  del pedido. Repetir una acción ya aplicada → `409 INVALID_TRANSITION` inocuo.
+  Si barra pulsa "Deshacer Listo" a la vez que sala marca "Servido", el bloqueo
+  serializa ambas: la que llega segunda recibe `409` y el cliente se corrige con
+  el evento.
+- **Vuelta a la cola:** se decide dentro de la misma transacción que añade las
+  líneas (bloqueo del pedido), así no hay carrera con "Servido".
 - **Cobro:** una transacción con `SELECT … FOR UPDATE` de los pedidos; comprueba
   `status = 'open'` y que `expectedTotalCents` coincide con el total actual.
+- **Anulación:** una transacción: `FOR UPDATE` del cobro (si `voided_at` no es
+  nulo → `409`) y de sus pedidos; marca el cobro y **todas** sus filas de
+  `payment_orders`; pone los pedidos en `open` y sube su `version`.
+- **Ajustes (HU-09):** `PATCH /settings` bloquea la fila (`FOR UPDATE`) y
+  comprueba que no hay pedidos `open` en mesas > N nuevo; `POST /orders` de tipo
+  mesa lee `table_count` con `FOR SHARE` en su transacción. Así no puede
+  colarse un pedido en la mesa 15 mientras se reduce a 10.
 
 ## 10. Despliegue con contenedores rootless
 
@@ -495,26 +706,26 @@ la arquitectura exige:
 
 | Servicio | Imagen base | Usuario | Puertos (contenedor) | Persistencia | Notas |
 |---|---|---|---|---|---|
-| `app` | multi-stage: `node:<LTS>-alpine` para compilar → **distroless nodejs** (`nonroot`) | UID ≥ 1000 | 3000 (solo red interna) | ninguna (`--read-only`, `/tmp` tmpfs) | `HEALTHCHECK` en forma exec con `node dist/healthcheck.js` (no hay shell). Construir con formato docker para que Podman guarde el `HEALTHCHECK` |
-| `migrate` | misma imagen que `app` | igual | — | — | efímero, usa el rol de BD propietario |
+| `app` | multi-stage: `node:<LTS>-alpine` para compilar → **distroless nodejs** (`nonroot`) | UID ≥ 1000 | 3000 (API, red interna hacia Caddy) y 9464 (`/metrics`, red interna hacia Prometheus) | ninguna (`--read-only`, `/tmp` tmpfs) | `HEALTHCHECK` en forma exec con `node dist/healthcheck.js` → `GET 127.0.0.1:3000/healthz` (liveness, sin BD). Construir con formato docker para que Podman guarde el `HEALTHCHECK` |
+| `migrate` | misma imagen que `app` | igual | — | — | efímero, usa el rol de BD propietario; crea la fila de `settings` si no existe |
 | `db` | `postgres:<versión>-alpine` | UID ≥ 1000 (`--user`), datos en volumen con ese dueño | 5432 (solo red interna) | volumen `pgdata` | `--read-only` con tmpfs en `/var/run/postgresql` y `/tmp` |
-| `proxy` | `caddy:<versión>-alpine` | UID ≥ 1000 | 8080 (redirección) y 8443 (TLS) | volumen para `/data` (certificados) | único servicio publicado al host |
+| `proxy` | `caddy:<versión>-alpine` | UID ≥ 1000 | 8080 (redirección) y 8443 (TLS) | volumen para `/data` (certificados) | único servicio publicado al host; genera `X-Request-Id`; `404` a `/healthz` y `/readyz` |
 
 - Todos con `cap-drop: ALL`, `no-new-privileges`, límites de memoria/CPU,
   red interna propia (sin `network=host`). Ninguno necesita capacidades extra
-  (todos los puertos son > 1024).
+  (todos los puertos son > 1024). El puerto 9464 **no** se publica al host.
 - **Secretos** (`podman secret`, nunca en imagen ni en `docs/`): contraseña del
   rol de BD de la app, contraseña del rol propietario (solo `migrate`), *pepper*
   de PIN, datos del encargado inicial.
 - **Dos roles de BD:** `app_owner` (DDL, migraciones) y `app_rw` (DML sin
-  `DELETE` en tablas de auditoría y cobros).
-- **Puertos 80/443:** ver ADR-007 (por defecto se publica 8443; si se quiere 443,
-  se ajusta `net.ipv4.ip_unprivileged_port_start` en el host de PROD).
+  `DELETE` en tablas de auditoría y cobros). Monitoring/Infrastructure añaden un
+  rol de solo monitorización (`pg_monitor`) para `postgres_exporter`.
+- **Puertos 80/443:** ver ADR-007.
 - **Entornos:**
-  - DEV: `compose.dev.yaml` con `db`, `api` en modo `watch` (código montado) y
-    servidor Vite con recarga en caliente (proxy de `/api` hacia `api`). Sin
-    Caddy: `http://localhost` es contexto seguro para el navegador.
-  - TESTING / DEMO: las tres imágenes definitivas (`proxy`, `app`, `db`).
+  - DEV: `compose.dev.yaml` con `db`, `api` en modo `watch` y servidor Vite con
+    recarga en caliente. Sin Caddy: `app` genera el `request_id`.
+  - TESTING / DEMO: las tres imágenes definitivas (`proxy`, `app`, `db`) más la
+    imagen de pruebas construida desde `tests/`.
   - PROD: las mismas imágenes con Quadlet bajo un usuario sin privilegios.
 - **Una sola réplica de `app`** (estado SSE y bus en memoria). Reinicio
   automático por el motor; los clientes reconectan y resincronizan solos.
@@ -522,10 +733,23 @@ la arquitectura exige:
 ## 11. Observabilidad (puntos de enganche)
 
 El estándar lo define Monitoring (`docs/logging.md`). La arquitectura aporta:
-logs JSON de Fastify (pino) a stdout con `requestId`, `userId` y `role`;
-**redacción obligatoria** de `pin`, `currentPin`, `newPin`, `managerApproval.pin`,
-cookies y cabecera `Authorization`; `/healthz` (BD alcanzable); métricas mínimas
-posibles: latencia por ruta, conexiones SSE abiertas, logins fallidos, bloqueos.
+
+- **Logs** JSON de Fastify (pino) a stdout con campos en `snake_case`
+  (`request_id`, `user_id`, `role`, `session_id`…, M-04);
+  `requestIdHeader: 'x-request-id'`, `requestIdLogLabel: 'request_id'`.
+  **Redacción obligatoria** de `pin`, `currentPin`, `newPin`,
+  `managerApproval.pin`, cookies y cabecera `Authorization`.
+- **Salud:** `/healthz` (liveness) y `/readyz` (BD + migraciones), §5.1 (M-01).
+- **Métricas:** `prom-client` en un servidor HTTP aparte dentro del mismo
+  proceso, escuchando en 9464 (`/metrics`), sin rutas de la API (M-02). Lista
+  de métricas en `docs/logging.md` §6; etiquetas sin cardinalidad ilimitada.
+- **Telemetría del cliente (M-03):** `POST /api/v1/telemetry`, con sesión, por
+  lotes (como mucho 1 envío cada 30 s por sesión y ≤ 16 KB / 100 elementos por
+  lote), esquema zod `.strict()` con solo enums (pantalla, flujo, paso, campo,
+  código) y números acotados; sin texto libre salvo `client.js_error`
+  filtrado según `docs/logging.md` §4.4. Se convierte en métricas y logs; **no
+  se guarda en BD** y no cuenta como actividad de sesión. Los flujos y pasos los
+  define UX; **la revisión de seguridad del endpoint es de Cybersecurity**.
 
 ## 12. Convenciones de código
 
@@ -534,25 +758,43 @@ posibles: latencia por ruta, conexiones SSE abiertas, logins fallidos, bloqueos.
   reutilizados para tipos de request/response).
 - Dominio en inglés en código y BD; textos de UI en español.
 - Servicios con dependencias por constructor (DI manual en `main.ts`, sin
-  contenedor de DI). Reloj inyectable (`Clock`) para tests de expiración,
-  bloqueo y "Deshacer 30 s".
-- Funciones puras para reglas (totales, transiciones, reglas de PIN, permisos);
-  datos inmutables en el dominio (`readonly`).
+  contenedor de DI). **`Clock` inyectable** (`now(): Date`) para expiración,
+  bloqueo, "Deshacer 30 s", espera/retraso y fecha de negocio; prohibido
+  `new Date()`/`Date.now()` y `now()` de SQL en la lógica de negocio.
+- Funciones puras para reglas (totales, transiciones, deshacer, fecha de
+  negocio, reglas de PIN, permisos); datos inmutables en el dominio (`readonly`).
 - Toda operación que cambia varias tablas va en una transacción; los eventos se
   publican después del `COMMIT`.
 - SQL parametrizado siempre (Kysely); nada de concatenar cadenas.
 - Migraciones versionadas en `apps/api/src/db/migrations`, solo hacia delante.
 - Nada de secretos en el repo; configuración por variables de entorno y
   archivos de secreto montados.
+- Tests en `tests/` (estructura y convenciones en `docs/testing.md` §4).
 
 ## 13. Riesgos técnicos
 
 | Riesgo | Impacto | Mitigación |
 |---|---|---|
-| PIN de 4 dígitos = 10 000 combinaciones; con bloqueo de 5/5 min, ~1 440 intentos/día por usuario | Acceso indebido en días | Límite por IP, aviso en logs/alertas de bloqueos repetidos, propuesta de PIN de 6 dígitos para encargado (ver `docs/estado.md`). Decide Cybersecurity/PO |
-| TLS en red local: los certificados de CA interna de Caddy requieren instalar la CA raíz en cada tablet | Avisos del navegador; sin HTTPS no hay cookies `Secure`, Wake Lock ni sonido fiable | ADR-007; si PROD es una VM en internet, certificados ACME con dominio real |
-| Sin conexión a internet/servidor no hay servicio (offline fuera de alcance) | Parada del local si cae el Wi-Fi o el host | Pregunta 11 del README; servidor en el propio local reduce dependencia de internet |
-| Una sola instancia de `app` | Un fallo deja sin servicio hasta el reinicio (segundos) | Reinicio automático + resync de clientes; suficiente para 1 local |
-| Reloj de las tablets desfasado | Minutos de espera y "retrasado" erróneos | `serverTime` en respuestas y `ping` |
-| Navegadores bloquean el audio sin gesto previo; la pantalla de barra se apaga | Aviso sonoro (HU-03) no suena; cola no visible | Reportado a UX (ver `docs/estado.md`); Wake Lock API (requiere HTTPS) |
-| Requisitos fiscales (pregunta 1) | Cambio de alcance mayor: ticket fiscal encadenado, firma, envío a AEAT | El modelo de `payments` inmutable y auditado facilita añadirlo; requeriría nuevo ADR |
+| PIN de 4 dígitos = 10 000 combinaciones; con bloqueo de 5/5 min, ~1 440 intentos/día por usuario | Acceso indebido en días | Límite por IP, alertas de bloqueos, propuesta de PIN de 6 dígitos para encargado. Decide Cybersecurity/PO |
+| La autorización de encargado se teclea en el dispositivo del camarero | PIN de encargado observado (hombro) o probado contra el encargado | Aprobación sin estado ni reutilización; cuenta para el bloqueo; decisión final de Cybersecurity |
+| TLS en red local: la CA interna de Caddy requiere instalar la CA raíz en cada tablet | Avisos del navegador; sin HTTPS no hay cookies `Secure`, Wake Lock ni sonido fiable | ADR-007; si PROD es una VM en internet, ACME con dominio real |
+| Sin conexión a internet/servidor no hay servicio (offline fuera de alcance) | Parada del local si cae el Wi-Fi o el host | Pregunta 11 del README; servidor en el propio local |
+| Una sola instancia de `app` | Un fallo deja sin servicio hasta el reinicio (segundos) | Reinicio automático + resync de clientes; `/healthz` sin BD evita bucles de reinicio |
+| Reloj de las tablets desfasado | Minutos de espera, "retrasado" y ventana de 30 s erróneos | `serverTime` en respuestas y `ping` |
+| Local abierto después de medianoche o fuera de la península | Numeración y "Cobrados hoy" se parten a las 00:00 | Supuesto 15 y pregunta 14; `businessDate()` está en un solo sitio, cambiarlo a "jornada con hora de corte" sería un cambio acotado |
+| Navegadores bloquean el audio sin gesto previo; la pantalla de barra se apaga | Aviso sonoro (HU-03) no suena; cola no visible | Reportado a UX/PO; Wake Lock API (requiere HTTPS) |
+| Requisitos fiscales (pregunta 1) | Cambio de alcance mayor | `payments` inmutable y auditado facilita añadirlo; requeriría nuevo ADR |
+
+## 14. Registro de decisiones de la revisión 1.3b
+
+| Origen | Decisión | Dónde |
+|---|---|---|
+| PO ronda 1 (supuestos 11, 14–17) | Dos dimensiones de estado; anulación del cobro completo (incluido "Cobrar mesa") sin anulación por pedido; 90 días = ventana de consulta sin purga; día natural `Europe/Madrid` | §4.1–4.3, §5.1, §9 |
+| PO ronda 2 (supuestos 17–22, HU-09) | Estado `served`; deshacer Empezar/Listo (barra) y Servido (quien lo marcó) con `prep_last_action`; vuelta a la cola desde Listo/Servido; lista de sala y "Cobrados hoy"; aprobación de encargado sin estado y para una sola acción; ajustes con auditoría en `audit_log`, `PATCH` solo si se aprueba HU-09 | §4.1, §4.2, §5, §6, §7, §9 |
+| Detalle del PO (orden al volver a la cola) | Orden y espera por `queued_at` (hora de la modificación); la tarjeta conserva número y hora de envío original. **Reportado al PO** | §4.2 |
+| T-10 | **Aceptado.** Fecha de negocio y marcas de tiempo desde el `Clock` inyectado, como parámetros SQL; `buildApp(deps)` permite `FakeClock` en integración sin endpoints de prueba | §2, §4, §12, ADR-003 |
+| T-11 | **Aceptado.** Tests en `tests/` en la raíz; fuera de `apps/*` | §3, §12 |
+| M-01 | **Aceptado.** `/healthz` = liveness sin BD (lo usa el `HEALTHCHECK`); nuevo `/readyz` | §5.1, §10, §11, ADR-007 |
+| M-02 | **Aceptado.** `/metrics` en 9464, servidor aparte en el mismo proceso, no publicado ni enrutado por Caddy | §1, §2, §10, §11 |
+| M-03 | **Aceptado con ajustes.** `emittedAt` en **todos** los eventos de dominio (no solo pedido/producto, coste nulo); `POST /telemetry` con límites concretos, sin persistir en BD y sin contar como actividad de sesión. Revisión de seguridad: Cybersecurity | §5.1, §6, §7, §11, ADR-004 |
+| M-04 | **Aceptado.** `X-Request-Id` de Caddy (validado como UUID), devuelto en cabecera y `error.requestId`; logs en `snake_case` | §5, §11 |

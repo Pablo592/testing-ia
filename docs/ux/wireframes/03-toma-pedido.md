@@ -25,6 +25,16 @@ Un solo toque elige el tipo y la mesa a la vez: no hay un paso previo "¿Mesa o 
 +-----------------------------------------------------------------------------------+
 ```
 
+**Tamaño de la rejilla según N [1.2b]** (N = número de mesas, 1-99: HU-09 o supuesto 20). Para que elegir mesa siga siendo **un solo toque sin desplazar** (HU-02), el botón de mesa se adapta a N, con un mínimo de 56x56 px (>= 48 de `touch-min`). Espacio útil supuesto bajo el botón "Mostrador": 1216x512 px en 1280x800 y 704x736 px en 768x1024.
+
+| N | Botón de mesa (separación) | Caben en 1280x800 | Caben en 768x1024 |
+|---|---|---|---|
+| 1-32 | 120x88 px (16) | 8 x 4 = 32 | 5 x 7 = 35 |
+| 33-72 | 88x72 px (8) | 12 x 6 = 72 | 7 x 9 = 63: de 64 a 72 mesas, botón de 64x64 |
+| 73-99 | 64x64 px (8) | 16 x 7 = 112 | 9 x 10 = 90: de 91 a 99 mesas, botón de 56x56 (11 x 11 = 121) |
+
+El texto pasa de "Mesa 7" a "7" (con `aria-label="Mesa 7"`) cuando el botón mide menos de 88 px de ancho; "Abierta" se mantiene en texto con el borde de 2 px. En 375 px se acepta desplazamiento vertical (dispositivo de emergencia).
+
 ## P-04 Toma de pedido: tablet en horizontal (1280x800)
 
 ```
@@ -126,5 +136,7 @@ Igual que P-04 con el título "Modificar pedido #42 · Mesa 7". Las líneas nuev
 | HU-02 | Total actualizado en <= 200 ms | El total se calcula en el cliente para mostrarlo al momento; el servidor manda en el envío |
 | HU-02 (no func.) | Tablet en horizontal y vertical | Dos maquetaciones |
 | HU-02 | Aviso de mesa con pedido abierto | "Abierta #38" en P-03 + aviso en P-04 |
+| HU-02 / HU-09 | Tipo y mesa en 1 toque con N de 1 a 99 | Rejilla adaptable sin desplazar en 1280x800 y 768x1024 [1.2b] |
+| HU-02 | Categoría inicial = la primera del menú | La primera pestaña abre activa |
 | HU-05 | Agotado en <= 2 toques | Modo agotados |
 | HU-06 | "AÑADIDO" en texto | Insignia en la línea |

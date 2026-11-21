@@ -39,7 +39,10 @@ propio backend (mismo origen, sin CORS), detrás del proxy (ADR-007).
 - Enrutado con React Router; vista inicial según rol tras el login (HU-01).
 - Estado del servidor con TanStack Query; los eventos SSE (ADR-004) actualizan
   o invalidan su caché.
-- Borrador del pedido en estado local + `localStorage` del dispositivo.
+- Borrador del pedido en estado local + `localStorage` del dispositivo, con
+  clave por usuario (`draft:<userId>`): solo se ofrece al mismo usuario, se
+  descarta a las 12 h, no guarda importes (se recalculan) ni ningún PIN
+  (revisión 2026-11-21, SEC-012).
 - Componentes propios según `docs/ux/design-system.md` (cuando exista); sin
   librería de UI pesada salvo que UX lo justifique.
 - Sin service worker ni modo offline (fuera de alcance).
