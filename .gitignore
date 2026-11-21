@@ -1,0 +1,20 @@
+# Registro local de actividad de los agentes (dashboard)
+.claude/actividad/
+
+# Secretos locales (Infrastructure): nunca al repositorio
+.secrets/
+*.secret
+*.pem
+*.key
+
+# Dependencias instaladas por el servicio "deps" de compose.dev.yaml
+node_modules/
+.pnpm-store/
+
+# Terraform (estado local, planes y variables con posibles secretos)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example

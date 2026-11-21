@@ -1,0 +1,67 @@
+# ADR-004: Mecanismo de tiempo real
+
+- **Estado:** Propuesto (pendiente de la puerta de la Etapa 1)
+- **Fecha:** 2026-11-21
+- **Autor:** Software Engineer
+
+## Contexto
+
+Requisitos:
+- Pedido nuevo visible en barra en ≤ 2 s p95 con 10 dispositivos (HU-02).
+- Cambio de estado visible en camareros en ≤ 2 s (HU-03); modificaciones en
+  ≤ 2 s (HU-06); "agotado" en todos los dispositivos en ≤ 5 s (HU-05).
+- Sin recargar la página (HU-03); aviso "Sin conexión" en ≤ 5 s y
+  resincronización automática sin perder pedidos (HU-03).
+- Cierre de sesión forzado en ≤ 1 min al desactivar un usuario (HU-07).
+- Barra no debe recibir importes (HU-03).
+
+El flujo de datos en tiempo real es **solo del servidor al cliente**; las
+acciones del usuario ya van por HTTP (REST). Una sola instancia de backend
+(ADR-001).
+
+## Opciones consideradas
+
+1. **Sondeo periódico (polling cada 1 s):** lo más simple, pero 10 dispositivos
+   × 1 petición/s constantes, latencia media de 0,5 s añadida y ruido en logs y
+   en el cálculo de inactividad.
+2. **WebSocket:** bidireccional; no lo necesitamos. Requiere gestionar
+   reconexión, latido y autenticación del canal a mano, y el proxy debe hacer
+   *upgrade*.
+3. **Server-Sent Events (SSE):** HTTP normal de larga duración, unidireccional,
+   reconexión automática nativa (`EventSource`), envía la cookie de sesión al ser
+   del mismo origen, compatible con HTTP/2 y con Caddy sin configuración especial.
+4. **Servicio externo (broker MQTT, Redis pub/sub, Firebase):** un componente
+   más que operar para 10 clientes. YAGNI.
+
+## Decisión
+
+**SSE** en `GET /api/v1/events`, con **resincronización por snapshot**:
+
+- Bus de eventos **en memoria** en el proceso de `app`; los servicios publican
+  después del `COMMIT`. El hub mantiene las conexiones abiertas con su sesión y
+  rol, y serializa cada evento según el rol (barra: sin importes).
+- Eventos: `hello`, `order.created`, `order.updated`, `product.updated`,
+  `menu.changed`, `settings.updated`, `session.updated`, `session.revoked`,
+  `ping` (cada 2 s, con `serverTime`). Detalle en `docs/arquitectura.md` §6.
+- El cliente tiene un vigilante: sin ningún mensaje en 5 s → "Sin conexión" y
+  reconexión. Tras `hello`, pide el snapshot completo por REST y lo sustituye.
+  Cada evento de pedido lleva `version`; se ignoran los de versión ≤ a la local.
+- No se implementa `Last-Event-ID` ni historial de eventos: el estado abierto
+  completo es pequeño y el snapshot es más simple y fiable.
+- Al desactivar un usuario o cambiar su rol, el hub envía `session.revoked` /
+  `session.updated` y cierra el flujo de esa sesión al instante.
+
+## Consecuencias
+
+- (+) Sin dependencias nuevas ni servicios extra; el proxy solo reenvía HTTP.
+- (+) La reconexión + snapshot cubre caídas de Wi-Fi, reinicios de `app` y
+  eventos perdidos con un único mecanismo.
+- (−) Limitado a **una instancia** de `app`. Si algún día hay varias, se
+  sustituye el bus en memoria por `LISTEN/NOTIFY` de PostgreSQL (la interfaz del
+  bus no cambia).
+- (−) En HTTP/1.1 los navegadores limitan a 6 conexiones por origen; se evita
+  sirviendo por HTTP/2 desde Caddy y usando un único flujo por pestaña.
+- (−) Los `ping` cada 2 s no deben contar como actividad del usuario para la
+  inactividad de 15 min (ver ADR-005); el flujo SSE se excluye de ese cálculo.
+- El proxy no debe almacenar en búfer `text/event-stream` (Caddy lo vacía
+  inmediatamente por defecto; Infrastructure lo verifica).

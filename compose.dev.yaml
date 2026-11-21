@@ -1,0 +1,238 @@
+# Entorno DEV — Podman rootless + podman-compose (nunca docker / podman compose).
+#
+#   sh deploy/dev/generar-secretos.sh               # una vez
+#   podman-compose -f compose.dev.yaml up -d        # levantar
+#   podman-compose -f compose.dev.yaml down         # detener
+#
+# Servicios: db (PostgreSQL), deps (pnpm install, efímero), migrate (efímero),
+# init-manager (efímero), api (Fastify en watch) y web (Vite con HMR).
+# Sin proxy Caddy en DEV (ADR-007): solo http://localhost.
+# Detalle, contrato con el código y excepciones: docs/infraestructura.md.
+
+name: mi-app-dev
+
+x-podman:
+  # Sin pod: permite --userns=keep-id por contenedor.
+  in_pod: false
+
+# --- Endurecimiento común (reglas-equipo.md §3.4) ---------------------------
+x-hardening: &hardening
+  user: "1000:1000"
+  # El usuario del host se mapea al UID 1000 del contenedor: los archivos del
+  # código y de los secretos (0600, del usuario del host) se pueden leer sin
+  # root y sin chmod. Ningún proceso es UID 0 en el host.
+  userns_mode: "keep-id:uid=1000,gid=1000"
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges
+  read_only: true
+  tmpfs:
+    - /tmp:rw,nosuid,nodev,noexec,size=256m
+  ipc: private
+
+x-node-image: &node-image
+  image: localhost/mi-app-dev-tools:node26.13.1-pnpm12.21.0
+  pull_policy: never
+
+x-api-env: &api-env
+  NODE_ENV: development
+  TZ: UTC
+  BUSINESS_TIMEZONE: Europe/Madrid
+  LOG_LEVEL: debug
+  DATABASE_HOST: db
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: cafeteria
+
+services:
+
+  db:
+    <<: *hardening
+    image: docker.io/library/postgres:19.0-alpine@sha256:8b0ff4cdf221f0c53d7fcda681d3b461be725c492cd881c5ec9c0ad25023f188
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m
+      - /run/postgresql:rw,nosuid,nodev,noexec,size=1m,mode=0700,U
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_superuser_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --encoding=UTF8 --locale=C.UTF-8"
+      APP_DB_NAME: cafeteria
+      TZ: UTC
+    secrets:
+      - db_superuser_password
+      - db_owner_password
+      - db_app_password
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./deploy/db/initdb:/docker-entrypoint-initdb.d:ro
+    networks: [backend]
+    # Sin puertos publicados: acceso con
+    #   podman-compose -f compose.dev.yaml exec db psql -U app_owner -d cafeteria
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "/run/postgresql", "-U", "postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512m, pids: 200 }
+
+  deps:
+    <<: [*hardening, *node-image]
+    build:
+      context: ./deploy/dev
+      dockerfile: Containerfile
+      args:
+        PNPM_VERSION: "12.21.0"
+    # Instala dependencias del workspace en node_modules/ del host (ignorado por
+    # git) para que el IDE vea los tipos. Store de pnpm en un volumen.
+    command: ["pnpm", "install", "--frozen-lockfile", "--store-dir", "/pnpm-store"]
+    environment:
+      CI: "true"
+    volumes:
+      - ./:/workspace:rw
+      - pnpm-store:/pnpm-store
+    networks: [deps]
+    healthcheck:
+      disable: true
+    restart: "no"
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 2g, pids: 512 }
+
+  migrate:
+    <<: [*hardening, *node-image]
+    command: ["pnpm", "--dir", "apps/api", "run", "db:migrate"]
+    environment:
+      <<: *api-env
+      DATABASE_USER: app_owner
+      DATABASE_PASSWORD_FILE: /run/secrets/db_owner_password
+    secrets:
+      - db_owner_password
+    volumes:
+      - ./:/workspace:ro
+    networks: [backend]
+    depends_on:
+      db: { condition: service_healthy }
+      deps: { condition: service_completed_successfully }
+    healthcheck:
+      disable: true
+    restart: "no"
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512m, pids: 200 }
+
+  init-manager:
+    <<: [*hardening, *node-image]
+    # Crea el encargado inicial solo si no existe ninguno (HU-01, arquitectura §7).
+    command: ["pnpm", "--dir", "apps/api", "run", "create-initial-manager"]
+    environment:
+      <<: *api-env
+      DATABASE_USER: app_rw
+      DATABASE_PASSWORD_FILE: /run/secrets/db_app_password
+      PIN_PEPPER_FILE: /run/secrets/pin_pepper
+      INITIAL_MANAGER_NAME_FILE: /run/secrets/initial_manager_name
+      INITIAL_MANAGER_PIN_FILE: /run/secrets/initial_manager_pin
+    secrets:
+      - db_app_password
+      - pin_pepper
+      - initial_manager_name
+      - initial_manager_pin
+    volumes:
+      - ./:/workspace:ro
+    networks: [backend]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      disable: true
+    restart: "no"
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512m, pids: 200 }
+
+  api:
+    <<: [*hardening, *node-image]
+    command: ["pnpm", "--dir", "apps/api", "run", "dev"]
+    environment:
+      <<: *api-env
+      HOST: 0.0.0.0
+      PORT: "3000"
+      DATABASE_USER: app_rw
+      DATABASE_PASSWORD_FILE: /run/secrets/db_app_password
+      PIN_PEPPER_FILE: /run/secrets/pin_pepper
+      HEALTHCHECK_URL: http://127.0.0.1:3000/healthz
+    secrets:
+      - db_app_password
+      - pin_pepper
+    volumes:
+      # Código en solo lectura: el watcher (tsx) solo lee; su caché va a /tmp.
+      - ./:/workspace:ro
+    networks: [backend, frontend]
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      init-manager: { condition: service_completed_successfully }
+    healthcheck:
+      # Explícito por si la imagen se construyó en formato OCI (sin HEALTHCHECK).
+      test: ["CMD", "node", "-e", "fetch(process.env.HEALTHCHECK_URL).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "1.5", memory: 768m, pids: 256 }
+
+  web:
+    <<: [*hardening, *node-image]
+    command: ["pnpm", "--dir", "apps/web", "run", "dev", "--host", "0.0.0.0", "--port", "5173", "--strictPort"]
+    environment:
+      NODE_ENV: development
+      # Lo lee vite.config.ts para el proxy de /api (sin prefijo VITE_ para que
+      # no llegue al bundle del navegador).
+      API_PROXY_TARGET: http://api:3000
+      HEALTHCHECK_URL: http://127.0.0.1:5173/
+    volumes:
+      # Lectura/escritura: Vite escribe su caché en node_modules/.vite y
+      # archivos temporales junto a vite.config (ver docs/infraestructura.md §7).
+      - ./:/workspace:rw
+    networks: [frontend]
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      deps: { condition: service_completed_successfully }
+    healthcheck:
+      # Explícito por si la imagen se construyó en formato OCI (sin HEALTHCHECK).
+      test: ["CMD", "node", "-e", "fetch(process.env.HEALTHCHECK_URL).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits: { cpus: "1.5", memory: 1g, pids: 256 }
+
+networks:
+  backend:
+    # Sin salida a internet ni puertos publicados: solo db, migrate,
+    # init-manager y api.
+    internal: true
+  frontend: {}
+  deps: {}
+
+volumes:
+  pgdata: {}
+  pnpm-store: {}
+
+secrets:
+  db_superuser_password: { file: ./.secrets/dev/db_superuser_password }
+  db_owner_password:     { file: ./.secrets/dev/db_owner_password }
+  db_app_password:       { file: ./.secrets/dev/db_app_password }
+  pin_pepper:            { file: ./.secrets/dev/pin_pepper }
+  initial_manager_name:  { file: ./.secrets/dev/initial_manager_name }
+  initial_manager_pin:   { file: ./.secrets/dev/initial_manager_pin }

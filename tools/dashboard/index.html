@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Equipo de agentes</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f0f2f5; --text: #1b1f24;
+    --muted: #5d6673; --border: #dde1e6; --accent: #2f6fde;
+    --ok: #1f9d55; --warn: #c27c0e; --err: #d1343b; --idle: #8b95a1;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1216; --panel: #171b21; --panel-2: #1e232b; --text: #e6e9ed;
+      --muted: #949eab; --border: #2a313a; --accent: #6b9cff;
+      --ok: #3ccf7f; --warn: #f0b03c; --err: #ff6b70; --idle: #6d7784;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px;
+           padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel);
+           position: sticky; top: 0; z-index: 2; }
+  header h1 { font-size: 17px; margin: 0; }
+  header .etapa { color: var(--muted); }
+  .stats { display: flex; gap: 18px; margin-left: auto; flex-wrap: wrap; }
+  .stat b { font-size: 16px; font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--muted); margin-left: 4px; }
+  .live { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); display: inline-block; }
+  .live.on .dot { background: var(--ok); }
+  .live.off .dot { background: var(--err); }
+
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; padding: 16px 20px; }
+  @media (max-width: 1000px) { main { grid-template-columns: minmax(0, 1fr); } }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+       margin: 0 0 10px; font-weight: 600; }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  section + section { margin-top: 16px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+  .card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; cursor: pointer;
+          background: var(--panel); border-left: 4px solid var(--c); transition: background .15s; }
+  .card:hover { background: var(--panel-2); }
+  .card.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .card .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .card .nombre { font-weight: 600; }
+  .card .rol { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
+  .card .ultima { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .pill { font-size: 11px; padding: 1px 8px; border-radius: 999px; white-space: nowrap;
+          border: 1px solid currentColor; }
+  .pill.activo { color: var(--ok); }
+  .pill.esperando { color: var(--warn); }
+  .pill.inactivo { color: var(--idle); }
+  .card.activo .nombre::before { content: ""; display: inline-block; width: 7px; height: 7px;
+          border-radius: 50%; background: var(--ok); margin-right: 6px; animation: pulso 1.2s infinite; }
+  @keyframes pulso { 50% { opacity: .25; } }
+
+  .filtros { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  .filtros input { flex: 1; min-width: 160px; padding: 6px 10px; border-radius: 6px;
+                   border: 1px solid var(--border); background: var(--panel-2); color: var(--text); }
+  .filtros button, .chip-btn { padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border);
+                   background: var(--panel-2); color: var(--text); cursor: pointer; font: inherit; }
+  .tabla { overflow-x: auto; max-height: 62vh; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.hora { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.det { word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .chip { display: inline-block; padding: 0 7px; border-radius: 4px; font-size: 12px; white-space: nowrap;
+          background: color-mix(in srgb, var(--c) 18%, transparent); color: var(--text);
+          border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); }
+  .ev { font-size: 12px; white-space: nowrap; }
+  tr.error td { background: color-mix(in srgb, var(--err) 10%, transparent); }
+  tr.permiso td { background: color-mix(in srgb, var(--warn) 12%, transparent); }
+  tr.hito td { background: var(--panel-2); }
+  .vacio { color: var(--muted); padding: 20px; text-align: center; }
+
+  .md { font-size: 13px; max-height: 50vh; overflow: auto; }
+  .md h1, .md h2, .md h3 { text-transform: none; letter-spacing: 0; color: var(--text); margin: 12px 0 6px; }
+  .md h1 { font-size: 15px; } .md h2 { font-size: 14px; } .md h3 { font-size: 13px; }
+  .md table { font-size: 12px; margin: 6px 0; }
+  .md code { background: var(--panel-2); padding: 0 4px; border-radius: 4px; }
+  .md p { margin: 6px 0; }
+  .archivos { list-style: none; padding: 0; margin: 0; font-size: 12px; }
+  .archivos li { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0;
+                 border-bottom: 1px solid var(--border); }
+  .archivos li span:first-child { font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
+  .archivos li span:last-child { color: var(--muted); white-space: nowrap; }
+  .archivos li.reciente span:first-child { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="titulo">Equipo de agentes</h1>
+  <span class="etapa" id="etapa">—</span>
+  <div class="stats">
+    <div class="stat"><b id="sActivos">0</b><span>activos</span></div>
+    <div class="stat"><b id="sAcciones">0</b><span>acciones</span></div>
+    <div class="stat"><b id="sErrores">0</b><span>errores</span></div>
+    <div class="stat"><b id="sPermisos">0</b><span>permisos pedidos</span></div>
+    <span class="live" id="live"><span class="dot"></span><span id="liveTxt">conectando…</span></span>
+  </div>
+</header>
+
+<main>
+  <div>
+    <section>
+      <h2>Agentes</h2>
+      <div class="grid" id="agentes"></div>
+    </section>
+    <section>
+      <h2>Actividad en tiempo real</h2>
+      <div class="filtros">
+        <input id="buscar" type="search" placeholder="Buscar en la actividad (archivo, comando, agente…)">
+        <span id="filtroAgente"></span>
+        <button id="pausa" type="button">Pausar</button>
+      </div>
+      <div class="tabla">
+        <table>
+          <thead><tr><th>Hora</th><th>Agente</th><th>Acción</th><th>Detalle</th></tr></thead>
+          <tbody id="feed"></tbody>
+        </table>
+        <div class="vacio" id="vacio">Todavía no hay actividad. Abre <code>claude</code> en la carpeta del proyecto y pon a trabajar al equipo.</div>
+      </div>
+    </section>
+  </div>
+
+  <div>
+    <section>
+      <h2>docs/estado.md</h2>
+      <div class="md" id="estado"></div>
+    </section>
+    <section>
+      <h2>Documentos modificados recientemente</h2>
+      <ul class="archivos" id="archivos"></ul>
+    </section>
+  </div>
+</main>
+
+<script>
+const AGENTES = [
+  { id: "orquestador",       nombre: "Orquestador",       rol: "Coordina etapas y puertas",        c: "#7c8a9e" },
+  { id: "product-owner",     nombre: "Product Owner",     rol: "Historias y requerimientos",       c: "#e0a030" },
+  { id: "ux-designer",       nombre: "UX/UI Designer",    rol: "Flujos, wireframes, revisión UX",  c: "#d65db1" },
+  { id: "software-engineer", nombre: "Software Engineer", rol: "Arquitectura y ADRs",              c: "#4c7cf0" },
+  { id: "developer",         nombre: "Developer",         rol: "Implementación",                   c: "#2bb3a3" },
+  { id: "cybersecurity",     nombre: "Cybersecurity",     rol: "Vulnerabilidades y permisos",      c: "#e5484d" },
+  { id: "infrastructure",    nombre: "Infrastructure",    rol: "Entornos y despliegues",           c: "#8e6ad8" },
+  { id: "testing",           nombre: "Testing",           rol: "Tests en todas las etapas",        c: "#46a758" },
+  { id: "monitoring",        nombre: "Monitoring",        rol: "Logs, métricas y alertas",         c: "#f07d3c" },
+];
+const NOMBRES_EV = {
+  UserPromptSubmit: "Tu mensaje", SubagentStart: "Empieza", SubagentStop: "Termina",
+  Stop: "Fin de turno", PermissionRequest: "Pide permiso", PostToolUseFailure: "Error",
+  Notification: "Aviso",
+};
+
+const eventos = [];
+let total = 0, pausado = false, filtro = null;
+const estado = {}; // por agente: {ids:Set, esperando, ultima, ts, n}
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, ch =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+const info = id => AGENTES.find(a => a.id === id) ||
+  { id, nombre: id, rol: "Agente sin ficha", c: "#9aa4b1" };
+const hora = ts => (ts || "").slice(11, 19);
+
+function hace(seg) {
+  if (seg < 60) return "hace " + Math.max(0, Math.round(seg)) + " s";
+  if (seg < 3600) return "hace " + Math.round(seg / 60) + " min";
+  if (seg < 86400) return "hace " + Math.round(seg / 3600) + " h";
+  return "hace " + Math.round(seg / 86400) + " d";
+}
+
+function procesar(e) {
+  const a = e.agente || "orquestador";
+  const s = estado[a] ??= { ids: new Set(), activo: false, esperando: false, ultima: "", ts: "", n: 0 };
+  const ev = e.evento;
+  if (ev === "SubagentStart" && e.agent_id) s.ids.add(e.agent_id);
+  if (ev === "SubagentStop") { if (e.agent_id) s.ids.delete(e.agent_id); else s.ids.clear(); }
+  if (a === "orquestador") {
+    if (ev === "UserPromptSubmit" || ev === "PreToolUse") s.activo = true;
+    if (ev === "Stop") s.activo = false;
+  } else if (ev === "PreToolUse" && e.agent_id) {
+    s.ids.add(e.agent_id);
+  }
+  s.esperando = ev === "PermissionRequest" || (ev === "Notification" && a === "orquestador");
+  if (ev === "PreToolUse") s.n++;
+  s.ultima = (ev === "PreToolUse" ? e.herramienta + ": " : (NOMBRES_EV[ev] || ev) + ": ") + (e.detalle || "");
+  s.ts = e.ts;
+}
+
+function estaActivo(a) {
+  const s = estado[a];
+  if (!s) return false;
+  return a === "orquestador" ? s.activo : s.ids.size > 0;
+}
+
+function pintarAgentes() {
+  const ids = [...AGENTES.map(a => a.id),
+               ...Object.keys(estado).filter(k => !AGENTES.some(a => a.id === k))];
+  const ahora = Date.now() / 1000;
+  $("agentes").innerHTML = ids.map(id => {
+    const a = info(id), s = estado[id];
+    const activo = estaActivo(id);
+    const esperando = s?.esperando;
+    const cls = esperando ? "esperando" : activo ? "activo" : "inactivo";
+    const txt = esperando ? "Esperando" : activo
+      ? (id !== "orquestador" && s.ids.size > 1 ? `Activo ×${s.ids.size}` : "Activo") : "Inactivo";
+    const ultima = s?.ultima ? esc(s.ultima) : "<span style='color:var(--muted)'>Sin actividad todavía</span>";
+    const meta = s?.ts ? `${hace(ahora - Date.parse(s.ts) / 1000)} · ${s.n} acciones` : "";
+    return `<div class="card ${activo ? "activo" : ""} ${filtro === id ? "sel" : ""}" style="--c:${a.c}"
+               data-id="${esc(id)}" title="Clic para filtrar la actividad">
+      <div class="top"><span class="nombre">${esc(a.nombre)}</span><span class="pill ${cls}">${txt}</span></div>
+      <div class="rol">${esc(a.rol)}</div>
+      <div class="ultima" title="${esc(s?.ultima || "")}">${ultima}</div>
+      <div class="meta">${meta}</div></div>`;
+  }).join("");
+  $("sActivos").textContent = ids.filter(estaActivo).length;
+  $("sAcciones").textContent = eventos.filter(e => e.evento === "PreToolUse").length;
+  $("sErrores").textContent = eventos.filter(e => e.evento === "PostToolUseFailure").length;
+  $("sPermisos").textContent = eventos.filter(e => e.evento === "PermissionRequest").length;
+}
+
+function pintarFeed() {
+  const q = $("buscar").value.trim().toLowerCase();
+  const filas = [];
+  for (let i = eventos.length - 1; i >= 0 && filas.length < 400; i--) {
+    const e = eventos[i];
+    if (filtro && e.agente !== filtro) continue;
+    const texto = `${e.agente} ${e.herramienta || ""} ${e.evento} ${e.detalle || ""}`.toLowerCase();
+    if (q && !texto.includes(q)) continue;
+    const a = info(e.agente);
+    const accion = e.evento === "PreToolUse" ? esc(e.herramienta) : esc(NOMBRES_EV[e.evento] || e.evento);
+    const cls = e.evento === "PostToolUseFailure" ? "error"
+      : e.evento === "PermissionRequest" ? "permiso"
+      : ["SubagentStart", "SubagentStop", "UserPromptSubmit", "Stop"].includes(e.evento) ? "hito" : "";
+    filas.push(`<tr class="${cls}"><td class="hora">${esc(hora(e.ts))}</td>
+      <td><span class="chip" style="--c:${a.c}">${esc(a.nombre)}</span></td>
+      <td class="ev">${accion}</td><td class="det">${esc(e.detalle)}</td></tr>`);
+  }
+  $("feed").innerHTML = filas.join("");
+  $("vacio").hidden = eventos.length > 0;
+  $("filtroAgente").innerHTML = filtro
+    ? `<button class="chip-btn" id="quitarFiltro" type="button">Agente: ${esc(info(filtro).nombre)} ✕</button>` : "";
+}
+
+function inline(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/(^|\W)_([^_]+)_(?=\W|$)/g, "$1<i>$2</i>")
+    .replace(/(^|\W)\*([^*]+)\*(?=\W|$)/g, "$1<i>$2</i>");
+}
+
+function markdown(md) {
+  const out = [], lineas = md.split("\n");
+  for (let i = 0; i < lineas.length; i++) {
+    const l = lineas[i];
+    if (/^\s*\|/.test(l)) {
+      const filas = [];
+      while (i < lineas.length && /^\s*\|/.test(lineas[i])) filas.push(lineas[i++]);
+      i--;
+      const celdas = f => f.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+      const cuerpo = filas.filter((f, k) => !(k === 1 && /^[\s|:-]+$/.test(f)));
+      out.push("<table>" + cuerpo.map((f, k) => "<tr>" + celdas(f).map(c =>
+        k === 0 ? `<th>${inline(c)}</th>` : `<td>${inline(c)}</td>`).join("") + "</tr>").join("") + "</table>");
+      continue;
+    }
+    const h = l.match(/^(#{1,3})\s+(.*)/);
+    if (h) { out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); continue; }
+    if (/^\s*[-*]\s+/.test(l)) { out.push(`<div>• ${inline(l.replace(/^\s*[-*]\s+/, ""))}</div>`); continue; }
+    if (l.trim()) out.push(`<p>${inline(l)}</p>`);
+  }
+  return out.join("");
+}
+
+async function cargarEventos() {
+  if (pausado) return;
+  try {
+    const r = await fetch(`/api/eventos?desde=${total}`, { cache: "no-store" });
+    const d = await r.json();
+    if (d.reinicio) { eventos.length = 0; for (const k in estado) delete estado[k]; }
+    for (const e of d.eventos) { eventos.push(e); procesar(e); }
+    if (eventos.length > 5000) eventos.splice(0, eventos.length - 5000);
+    total = d.total;
+    $("live").className = "live on"; $("liveTxt").textContent = "en vivo";
+    pintarAgentes();
+    if (d.eventos.length || d.reinicio) pintarFeed();
+  } catch {
+    $("live").className = "live off"; $("liveTxt").textContent = "sin conexión con el servidor";
+  }
+}
+
+async function cargarEstado() {
+  try {
+    const r = await fetch("/api/estado", { cache: "no-store" });
+    const d = await r.json();
+    $("titulo").textContent = "Equipo de agentes · " + d.proyecto;
+    document.title = "Agentes · " + d.proyecto;
+    const m = d.estado.match(/\*\*Etapa actual:\*\*\s*(.+)/);
+    $("etapa").textContent = m ? "Etapa " + m[1].replace(/\*/g, "") : "";
+    $("estado").innerHTML = d.estado ? markdown(d.estado) : "<p>No existe docs/estado.md todavía.</p>";
+    const ahora = Date.now() / 1000;
+    $("archivos").innerHTML = d.archivos.map(f =>
+      `<li class="${ahora - f.mtime < 300 ? "reciente" : ""}"><span>${esc(f.ruta)}</span><span>${hace(ahora - f.mtime)}</span></li>`
+    ).join("") || "<li><span>Sin documentos</span><span></span></li>";
+  } catch { /* el indicador de conexión ya lo muestra cargarEventos */ }
+}
+
+$("agentes").addEventListener("click", ev => {
+  const card = ev.target.closest(".card");
+  if (!card) return;
+  filtro = filtro === card.dataset.id ? null : card.dataset.id;
+  pintarAgentes(); pintarFeed();
+});
+$("filtroAgente").addEventListener("click", ev => {
+  if (ev.target.id === "quitarFiltro") { filtro = null; pintarAgentes(); pintarFeed(); }
+});
+$("buscar").addEventListener("input", pintarFeed);
+$("pausa").addEventListener("click", () => {
+  pausado = !pausado;
+  $("pausa").textContent = pausado ? "Reanudar" : "Pausar";
+  if (!pausado) cargarEventos();
+});
+
+pintarAgentes(); pintarFeed();
+cargarEventos(); cargarEstado();
+setInterval(cargarEventos, 1500);
+setInterval(cargarEstado, 5000);
+</script>
+</body>
+</html>
