@@ -1,14 +1,24 @@
 # Estrategia de pruebas — Toma de pedidos para cafetería (MVP)
 
-> Responsable: Testing Engineer · Etapa 1, tareas 1.6 (2026-11-21) y 1.6b
-> (2026-11-23) · Estado: **propuesta, pendiente de la puerta de la Etapa 1**.
+> Responsable: Testing Engineer · Etapa 1, tareas 1.6 (2026-11-21), 1.6b y
+> 1.6d (2026-11-23) · Estado: **propuesta, pendiente de la puerta de la Etapa 1**.
 >
 > Entradas: `docs/reglas-equipo.md`, `docs/historias/` (HU-01..HU-08 y README,
-> rondas 1.1d con IDs estables y 1.1e con las decisiones del humano; HU-09
-> fuera del MVP), `docs/arquitectura.md`, ADR-001..ADR-008,
-> `docs/ux/` (flujos, wireframes, design system), `docs/seguridad.md` (§6.1,
-> §6.3, §7: RS-01..RS-43), `docs/permisos.md`, `docs/infraestructura.md` (§9
-> TESTING, §12.5 IP de origen) y `docs/logging.md`.
+> rondas 1.1d con IDs estables, 1.1e con las decisiones del humano y 1.1f con
+> T-14..T-17 e I-01..I-10; HU-09 fuera del MVP), `docs/arquitectura.md`
+> (revisión 1.3c: `verifyPin`, SEC-016, SEC-022, configuración de instalación),
+> ADR-001..ADR-008 (ADR-005 revisión (c)), `docs/ux/` (flujos, wireframes,
+> design system), `docs/seguridad.md` (§6.1, §6.3, §7: RS-01..RS-46),
+> `docs/permisos.md`, `docs/infraestructura.md` (§9 TESTING, §12.5 IP de
+> origen) y `docs/logging.md` (rondas 1.6c y 1.6e: §4.3 (b), §4.5, §6.3, §6.6).
+>
+> **1.6d:** interpretaciones confirmadas por el PO (§4.5); casos nuevos de
+> HU-01/CA-F12, CA-F13, HU-03/CA-F09, CA-N05 y HU-05/CA-N03 (lista cerrada);
+> verificación de PIN única (`verifyPin`, SEC-016, §5.2.1); RS-46;
+> configuración de instalación (§5.2.2); redacción recursiva de logs y
+> retención de Loki (§5.10). Códigos de error alineados con
+> `docs/arquitectura.md` §5/§5.1 (§8.7, §10). Cierre de T-14..T-17 y hallazgos
+> T-19..T-22 en §14.
 >
 > **1.6b:** la matriz (§10) usa los **IDs estables** del PO (`HU-xx/CA-xnn`);
 > la numeración provisional de la versión 1.6 queda retirada. El cierre de
@@ -162,9 +172,10 @@ Testing no numera criterios: solo los cita.
   **retirada**: no coincidía con los IDs estables (p. ej. la orientación de
   tablet era `HU-02/CA-N04` provisional y ahora es `HU-02/CA-N05`; la
   accesibilidad queda sola en `CA-N04`). No hay tests escritos con ella.
-- Recuento a 2026-11-23: HU-01 21 · HU-02 35 · HU-03 34 · HU-04 34 · HU-05 16 ·
-  HU-06 27 · HU-07 16 · HU-08 21 = **204 criterios** en el MVP (HU-09, con 14,
-  queda fuera; sus IDs no se retiran por si se recupera),
+- Recuento a 2026-11-23 (tras la ronda 1.1f): HU-01 23 · HU-02 35 · HU-03 34 ·
+  HU-04 34 · HU-05 16 · HU-06 27 · HU-07 16 · HU-08 21 = **206 criterios** en
+  el MVP (+2 de la 1.1f: HU-01/CA-F12 y CA-F13; HU-09, con 14, queda fuera;
+  sus IDs no se retiran por si se recupera),
   sin huecos ni duplicados, y todas las referencias cruzadas `HU-xx/CA-xnn` de
   las historias apuntan a criterios que existen (comprobado con script).
 
@@ -202,24 +213,32 @@ Testing no numera criterios: solo los cita.
 - Nada de `waitForTimeout`: `expect(...).toBeVisible({ timeout })` o
   `expect.poll`.
 
-### 4.5 Interpretaciones que aplican los tests (a confirmar por el PO)
+### 4.5 Interpretaciones que aplican los tests (confirmadas por el PO, ronda 1.1f)
 
-Donde un criterio admite más de una lectura, el test aplica la de esta tabla.
-Si el PO no está de acuerdo, cambia el criterio y Testing ajusta el test; un
-test no se relaja por su cuenta.
+Donde un criterio admitía más de una lectura, el test aplica la de esta tabla.
+I-01..I-10 las ha **confirmado o corregido el PO** en la ronda 1.1f
+(`docs/historias/README.md`, "Interpretaciones de Testing confirmadas por el
+PO") y forman parte de los criterios citados: si alguna cambia, el PO la marca
+allí y Testing ajusta el test; un test no se relaja por su cuenta. Verificado
+por Testing en la 1.6d (columna "Resultado PO"): la lectura vigente coincide
+con la que aplican los tests, salvo I-06, que se sustituye por la lista
+cerrada. I-11 e I-12 son nuevas (1.6d) y están pendientes de los hallazgos
+T-19 y T-20 (§14.3).
 
-| ID | Criterio | Interpretación aplicada |
-|---|---|---|
-| I-01 | HU-01/CA-F06 | El 5.º fallo consecutivo activa el bloqueo; el 6.º intento y los siguientes durante el bloqueo se rechazan **sin verificar el PIN** y **no cuentan** como fallos (con PIN correcto también se rechazan). Al expirar un bloqueo el contador no se reinicia: 5 fallos más → 15 min (10 acumulados), 5 más → 60 min (15), 5 más → indefinido (20). Coincide con `docs/seguridad.md` §6.1.3 |
-| I-02 | HU-01/CA-F11, HU-06/CA-F17 | "Dispositivo" = IP de origen que ve el servidor (`docs/seguridad.md` §6.1.5, SEC-003). Ventana móvil de 10 min; el rechazo dura 10 min desde el 10.º fallo y se aplica antes de verificar el PIN (RS-05) |
-| I-03 | HU-01/CA-F06, CA-F11; HU-06/CA-F19 | "X min" / tiempo restante = minutos restantes **redondeados hacia arriba** (con 4 min 1 s → "5 min"; nunca "0 min") |
-| I-04 | HU-03/CA-F06 | Retrasado cuando la espera es **≥ N min** (no > N): con espera N − 1 s no se resalta; entre N y N + 60 s debe aparecer; a N + 60 s está resaltado seguro |
-| I-05 | HU-04/CA-U04 | "Sin desplazar" en los viewports de sala: 1280x800 y 800x1280 (supuesto 23) y TPV 1024x768 (design system) |
-| I-06 | HU-05/CA-N03 | Lectura amplia: con `menu-200` se repiten **todos** los criterios UX y de rendimiento de HU-02 (CA-U01..U06, CA-N01, CA-N05, CA-F23) y HU-05/CA-F04, no solo los tres citados (pendiente de T-17) |
-| I-07 | Criterios con p95 que no citan el supuesto 12 (HU-02/CA-U05) | Mismo número mínimo de muestras: ≥ 200 |
-| I-08 | Supuesto 12 (ronda 1.1e) y criterios de dispositivo real | Los criterios de rendimiento que citan el supuesto 12 se dan por cumplidos con el resultado de TESTING; la observación en DEMO no cambia su estado y una desviación se registra como hallazgo. Esto **no** aplica a los criterios que piden verificación en el dispositivo instalado y no son de rendimiento del supuesto 12 (HU-03/CA-U01, HU-03/CA-N05) ni a HU-02/CA-U05 (dispositivo de referencia, supuesto 23): esos se verifican en el hardware (marca **H**) y su resultado es vinculante |
-| I-09 | HU-03/CA-F14 | "En cuanto se detecta el bloqueo" = en ≤ 1 s desde que se abre la cola o desde que falla un aviso (pendiente de T-15) |
-| I-10 | HU-04/CA-F23, HU-07/CA-N04 | Un `confirmPin` incorrecto cuenta como 1 fallo del encargado de la sesión (HU-01/CA-F06) y 1 fallo del dispositivo (HU-01/CA-F11), igual que `managerApproval` (`docs/arquitectura.md` §5) |
+| ID | Criterio | Resultado PO | Interpretación aplicada |
+|---|---|---|---|
+| I-01 | HU-01/CA-F06, CA-F12 | Confirmada | El 5.º fallo consecutivo activa el bloqueo; durante el bloqueo los intentos se rechazan **sin verificar el PIN** (también con PIN correcto) y **no cuentan**. Al expirar un bloqueo el contador no se reinicia: 10 acumulados → 15 min, 15 → 60 min, 20 → indefinido. Igual para la reconfirmación (`confirmPin`) y el `currentPin` de `POST /auth/pin` (HU-01/CA-F12, `verifyPin` paso 3). Coincide con `docs/seguridad.md` §6.1.3 |
+| I-02 | HU-01/CA-F11, HU-06/CA-F17 | Confirmada | "Dispositivo" = IP de origen que ve el servidor (`docs/seguridad.md` §6.1.5, SEC-003). Ventana móvil de 10 min; el rechazo dura 10 min desde el 10.º fallo y se aplica antes de verificar el PIN (RS-05). Suman login, aprobación, reconfirmación y cambio de PIN (`verifyPin` paso 1). La topología B (SEC-019) no cambia el criterio |
+| I-03 | HU-01/CA-F06, CA-F11, CA-F12; HU-06/CA-F19 | Confirmada | "X min" = minutos restantes **redondeados hacia arriba** (4 min 1 s → "5 min"); nunca "0 min". Se calcula desde `retryAfterSeconds` |
+| I-04 | HU-03/CA-F06 | Confirmada | Retrasado con espera **≥ N min**: a N − 1 s no se resalta; entre N y N + 60 s debe aparecer; a N + 60 s está resaltado seguro |
+| I-05 | HU-04/CA-U04 | Confirmada | "Sin desplazar" en 1280x800, 800x1280 (supuesto 23) y TPV 1024x768 |
+| I-06 | HU-05/CA-N03 | **Corregida** (T-17) | Ya no se aplica la lectura amplia. **Lista cerrada**: con `menu-200` se verifican solo HU-02/CA-N01, CA-U05, CA-F23, CA-N05 y HU-05/CA-F04 (§5.6.1). Los demás criterios de HU-02 se prueban con `base` |
+| I-07 | HU-02/CA-U05 y cualquier p95 que no cite el supuesto 12 | Confirmada | ≥ 200 muestras por métrica |
+| I-08 | Supuesto 12 y criterios de dispositivo real | Confirmada | Rendimiento del supuesto 12: vinculante en TESTING, DEMO solo observa (una desviación es un hallazgo). HU-03/CA-U01, HU-03/CA-N05 y HU-02/CA-U05 (dispositivo de referencia) se verifican en el hardware (marca **H**) y su resultado es vinculante |
+| I-09 | HU-03/CA-F14 | Confirmada **e incorporada** al criterio (T-15) | Aviso "Sonido bloqueado" en ≤ 1 s desde que se abre la cola o desde que falla un aviso. Ya no es interpretación: es el texto del criterio |
+| I-10 | HU-04/CA-F23, HU-07/CA-N04 | Confirmada | Un `confirmPin` incorrecto cuenta como 1 fallo del encargado de la sesión (HU-01/CA-F06) y 1 del dispositivo (HU-01/CA-F11), igual que una autorización de HU-06. El límite adicional por sesión (5 fallos/10 min, `docs/seguridad.md` §6.1.4) es de Cybersecurity y **no** añade mensaje propio en las historias (ver T-20) |
+| I-11 | HU-02/CA-F01 | Nueva, pendiente de T-19 (SE) | Mesa entera en 1..99 pero > `TABLE_COUNT` (21..99 con 20 mesas) → `422 TABLE_OUT_OF_RANGE` (`docs/arquitectura.md` §4.1, §5.1). Mesa fuera del dominio del campo (0, −1, 100, 1,5, `"7"`) → `400` de validación con `path: ["tableNumber"]`, por la regla general de §5 ("`400` validación con campo y regla") y el `CHECK BETWEEN 1 AND 99`. Si el SE decide `422` también para 0, se cambia el test |
+| I-12 | HU-01/CA-F12 (c) y (d), HU-04/CA-F23, HU-07/CA-N04, HU-07/CA-F04 | Nueva, pendiente de T-20 (SE, Cybersecurity) | Mientras la cuenta del titular de la sesión está en bloqueo temporal, toda reconfirmación (`confirmPin`) o `currentPin` de esa sesión recibe `423 LOCKED` ("Cuenta bloqueada. Espera X min"), **también** cuando la misma sesión acumula 5 fallos (lo que la arquitectura respondería con `429` por el límite de sesión, paso 2 de `verifyPin`); y al terminar el bloqueo se puede volver a intentar (CA-F12 (d)). Los tests siguen la historia; si la arquitectura no cambia, fallarán y se reportan |
 
 ## 5. Tipos de prueba
 
@@ -252,9 +271,40 @@ Alcance mínimo:
   - Retrasado (HU-03/CA-F06, I-04): espera ≥ N desde `queued_at`; el paso a "En
     preparación" no la reinicia; `requeue` sí (supuesto 24).
   - Desfase del reloj del cliente con `serverTime`.
+  - **`verifyPin` (SEC-016, `docs/arquitectura.md` §7)**, con *hasher* espía,
+    almacenes de contadores en memoria y `FakeClock`: tabla de casos por
+    `purpose` ∈ {`login`, `approval`, `confirm`, `change`} que comprueba el
+    **orden** de los pasos 1–6 (IP → sesión → bloqueo → hash → fallo/acierto)
+    por su efecto observable: qué `reason` devuelve, si se llamó al *hasher* y
+    qué contadores cambiaron. Incluye: (a) **5 fallos por sesión sumando los
+    tres usos** con el mismo `sessionId` (p. ej. 2 `approval` + 2 `confirm` +
+    1 `change`) → el 6.º, de cualquier uso, es `rate_limited` sin llamar al
+    *hasher*; a 9 min 59 s sigue limitado, a 10 min no (ventana móvil). Es la
+    única capa donde se pueden mezclar: por la API, una sesión de camarero solo
+    hace aprobaciones, una de encargado solo reconfirmaciones y una con PIN
+    provisional solo cambio de PIN (§5.2.1, T-21). (b) `locked` /
+    `locked_manual` sin hash y **sin sumar** al usuario, a la IP ni a la
+    sesión. (c) Escala 5/10/15/20 sobre el usuario cuyo PIN se verifica (el
+    encargado elegido en `approval`; el de la sesión en `confirm`/`change`).
+    (d) Al 20.º fallo, petición de revocación de **todas** las sesiones de esa
+    cuenta, cualquiera que sea `purpose`. (e) `target = null` → hash ficticio
+    (el *hasher* se llama igual) y resultado `invalid`.
+  - **Configuración de instalación (`config.ts`, `docs/arquitectura.md`
+    §4.1):** `TABLE_COUNT` acepta 1, 20 y 99 y rechaza 0, 100, −1, `20.5`,
+    `20a`, `" "` y `0x14`; `DELAY_THRESHOLD_MINUTES` acepta 1, 10 y 60 y
+    rechaza 0, 61, −1, `10.5` y `diez`; sin la variable → valor por defecto
+    (20 / 10). El rechazo es un error de arranque (no un aviso) cuyo mensaje
+    nombra la variable y el rango, sin volcar el entorno ni secretos. Junto a
+    la caducidad de 12 h (RS-13, mismo `config.ts`).
+  - **Redacción recursiva de logs (`docs/logging.md` §4.3 (b) y §4.5,
+    SEC-017):** ver §5.10.
 - `apps/web`: total en vivo, contador de caracteres (30/100), vigilante "Sin
   conexión" a los 5 s (temporizadores falsos), conservación del borrador en
-  `localStorage` y reutilización del UUID en el reintento.
+  `localStorage` y reutilización del UUID en el reintento. Preferencia de
+  sonido de barra (HU-03/CA-F09): se lee y escribe en el almacenamiento del
+  dispositivo, no depende del usuario y por defecto es "activado".
+  "X min" desde `retryAfterSeconds` (I-03: 241 s → "5 min", 1 s → "1 min",
+  300 s → "5 min").
 
 ### 5.2 Integración (API + BD real + SSE)
 
@@ -275,7 +325,8 @@ Alcance mínimo:
   `payment_orders` vigente para el mismo pedido falla aunque se salte la lógica.
 - **Logs:** se capturan los logs de `app` durante la suite; ningún PIN de prueba
   (valor centinela generado por ejecución) aparece en ellos (HU-01/CA-N01,
-  HU-07/CA-N01, RS-29). Los eventos de seguridad (`auth.locked` con nivel,
+  HU-07/CA-N01, RS-29). Detalle de los casos de `docs/logging.md` §4.5 en
+  §5.10. Los eventos de seguridad (`auth.locked` con nivel,
   `auth.locked_manual`, `auth.ip_throttled`…, RS-30) se comprueban en el log
   para HU-01/CA-N05; que la **alerta** salte se verifica en Etapa 3 con la
   pila de Monitoring (§6).
@@ -301,8 +352,147 @@ Alcance mínimo:
   bloquea al encargado (`423` en el siguiente intento, aunque el PIN sea
   correcto). Cambiar **solo** el nombre no lo exige. El PIN de otro encargado
   no vale como `confirmPin`. En E2E: el motivo de la anulación y los datos del
-  formulario de Personal siguen escritos tras el fallo. Lo que pasa con la
-  sesión abierta del encargado al bloquearse está pendiente de T-14.
+  formulario de Personal siguen escritos tras el fallo. **[1.6d]** Corrección:
+  si los 5 fallos son de la **misma sesión**, la arquitectura responde al 6.º
+  con `429` (límite de sesión) y no con `423`; la historia (HU-01/CA-F12)
+  pide "Cuenta bloqueada. Espera X min". Los tests esperan lo que dice la
+  historia (I-12) y el conflicto está reportado (T-20). Sesión abierta con la
+  cuenta bloqueada (T-14 resuelto): §5.2.1.
+
+#### 5.2.1 Verificación de PIN única (`verifyPin`, SEC-016; HU-01/CA-F12, CA-F13)
+
+Archivo `tests/integration/api/HU-01-verify-pin.int.test.ts` (más casos en
+los archivos de HU-04, HU-06 y HU-07), con `buildApp` + `FakeClock` + *hasher*
+espía y `remoteAddress` por dispositivo (§5.2). En cada caso se comprueban la
+respuesta (código, `error.code` y `retryAfterSeconds`), `failed_attempts`,
+`locked_until` y `locked_manual` en BD, si se llamó al *hasher*, que la acción
+no tuvo efecto (BD sin cambios) y el log (§5.10). Los contadores por IP y por
+sesión están en memoria y no se leen: se comprueban por su efecto (cuántos
+fallos más admite esa IP o esa sesión antes del `429`).
+
+**`POST /auth/pin` (cambio obligatorio del PIN provisional).**
+
+| # | Caso | Esperado |
+|---|---|---|
+| P-1 | Sesión **sin** PIN provisional (`mustChangePin = false`), con `currentPin` correcto y con incorrecto | `403 FORBIDDEN`; el PIN no cambia; *hasher* no llamado; `failed_attempts` igual. **No suma a ningún contador:** tras 12 peticiones así desde la IP A con la misma sesión de encargado, esa sesión todavía admite 4 `confirmPin` incorrectos con `403 PIN_CONFIRMATION_INVALID` sin `429`, y la IP A admite 9 logins fallidos antes del `429` del 10.º siguiente. Evento `auth.pin.change_failed` con `reason: "not_provisional"`; `auth_pin_change_rejected_total{reason="not_provisional"}` +1; `auth_verifications_total` **sin** muestra nueva (no se llamó a `verifyPin`) |
+| P-2 | PIN provisional, `currentPin` correcto, `newPin` válido | `204`; `mustChangePin = false`; las **demás** sesiones del usuario → `401` y SSE cerrado en ≤ 1 s (RS-14); esta sigue válida y ya accede a su pantalla |
+| P-3 | PIN provisional, `currentPin` incorrecto | `403 PIN_INVALID` (no `401`): la sesión sigue válida (`GET /auth/me` → `200`); `failed_attempts` +1; cuenta para la IP y para la sesión |
+| P-4 | PIN provisional, `newPin` que incumple la regla (encargado con 5 dígitos, `111111`, `123456`, de la lista) y `currentPin` correcto | `400` con la regla incumplida; el PIN no cambia |
+| P-5 | Cuenta en bloqueo temporal (5 fallos de login desde la IP B) y `currentPin` **correcto** desde la sesión provisional en la IP A | `423 LOCKED {retryAfterSeconds}`; *hasher* no llamado; nada cambia; no cuenta (I-01, HU-01/CA-F12 (c)) |
+| P-6 | 5 `currentPin` incorrectos en la misma sesión; 6.º con el PIN correcto | Fallos 1–5: `403 PIN_INVALID` (el 5.º activa el bloqueo de 5 min con el mensaje normal, CA-F12 (b)). 6.º: **`423 LOCKED`** según la historia (I-12); la arquitectura daría `429 TOO_MANY_ATTEMPTS` (T-20) |
+| P-7 | Límite por IP: 10 fallos de cualquier ruta de PIN desde la IP A en 10 min; después `currentPin` correcto desde esa IP | `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}`, *hasher* no llamado, nada cambia. Control: otra sesión provisional desde la IP B con `currentPin` correcto → `204` (el límite es de la IP) |
+| P-8 | `failed_attempts = 19` (fabricado en BD) y `currentPin` incorrecto | `423 ACCOUNT_LOCKED_MANUAL`; `locked_manual = true`; **todas** las sesiones del usuario, incluida esta, revocadas (siguiente petición `401`) (HU-01/CA-F13) |
+
+**Límite de 5 fallos por sesión (sumando aprobación, reconfirmación y cambio).**
+Por la API cada tipo de sesión solo alcanza un uso (T-21), así que la suma de
+los tres se prueba en unitario (§5.1, `verifyPin` (a)) y aquí, por ruta:
+- **Aprobaciones (HU-06/CA-F19, RS-05):** sesión de camarero en la IP A; 5
+  `managerApproval` incorrectos repartidos entre **dos** encargados (3 sobre
+  E1, 2 sobre E2, ninguno llega a su bloqueo) → la 6.ª, aunque el PIN sea
+  correcto, `429` sin hash; los dos encargados siguen pudiendo iniciar sesión
+  (prueba de que el límite es de la sesión, no del encargado). Otra sesión de
+  camarero en la IP B sí puede pedir autorización. A los 10 min la primera
+  sesión vuelve a poder. Evento `auth.verify.rate_limited` con
+  `scope: "session"`, `purpose: "approval"` y `session_id`;
+  `auth_verifications_total{result="rate_limited_session"}` +1.
+- **Reconfirmaciones:** P-6 aplicado a `POST /payments/:id/void`,
+  `POST /staff`, `PATCH /staff/:id` (rol y activo), `reset-pin` y `unlock`; en
+  todos se espera `423` (I-12). Para separar el límite de sesión del bloqueo
+  se usa además: 4 `confirmPin` incorrectos, avanzar 10 min y 1 más → el 5.º
+  de la cuenta activa el bloqueo (es el 1.º de la ventana de la sesión), y el
+  siguiente da `423` en cualquier lectura.
+- **Cambio de PIN:** P-6.
+- **Encargado con sesión propia que envía `managerApproval`** (la UI lo
+  omite): sin efecto en contadores ni respuesta distinta. Resultado esperado
+  pendiente de T-21.
+
+**`423` sin contar durante un bloqueo temporal (HU-01/CA-F12).** Cuenta del
+encargado E1 bloqueada 5 min por 5 logins fallidos desde la IP B; E1 tiene
+sesión en la IP A:
+1. E1 sigue usando la sesión (`GET /orders/floor`, `GET /reports/daily`,
+   crear pedido → `2xx`; CA-F12 (a)).
+2. 10 `confirmPin` (5 correctos y 5 incorrectos, mezclados) a anular cobro y a
+   Personal → todos `423 LOCKED` con `retryAfterSeconds` decreciente; nada
+   anulado ni creado; `failed_attempts` sigue en 5; *hasher* no llamado. La IP
+   A admite después 9 logins fallidos de otro usuario sin `429` y la sesión
+   admite 4 `confirmPin` incorrectos tras el bloqueo sin `429` (los `423` no
+   contaron en IP ni en sesión).
+3. Log: 10 eventos `auth.verify.locked` (`purpose: "confirm"`,
+   `lock_kind: "temporary"`, `retry_after_s`);
+   `auth_verifications_total{purpose="confirm",result="locked"}` +10 y
+   `auth_verifications_total{result="invalid"}` **sin cambio** (se lee
+   `/metrics` antes y después, puerto 9464 interno).
+4. `FakeClock` +5 min: `confirmPin` correcto → `200`, acción hecha,
+   `failed_attempts = 0` (CA-F12 (d)).
+5. Mismo escenario con bloqueos de 15 y 60 min (fabricados con
+   `failed_attempts` 10 y 15) y con `currentPin` de una sesión provisional.
+6. `managerApproval` eligiendo a E1 bloqueado desde un camarero →
+   `403 MANAGER_APPROVAL_INVALID` (HU-06/CA-F18), no `423`; tampoco cuenta.
+7. E2E (proyecto en serie): en P-06 (anular cobro) y en Personal aparece
+   "Cuenta bloqueada. Espera X min" junto al campo de PIN; el motivo y los
+   datos del formulario siguen escritos. El 5.º fallo que activa el bloqueo
+   muestra "PIN incorrecto" (CA-F12 (b)).
+
+**Revocación de todas las sesiones a los 20 fallos, venga de donde venga
+(HU-01/CA-F13, `docs/arquitectura.md` §7 paso 5).** Usuario U con
+`failed_attempts = 19` fabricado en BD y **tres** sesiones abiertas (IP A, B y
+C; una de ellas con SSE abierto y otra con la cola de barra si U es encargado).
+El 20.º fallo llega por cada vía, en un test por vía:
+
+| Vía del 20.º fallo | Respuesta a esa petición | Esperado común |
+|---|---|---|
+| Login fallido de U desde la IP D | `401 INVALID_CREDENTIALS`; el siguiente login, con PIN correcto, `423 ACCOUNT_LOCKED_MANUAL` | `locked_manual = true`; las 3 sesiones con `revoked_at` en la misma transacción; siguiente petición en cada una → `401`; evento SSE `session.revoked` y flujo cerrado en ≤ 1 s (RS-14); evento `auth.sessions.revoked` (`reason: "account_locked_manual"`, `purpose`, `sessions_revoked: 3`, `sse_closed`, `from_own_session`); `auth_sessions_revoked_on_lock_total` +3 (cuenta sesiones, `docs/logging.md` §6.3); alerta `AccountLockedManual` en Etapa 3 |
+| `managerApproval` incorrecto sobre U (encargado) desde una sesión de camarero W | `403 MANAGER_APPROVAL_INVALID`; **la sesión de W sigue válida** (no es de U) | Igual |
+| `confirmPin` incorrecto desde una sesión de U | `423 ACCOUNT_LOCKED_MANUAL`; siguiente petición de esa sesión `401` | Igual (`from_own_session: true`) |
+| `currentPin` incorrecto desde la sesión provisional de U | `423 ACCOUNT_LOCKED_MANUAL` | Igual |
+
+Las vías de login y aprobación cubren la parte (1) "a confirmar por
+Cybersecurity" de CA-F13, que la arquitectura ya aplica (1.3c); si
+Cybersecurity no la confirma, el PO cambia el criterio y se ajusta el test.
+La parte (2) (pantalla sin interacción vuelve al inicio de sesión en ≤ 1 s) se
+prueba en E2E con la cola de barra abierta sin tocarla: tras el 20.º fallo
+desde otro contexto, P-01 visible en ≤ 1 s; al entrar, "Cuenta bloqueada. Pide
+al encargado que la desbloquee". En E2E también: lo escrito (motivo,
+formulario de Personal) se pierde y la siguiente acción lleva a P-01. Después,
+`POST /staff/:id/unlock` o `unlock-user` → U puede entrar y `failed_attempts =
+0`.
+
+**SEC-022 / RS-46: el camarero solo lee cobros del día.** Con `FakeClock`:
+- Cobro de ayer: camarero → `GET /payments/:id` y `GET /payments/:id/ticket`
+  → `404 NOT_FOUND`, con el **mismo** cuerpo (salvo `requestId`) y cabeceras
+  que un id inexistente; encargado → `200` en los dos.
+- Cobro de hoy: camarero → `200`.
+- Bordes en `Europe/Madrid`: cobro a las 23:59:59 leído a las 23:59:59 →
+  `200`; leído a las 00:00:00 del día siguiente → `404`; con `TZ=UTC` y
+  `TZ=America/New_York` en el contenedor (TX-TZ-01).
+- Cobro de ayer anulado hoy (`voidedAt` de hoy): el camarero sigue con `404`
+  (cuenta `business_date` del cobro); no aparece en su "Cobrados hoy".
+- Barra → `403` en todos los casos (HU-04/CA-F22).
+
+#### 5.2.2 Configuración de instalación (supuesto 20; `docs/arquitectura.md` §4.1, §5.1)
+
+- **Valores fuera de rango impiden arrancar (`[TX-CFG-01]`).** Además del
+  unitario de `config.ts` (§5.1), con la **imagen real de `app`** en
+  `compose.test.yaml` (servicio de un solo uso, perfil `integration`):
+  `TABLE_COUNT` = 0 y 100, `DELAY_THRESHOLD_MINUTES` = 0 y 61 y un valor no
+  numérico → el proceso termina con código ≠ 0 antes de escuchar, `/readyz`
+  nunca responde, `migrate` no se ve afectado y la línea de error del log
+  nombra la variable y el rango (JSON válido, sin secretos). Bordes 1/99 y
+  1/60 → arranca y `GET /auth/me` devuelve ese valor en `localConfig`. Lo
+  ejecuta `tests/run.sh`, que lanza la imagen con el entorno alterado; no hace
+  falta ningún gancho en la imagen.
+- **Sin rutas de ajustes:** `GET /settings` y `PATCH /settings` → `404` para
+  sin sesión, camarero, barra, encargado y sesión con PIN provisional, sin
+  efecto en BD; la lista de rutas de Fastify (RS-17) no contiene `settings`;
+  ningún evento SSE `settings.updated`; ningún permiso `settings:*` en la
+  matriz esperada (§5.7).
+- **`localConfig` por rol** en `GET /auth/me`: camarero `{tableCount: 20}`,
+  barra `{delayThresholdMinutes: 10}`, encargado ambos, sin otras claves;
+  `GET /kitchen/queue` incluye `delayThresholdMinutes: 10`.
+- **Mesas (HU-02/CA-F01, I-11):** 1 y 20 → `201`; 21 y 99 →
+  `422 TABLE_OUT_OF_RANGE`; 0, −1, 100, 1,5 y `"7"` → `400` con
+  `path: ["tableNumber"]` (pendiente de T-19). Ninguno crea pedido ni consume
+  número del día. La rejilla de la UI ofrece exactamente 1..20.
 
 ### 5.3 End-to-end (Playwright)
 
@@ -350,7 +540,7 @@ Alcance mínimo:
   salen del mismo contenedor (y pasan por Toxiproxy), así que el servidor los ve
   como **un solo dispositivo**: más de 9 fallos de autenticación en 10 min en
   toda la suite activarían HU-01/CA-F11 y romperían tests ajenos. Por eso los
-  E2E con PIN erróneo (HU-01/CA-F05, CA-F06, CA-F11, CA-U03; HU-04/CA-F23;
+  E2E con PIN erróneo (HU-01/CA-F05, CA-F06, CA-F11, CA-F12, CA-F13, CA-U03; HU-04/CA-F23;
   HU-06/CA-F13, CA-F17..F19; HU-07/CA-N04) van en un proyecto de Playwright
   **en serie con pila propia**, y los bloqueos largos se fabrican en BD
   (`locked_until`, `failed_attempts`) en vez de provocarlos. El resto de
@@ -422,7 +612,7 @@ ejecución sobre pila nueva (§7.4); se informa también p50, p99 y máximo.
 | HU-03/CA-N02 | "Sin conexión" en ≤ 5 s | E2E + Toxiproxy | Corte total; se mide hasta el banner |
 | HU-04/CA-N04 | Confirmación del cobro ≤ 1 s p95, 10 simultáneos | k6 | 10 cobros simultáneos de pedidos distintos (barrera), ≥ 20 rondas |
 | HU-05/CA-F04 | Agotado en todos los dispositivos ≤ 5 s p95 | Arnés realtime | 10 clientes SSE; la muestra es el **último** dispositivo en verlo |
-| HU-05/CA-N03 | Con `menu-200` se cumplen los criterios de HU-02 | k6 + arnés + Playwright | Todas las filas de HU-02 de esta tabla, más las de UX de I-06 |
+| HU-05/CA-N03 | Con `menu-200` se cumplen **solo** HU-02/CA-N01, CA-U05, CA-F23, CA-N05 y HU-05/CA-F04 (lista cerrada, T-17, I-06) | Arnés + Playwright | Las filas HU-02/CA-N01, CA-F23, CA-U05 y HU-05/CA-F04 de esta tabla con `menu-200`, y HU-02/CA-N05 (no es de rendimiento) en `tablet-h` y `tablet-v` con las 20 categorías y nombres de 30 caracteres: `scrollWidth <= clientWidth` en el documento **y** en todo contenedor, todas las pestañas de categoría dentro del viewport sin desplazamiento horizontal (varias filas, wireframe 03), total y "Enviar a barra" visibles sin desplazar, ≥ 44x44 px |
 | HU-06/CA-N02 | Modificación en barra ≤ 2 s p95 | Arnés realtime | Como HU-02/CA-N01 con modificaciones |
 | HU-07/CA-F03 | Sesión de usuario desactivado cerrada en ≤ 1 min | Integración + E2E | Desactivar → sesión rechazada, flujo SSE cerrado |
 | HU-08/CA-N02 | Pantalla del resumen con todas las cifras ≤ 2 s p95 | Playwright (pantalla) + k6 (API, informativo) | Semilla `dia-500`; del toque que abre el resumen o cambia la fecha hasta que todas las cifras (incluido el desglose de CA-F13) están pintadas; ≥ 200 muestras alternando fechas |
@@ -465,8 +655,9 @@ Etapa 4. Procedimiento de observación:
 
 ### 5.7 Seguridad
 
-Derivada de HU-01/03/04/05/06/07/09, ADR-005/007/008 y de los requisitos
-verificables **RS-01..RS-43** de `docs/seguridad.md` §7, que se citan por su ID
+Derivada de HU-01/03/04/05/06/07, ADR-005/007/008 y de los requisitos
+verificables **RS-01..RS-46** de `docs/seguridad.md` §7 (RS-44 y RS-45 son de
+contenedores, §5.8; RS-46 en §5.2.1), que se citan por su ID
 en los tests (§4.3) y sustituyen a los `TX-SEC-nn` previstos. Cada RS tiene al
 menos un test; la columna "Verificación" de §7 fija la capa. Excepción: RS-18
 dice "I generado desde `permissions.ts`", que contradice el principio 2; Testing
@@ -475,7 +666,11 @@ escribe la tabla esperada a mano desde `docs/permisos.md` §3 (T-18).
 - **Matriz de autorización completa:** cada endpoint de §5.1 de arquitectura ×
   {sin sesión, camarero, barra, encargado, sesión con PIN provisional} → código
   esperado (`401`/`403`/`2xx`) y **comprobación de que no hubo efecto** (la BD no
-  cambia) en los `403`. Tabla esperada escrita a mano en el test.
+  cambia) en los `403`. Tabla esperada escrita a mano en el test. Incluye
+  `POST /auth/pin` (solo sesión con PIN provisional; el resto `403 FORBIDDEN`,
+  §5.2.1 P-1), `GET /payments/:id` y `/ticket` con la regla del día para el
+  camarero (RS-46) y las rutas de ajustes inexistentes (`404`, §5.2.2). Con
+  PIN provisional, el resto de rutas → `403 PIN_CHANGE_REQUIRED` (RS-15).
 - **Sesión:** cookie `HttpOnly; Secure; SameSite=Strict`; logout, reset de PIN y
   desactivación invalidan el token al instante; token reutilizado tras logout →
   `401`; caducidad por inactividad y absoluta; PIN provisional solo permite
@@ -496,7 +691,13 @@ escribe la tabla esperada a mano desde `docs/permisos.md` §3 (T-18).
 - **CSRF:** peticiones que modifican datos con `Origin` ajeno → rechazadas.
 - **Entrada:** valores límite y hostiles en todos los campos de texto (30/40/100
   caracteres, Unicode, `<script>`, `' OR 1=1`); se muestran escapados y no
-  rompen nada. Precios/cantidades/importes no enteros, negativos o enormes → `400`.
+  rompen nada. Precios/cantidades/importes no enteros, negativos o fuera del
+  rango del campo → `400` con `path` y regla (`quantity` fuera de 1–99,
+  `priceCents` fuera de 1–99 999, `tenderedCents` > 10 000 000). Reglas de
+  negocio sobre datos válidos → `422` con su código: más de 100 líneas
+  `ORDER_TOO_MANY_LINES`, mesa > 20 `TABLE_OUT_OF_RANGE` (I-11), efectivo
+  insuficiente `INSUFFICIENT_CASH {missingCents}`, total por encima del máximo
+  `PAYMENT_AMOUNT_TOO_HIGH` (ADR-006).
 - **Precio impuesto por el cliente** (HU-02/CA-N03): enviar `unitPriceCents`,
   `totalCents` o `amountCents` en el cuerpo no tiene efecto.
 - **Datos sensibles:** barra sin importes (REST y SSE); PIN nunca en respuestas
@@ -545,6 +746,76 @@ contenedor):
 Duración objetivo: < 3 min. Si falla un smoke en PROD, se informa al Orquestador
 para decidir la vuelta atrás (decisión humana).
 
+### 5.10 Logs: redacción y retención (`docs/logging.md` §4.3, §4.5, §6.6)
+
+**`[TX-LOG-01]` Test unitario de la redacción recursiva (regla (b) de §4.3,
+SEC-017).** `tests/unit/api/redaccion-logs.unit.test.ts`. Se construye el
+logger de `app` **con su configuración real** (la misma función que usa
+`buildApp`), con un destino en memoria, y se registran a propósito objetos con
+valores centinela aleatorios. La salida se parsea línea a línea y se busca
+cada centinela en el texto **y** en los valores del JSON:
+
+| Caso | Esperado |
+|---|---|
+| `{confirmPin, a: {b: {c: {userPin}}}, list: [{pin}]}` (caso literal de §4.5) | los tres valores → `"[REDACTED]"` |
+| Variantes de nombre: `PIN`, `Pin`, `newPin`, `currentPin`, `pinHash`, `pin_hash`, `provisionalPin`, `managerApproval: {managerId, pin}` | todos redactados; `managerApproval.managerId` puede quedar redactado por la regla (a) (ruta `managerApproval` entera): se acepta |
+| Valor no cadena bajo clave `pin`: número `123456`, objeto `{x: 1}`, *array* `[1, 2]`, `null` | la clave queda con `"[REDACTED]"` en todos los casos |
+| Profundidad: clave `pin` a 3, 9 y 10 niveles; objeto de 12 niveles | redactada a 3, 9 y 10; lo que pasa de 10 → `"[TRUNCATED]"` y el centinela no aparece |
+| Ciclo (`o.self = o`, con `pin` dentro) | no se cuelga ni lanza; `pin` redactado |
+| `logger.child({pin})` y nieto `child({x: {pin}})` | redactado en los *bindings* de todas las líneas |
+| Error con propiedad `pin` (`Object.assign(new Error('x'), {pin})`), también anidado en `cause` | redactado en el `err` serializado |
+| Falsos positivos aceptados: `spinner`, `mapping`, `shipping` | redactados (prueba de que la regla es por nombre, no por lista) |
+| Valores con "pin" bajo claves sin "pin": `reason: "bad_pin"`, `reason: "pin_reset"`, `event: "auth.pin.changed"` | **no** se redactan |
+| Cookie `__Host-sid`: cabecera `Cookie: __Host-sid=<centinela>`, `Set-Cookie` de la respuesta de login y objeto `{"__Host-sid": centinela}` en primer y segundo nivel, y `req.cookies["__Host-sid"]` | el valor no aparece; queda `"[REDACTED]"` (regla (a), §4.3; SEC-021, encargo de Monitoring 1.6e) |
+| Rutas fijas de (a): `customerRef`, `customer_ref`, `note`, `reasonText`, `reason_text`, `body`, `token`, `password`, `pepper` en primer y segundo nivel, y las anidadas reales que añada el Developer (p. ej. `*.lines[*].note`) | redactadas |
+| Todas las líneas | JSON válido con los campos obligatorios de §2.1; ningún nombre de clave casa con `/pin/i` con un valor distinto de `"[REDACTED]"` |
+
+El test **falla el build** si algún centinela aparece. Además se ejecuta un
+test de mutación dirigido: si se desactiva la función de redacción (b) en una
+copia de la configuración, el test debe fallar (prueba de que detecta el
+problema y no pasa por casualidad).
+
+**`[TX-LOG-02]` Integración (§4.5 de `docs/logging.md`).** Captura del stdout
+de `app` durante una suite que ejecuta: login correcto y fallido, cambio y
+restablecimiento de PIN, aprobación de encargado, pedido con nota y
+`customerRef`, cancelación con texto, anulación con motivo y el PIN centinela
+también como `confirmPin` (anular cobro, alta, restablecimiento, desbloqueo).
+Casos de SEC-016 incluidos, con su evento (encargo de Monitoring 1.6e):
+
+| Caso (§5.2.1) | Evento esperado en el log | Métrica |
+|---|---|---|
+| `confirmPin` con la cuenta en bloqueo temporal → `423` | `auth.verify.locked` (`purpose: "confirm"`, `lock_kind: "temporary"`, `retry_after_s`, `target_user_id`) | `auth_verifications_total{purpose="confirm",result="locked"}` +1 y `{result="invalid"}` **sin cambio** |
+| 6.º fallo de aprobación en la misma sesión → `429` | `auth.verify.rate_limited` con `scope: "session"`, `purpose: "approval"`, `session_id`, `retry_after_s` | `{result="rate_limited_session"}` +1 |
+| `POST /auth/pin` sin PIN provisional → `403` | `auth.pin.change_failed` con `reason: "not_provisional"` | `auth_pin_change_rejected_total{reason="not_provisional"}` +1; sin muestra en `auth_verifications_total` |
+| 20.º fallo → bloqueo indefinido | `auth.sessions.revoked` (`reason: "account_locked_manual"`, `sessions_revoked`, `sse_closed`, `from_own_session`) | `auth_sessions_revoked_on_lock_total` + número de sesiones |
+
+En todas las líneas: ni el PIN centinela, ni el *pepper* de prueba, ni el
+valor de `__Host-sid`, ni nombres de usuario, ni textos de notas o motivos.
+Mismo barrido sobre los logs de `proxy` y `db` en TESTING. Las métricas se
+leen de `/metrics` (puerto 9464, red interna del ejecutor) antes y después de
+cada caso, comparando el incremento.
+
+**`[TX-MON-01]` Retención de Loki en DEMO (`docs/logging.md` §6.6).** Antes de
+la Etapa 5 se comprueba que el compactor **borra** de verdad, no solo que la
+consulta sale vacía:
+1. Configuración desplegada: `compactor.retention_enabled: true`,
+   `retention_period: 168h` (DEMO) y **sin** `max_query_lookback` ni límite de
+   consulta que oculte datos antiguos (si lo hubiera, una consulta vacía no
+   demostraría nada).
+2. Evidencia de ejecución: la métrica de Loki de última ejecución correcta de
+   la retención del compactor (`loki_compactor_apply_retention_last_successful_run_timestamp_seconds`
+   o la equivalente de la versión desplegada) es posterior a la fecha de
+   vencimiento + `retention_delete_delay` (2 h) + intervalo de compactación.
+3. Resultado: una consulta LogQL `{service="app"}` sobre un intervalo vencido
+   (más de 7 días + 2 h atrás) devuelve 0 líneas y los *chunks* de ese
+   intervalo ya no están en el volumen de Loki (recuento de objetos o tamaño
+   del directorio de *chunks* antes y después de la ejecución del compactor).
+4. Control: una consulta sobre un intervalo no vencido devuelve líneas.
+Requiere que DEMO lleve en marcha más de 7 días + 2 h con logs; si la Etapa 4
+dura menos, ver T-22. En PROD (30/90 días) no se espera al vencimiento: se
+comprueba la configuración desplegada (punto 1, con `retention_stream` de 90
+días para `category="security"`) en el smoke.
+
 ## 6. Qué se ejecuta en cada etapa
 
 | Etapa | Qué hace Testing | Suites |
@@ -552,8 +823,8 @@ para decidir la vuelta atrás (decisión humana).
 | **1 Planificación** | Esta estrategia; revisión de verificabilidad de criterios (hallazgos en `docs/estado.md`); cuando exista `compose.dev.yaml`, primera ejecución de `TX-CONT-01` sobre DEV | `containers` |
 | **2 Desarrollo** (por historia) | **Antes** de que el Developer empiece: tests de la historia (unitarios de reglas, integración, E2E, a11y, capturas) en rojo, revisados contra los criterios. Después, en cada entrega: | `unit` + `integration` + `e2e` de la historia **+ regresión completa de las historias anteriores** + `security` (matriz de autorización) + `containers` + `a11y` de las pantallas tocadas + capturas para UX |
 | **3 Testing** | Verificación completa sin asumir nada: todas las suites, rendimiento en las condiciones del supuesto 12 (§5.6.1), ZAP, regresión visual, mutación (`shared`), exploratorio con guiones (red, multidispositivo, sonido, reloj), revisión manual de lectores de pantalla, alertas de HU-01/CA-N05 con la pila de Monitoring. **Con el hardware de referencia** (si el cliente lo ha entregado, pregunta 7): HU-03/CA-U01 (medición física), CA-F09 y CA-F14 (sonido audible) y CA-N05 (pantalla encendida, §8.6), HU-02/CA-U05 en la tablet de referencia (§5.6.3). Entrega al PO la matriz con el resultado por criterio; el de los criterios de rendimiento es el de TESTING y es definitivo (I-08) | todas |
-| **4 Demo** | Smoke en DEMO; **observación** de los tiempos con dispositivos y Wi-Fi reales (§5.6.2: una desviación es un hallazgo, no bloquea por sí sola); verificación manual de sonido, pantalla encendida y legibilidad en la pantalla real de barra (HU-03/CA-U01, CA-F09, CA-F14, CA-N05: estos sí son vinculantes, I-08); RS-06 con dos dispositivos reales; apoyo a la prueba de usabilidad (UX) | `smoke`, `performance/realtime`, manual |
-| **5 Producción** | Tras `terraform apply` aprobado y despliegue: smoke de PROD (no destructivo) y `TX-CONT-01` | `smoke`, `containers` |
+| **4 Demo** | Smoke en DEMO; **observación** de los tiempos con dispositivos y Wi-Fi reales (§5.6.2: una desviación es un hallazgo, no bloquea por sí sola); verificación manual de sonido, pantalla encendida y legibilidad en la pantalla real de barra (HU-03/CA-U01, CA-F09, CA-F14, CA-N05: estos sí son vinculantes, I-08); RS-06 con dos dispositivos reales; retención de Loki (`TX-MON-01`, §5.10); apoyo a la prueba de usabilidad (UX) | `smoke`, `performance/realtime`, `TX-MON-01`, manual |
+| **5 Producción** | Tras `terraform apply` aprobado y despliegue: smoke de PROD (no destructivo), `TX-CONT-01` y configuración de retención de Loki/Prometheus desplegada (§5.10, punto 1 de `TX-MON-01`) | `smoke`, `containers` |
 
 ## 7. Ejecución en el entorno TESTING efímero
 
@@ -696,8 +967,21 @@ para que los datos de las suites anteriores no influyan).
   aviso sigue visible hasta el toque (se comprueba tras llegar 2 pedidos más);
   un toque lo quita y el **siguiente** pedido llama a `play()` con éxito; con el
   sonido desactivado a propósito no aparece ni al abrir la cola ni al llegar
-  pedidos. Si el sonido desactivado debe sobrevivir a una recarga está
-  pendiente de T-15.
+  pedidos.
+- **Casos de la preferencia de sonido (HU-03/CA-F09, T-15 resuelto):** en un
+  mismo `BrowserContext` (= dispositivo; su `localStorage` persiste entre
+  páginas): (1) primera apertura de la cola en un contexto nuevo → sonido
+  **activado** (espía: `play()` llamado con el primer pedido); (2) desactivar
+  → recargar (`page.reload()`) → sigue desactivado, ningún `play()` al llegar
+  2 pedidos y **no** aparece "Sonido bloqueado" (combinación con CA-F14);
+  (3) desactivar → cerrar sesión → entrar con el **mismo** usuario →
+  desactivado; (4) igual entrando con **otro** usuario de barra → desactivado;
+  (5) volver a activar → recargar → activado (y, con la política real, aparece
+  "Sonido bloqueado" porque no hubo gesto, CA-F14); (6) otro contexto
+  (otro dispositivo) → activado, independiente del primero; (7) la caducidad
+  de la sesión (12 h, HU-01/CA-N06) y la revocación no borran la preferencia.
+  La preferencia no viaja al servidor: se comprueba que ninguna petición la
+  envía (es del dispositivo, no del usuario).
 - Que el sonido **se oiga** a 1,5 m se verifica a mano en la pantalla real
   (Etapa 3 con hardware de referencia y Etapa 4).
 
@@ -712,10 +996,15 @@ para que los datos de las suites anteriores no influyan).
   uno con un ahorro de energía agresivo podría incumplirlo aunque la app lo pida.
 - **Verificación de aceptación (manual, M):** protocolo en el dispositivo de
   barra instalado, en Etapa 3 (hardware de referencia) y Etapa 4:
-  1. Anotar modelo, sistema, navegador y el **tiempo de apagado de pantalla del
-     sistema**; para la prueba se pone en su valor mínimo (o ≤ 2 min) y, si es
-     distinto, se repite con el valor que quedará configurado en el local
-     (pendiente de T-16).
+  1. Anotar modelo, sistema, navegador y el **tiempo de apagado y de bloqueo
+     de pantalla del sistema**. Para la prueba se ponen en su **valor mínimo
+     distinto de "nunca"** (T-16 resuelto, HU-03/CA-N05). Si el dispositivo
+     no tiene ese ajuste, se usa el de fábrica y se anota en el resultado. No
+     se repite con el valor que quede configurado en el local (lo decide el
+     PO: el mínimo es el caso más exigente). Antes de empezar se comprueba,
+     sin la app abierta (pantalla con una página estática), que con ese valor
+     la pantalla **sí** se apaga: si no se apaga, el ajuste no está aplicado y
+     la prueba no vale.
   2. Iniciar sesión como barra, abrir la cola, no tocar nada 30 min con
      pedidos llegando cada ~5 min (arnés) y otros 30 min sin pedidos.
   3. Cumple si la pantalla no se apaga, no se atenúa hasta ser ilegible ni se
@@ -740,9 +1029,12 @@ para que los datos de las suites anteriores no influyan).
 - **Valores fijos de instalación (supuesto 20, ronda 1.1e):** HU-09 queda fuera
   del MVP, así que la pila de pruebas se instala con los **mismos valores que
   PROD: 20 mesas y umbral de retraso de 10 min**, sin cambiarlos. HU-02/CA-F01
-  se prueba con exactamente las mesas 1..20 (la 0 y la 21 no se ofrecen y la API
-  las rechaza con `400`); HU-03/CA-F06 con N = 10 (§8.1). No hay endpoint para
-  cambiarlos y Testing no pide ninguno.
+  se prueba con exactamente las mesas 1..20: la 0 y la 21 no se ofrecen en la
+  rejilla; la API rechaza la 21 (y hasta la 99) con `422 TABLE_OUT_OF_RANGE` y
+  la 0 con `400` de validación (I-11, pendiente de T-19; corregido en la 1.6d:
+  antes decía `400` para las dos). HU-03/CA-F06 con N = 10 (§8.1). No hay
+  endpoint para cambiarlos y Testing no pide ninguno; los rangos de arranque
+  se prueban en §5.2.2.
 
 ## 9. Datos de prueba y aislamiento
 
@@ -815,12 +1107,14 @@ pantalla, teclado y zoom; axe no cubre todo WCAG).
 | CA-F03 | Encargado accede a todas las funciones | E, S | 2026-11-23 |
 | CA-F04 | Sin permiso por URL o API → 403 y sin efecto | I, S, E (RS-17, RS-18) | 2026-11-23 |
 | CA-F05 | "Usuario o PIN incorrectos" sin decir cuál falla | I, E, S (RS-07) | 2026-11-23 |
-| CA-F06 | Bloqueo progresivo 5/15/60 min e indefinido a los 20 fallos; tiempo restante; mensaje de desbloqueo; reinicio solo por acceso correcto, desbloqueo o restablecimiento ⚠ I-01, I-03 | U, I, E (RS-03, RS-09b) | 2026-11-23 |
+| CA-F06 | Bloqueo progresivo 5/15/60 min e indefinido a los 20 fallos; tiempo restante; mensaje de desbloqueo; reinicio solo por acceso correcto, desbloqueo o restablecimiento (I-01, I-03 confirmadas) | U, I, E (RS-03, RS-09b) | 2026-11-23 |
 | CA-F07 | Desactivado con PIN correcto → "Usuario desactivado…" | I, E | 2026-11-23 |
 | CA-F08 | Cerrar sesión: vuelve al inicio y la sesión deja de valer | I, E, S (RS-14) | 2026-11-23 |
 | CA-F09 | Inactividad 15 min para camarero y encargado (también con la cola abierta); barra con la cola no caduca por inactividad | U, I, E (RS-12) | 2026-11-23 |
 | CA-F10 | Pedido creado o cobrado registra el usuario | I | 2026-11-23 |
-| CA-F11 | 10 fallos en 10 min desde un dispositivo → rechazo 10 min con "Espera X min"; las autorizaciones fallidas cuentan ⚠ I-02, I-03 | U, I, E (RS-05, RS-06) | 2026-11-23 |
+| CA-F11 | 10 fallos en 10 min desde un dispositivo → `429` 10 min con "Espera X min"; cuentan login, autorizaciones, reconfirmaciones y cambio de PIN (I-02, I-03, I-10 confirmadas) | U, I, E (RS-05, RS-06) | 2026-11-23 |
+| CA-F12 | Bloqueo temporal con sesión abierta: la sesión sigue; el fallo que bloquea da el mensaje normal; reconfirmación y `currentPin` → `423` "Cuenta bloqueada. Espera X min" sin comprobar ni contar, datos conservados; al expirar se puede reintentar (§5.2.1) ⚠ I-12, T-20 | U, I (FakeClock, métricas), E | 2026-11-23 |
+| CA-F13 | Bloqueo indefinido: todas las sesiones de la cuenta revocadas (`401`, SSE cerrado ≤ 1 s), lo escrito se pierde, al entrar "Pide al encargado…"; por login, aprobación, reconfirmación o cambio de PIN (§5.2.1) ⚠ partes (1) y (2) a confirmar por Cybersecurity | U, I (FakeClock), R, E (RS-14) | 2026-11-23 |
 | CA-U01 | Inicio de sesión en ≤ 2 pasos | E | 2026-11-23 |
 | CA-U02 | Teclado numérico ≥ 44x44 px | E (medidas), V | 2026-11-23 |
 | CA-U03 | Error junto al campo, en texto; PIN vaciado | E, A | 2026-11-23 |
@@ -835,7 +1129,7 @@ pantalla, teclado y zoom; axe no cubre todo WCAG).
 ### HU-02 Tomar un pedido
 | ID | Criterio (resumen) | Tipos | Rev. |
 |---|---|---|---|
-| CA-F01 | Tipo Mesa (1..20, fijo en la instalación, supuesto 20) o Mostrador (referencia ≤ 30); mesas 0 y 21 rechazadas | U, I, E | 2026-11-23 |
+| CA-F01 | Tipo Mesa (1..20, fijo en la instalación, supuesto 20) o Mostrador (referencia ≤ 30); mesa 21 → `422 TABLE_OUT_OF_RANGE`, mesa 0 → `400` (§5.2.2) ⚠ I-11, T-19 | U, I, E | 2026-11-23 |
 | CA-F02 | Tocar producto añade 1; tocar otra vez suma | U, E | 2026-11-23 |
 | CA-F03 | "+"/"−"; a 0 la línea se elimina | U, E | 2026-11-23 |
 | CA-F04 | Nota ≤ 100 en la línea y visible en barra | I, R, E | 2026-11-23 |
@@ -845,7 +1139,7 @@ pantalla, teclado y zoom; axe no cubre todo WCAG).
 | CA-F12 | Números 1, 2, 3… sin huecos ni repeticiones con envíos simultáneos; cancelados conservan número | I (concurrencia, 50 envíos) | 2026-11-23 |
 | CA-F13 | Día `Europe/Madrid`: 23:59:59 sigue el día; 00:00:00 reinicia a 1 | U, I (FakeClock), TX-TZ-01 | 2026-11-23 |
 | CA-F14 | Conserva número y fecha si se modifica o cobra al día siguiente | I (FakeClock) | 2026-11-23 |
-| CA-F08 | Sin líneas: "Enviar a barra" deshabilitado (API → 400) | I, E | 2026-11-23 |
+| CA-F08 | Sin líneas: "Enviar a barra" deshabilitado (API → `400` de validación con `path: ["lines"]`); más de 100 líneas → `422 ORDER_TOO_MANY_LINES` | I, E | 2026-11-23 |
 | CA-F09 | Mesa con pedido abierto: aviso y pedido independiente | I, E | 2026-11-23 |
 | CA-F10 | Precio de cada línea fijado al enviar | I | 2026-11-23 |
 | CA-F11 | Descartar y confirmar: no se guarda ni llega a barra | E | 2026-11-23 |
@@ -888,8 +1182,8 @@ pantalla, teclado y zoom; axe no cubre todo WCAG).
 | CA-F07 | "MODIFICADO"/"CANCELADO" hasta confirmar con un toque; cancelado sale al confirmar | I, R, E | 2026-11-23 |
 | CA-F13 | Listo/Servido + añadir → Pendiente con líneas "AÑADIDO" | I, R, E | 2026-11-23 |
 | CA-F08 | Pedidos nuevos sin recargar | R, E | 2026-11-23 |
-| CA-F09 | Aviso sonoro con cada pedido nuevo, desactivable | E (espía, §8.5), M (audible, H) | 2026-11-23 |
-| CA-F14 | Sonido bloqueado: aviso en texto sin tapar pedidos, botón ≥ 60x60, visible hasta reactivar; el siguiente suena; no aparece si se desactivó ⚠ I-09, T-15 | E (política real + bloqueo simulado, §8.5), M (H) | 2026-11-23 |
+| CA-F09 | Aviso sonoro con cada pedido nuevo, desactivable; la preferencia se guarda en el dispositivo (recarga, nuevo inicio de sesión del mismo u otro usuario); activado la primera vez (§8.5) | U, E (espía, §8.5), M (audible, H) | 2026-11-23 |
+| CA-F14 | Sonido bloqueado: aviso en texto en ≤ 1 s, sin tapar pedidos, botón ≥ 60x60, visible hasta reactivar; el siguiente suena; no aparece si se desactivó | E (política real + bloqueo simulado, §8.5), M (H) | 2026-11-23 |
 | CA-F15 | Listo → "Listos para servir" delante y aviso en sala ≤ 2 s p95 | R, E, P, D | 2026-11-23 |
 | CA-F16 | "Servido" desde la fila: sale de "Listos para servir", cobro igual | I, E | 2026-11-23 |
 | CA-F17 | Servido + Abierto: sigue en "Pedidos" hasta cobrar o cancelar | I, E | 2026-11-23 |
@@ -907,15 +1201,15 @@ pantalla, teclado y zoom; axe no cubre todo WCAG).
 | CA-N02 | "Sin conexión" ≤ 5 s; resincroniza sin intervención ni pérdidas | U, R, E | 2026-11-23 |
 | CA-N03 | Barra no ve importes ni cobra (REST y SSE) | I, R, S, E (RS-19) | 2026-11-23 |
 | CA-N04 | WCAG 2.2 AA; contraste ≥ 4,5:1 | A, M | 2026-11-23 |
-| CA-N05 | La pantalla no se apaga ni bloquea en ≥ 30 min sin tocarla ⚠ T-16 | M (H, protocolo §8.6); E (espía, solo indicio) | 2026-11-23 |
+| CA-N05 | La pantalla no se apaga ni bloquea en ≥ 30 min sin tocarla, con el apagado automático en su valor mínimo distinto de "nunca" (o el de fábrica, anotado) | M (H, protocolo §8.6); E (espía, solo indicio) | 2026-11-23 |
 
 ### HU-04 Cobrar y cerrar un pedido
 | ID | Criterio (resumen) | Tipos | Rev. |
 |---|---|---|---|
 | CA-F01 | "Cobrar" con cobro Abierto y cualquier preparación: detalle y total | I, E | 2026-11-23 |
-| CA-F02 | Cobrado/Cancelado: sin "Cobrar"; el servidor rechaza | I, E, S | 2026-11-23 |
+| CA-F02 | Cobrado/Cancelado: sin "Cobrar"; el servidor rechaza (`409 ALREADY_PAID` / `409 ORDER_CANCELLED`) | I, E, S | 2026-11-23 |
 | CA-F03 | Efectivo ≥ total: cambio = entregado − total, 2 decimales | U, I, E | 2026-11-23 |
-| CA-F04 | Efectivo < total: no confirma; "Importe insuficiente: faltan X,XX €" | U, I, E | 2026-11-23 |
+| CA-F04 | Efectivo < total: no confirma; "Importe insuficiente: faltan X,XX €" (API `422 INSUFFICIENT_CASH {missingCents}`) | U, I, E | 2026-11-23 |
 | CA-F05 | Tarjeta registrada a mano | I, E | 2026-11-23 |
 | CA-F06 | Cobrado: guarda fecha, método, importe y usuario; sale de por cobrar | I, E | 2026-11-23 |
 | CA-F07 | Cobrar no cambia la preparación; sigue en la cola | I, R, E | 2026-11-23 |
@@ -923,7 +1217,7 @@ pantalla, teclado y zoom; axe no cubre todo WCAG).
 | CA-F08 | Cobrado: no se modifican líneas ni importe ni se cancela | I, S | 2026-11-23 |
 | CA-F09 | "Cobrar mesa": un cobro con un total para todos los abiertos | I, E | 2026-11-23 |
 | CA-F10 | "Ver ticket" en pantalla | I, E, V | 2026-11-23 |
-| CA-F19 | "Cobrados hoy" en 1 toque: cobros del día, más reciente primero, campos y "ANULADO" | I (FakeClock), E | 2026-11-23 |
+| CA-F19 | "Cobrados hoy" en 1 toque: cobros del día, más reciente primero, campos y "ANULADO"; el camarero no lee cobros de otro día por id (`404`, RS-46, §5.2.1) | I (FakeClock), E, S (RS-46) | 2026-11-23 |
 | CA-F20 | "Ver ticket" desde "Cobrados hoy" | E | 2026-11-23 |
 | CA-F21 | "Anular cobro" solo para el encargado; camarero no lo ve y 403 | E, S | 2026-11-23 |
 | CA-F22 | Barra sin acceso a "Cobrados hoy" (403) | S | 2026-11-23 |
@@ -933,8 +1227,8 @@ pantalla, teclado y zoom; axe no cubre todo WCAG).
 | CA-F14 | Anular no cambia la preparación | I | 2026-11-23 |
 | CA-F15 | Cobro anulado se conserva con sus datos y cuenta en el día original | I | 2026-11-23 |
 | CA-F16 | Pedido reabierto: modificable, cancelable y cobrable; el nuevo cobro cuenta en su día | I (FakeClock), E | 2026-11-23 |
-| CA-F17 | Un cobro anulado no se anula otra vez | I | 2026-11-23 |
-| CA-F23 | Anular exige el PIN del encargado; incorrecto: no anula, "PIN incorrecto", motivo conservado, cuenta para su bloqueo ⚠ I-10, T-14 | I, E, S (RS-16) | 2026-11-23 |
+| CA-F17 | Un cobro anulado no se anula otra vez (`409 PAYMENT_ALREADY_VOIDED`) | I | 2026-11-23 |
+| CA-F23 | Anular exige el PIN del encargado; incorrecto: `403 PIN_CONFIRMATION_INVALID`, no anula, "PIN incorrecto", motivo conservado, cuenta para su bloqueo (I-10); bloqueo temporal → HU-01/CA-F12, indefinido → HU-01/CA-F13 ⚠ I-12, T-20 | I, E, S (RS-16) | 2026-11-23 |
 | CA-U01 | Tarjeta en ≤ 3 toques | E (contador) | 2026-11-23 |
 | CA-U02 | Efectivo en ≤ 4 toques + importe; botones rápidos | E (contador) | 2026-11-23 |
 | CA-U03 | Cambio ≥ 32 px | E (medidas) | 2026-11-23 |
@@ -957,14 +1251,14 @@ pantalla, teclado y zoom; axe no cubre todo WCAG).
 | CA-F05 | Desactivar: desaparece de la toma, se conserva en el histórico | I, E | 2026-11-23 |
 | CA-F06 | Datos inválidos: no guarda, indica campo y rango | U, I, E | 2026-11-23 |
 | CA-F07 | Nombre duplicado en la categoría: mensaje | I, E | 2026-11-23 |
-| CA-F08 | Borrar categoría con activos: no permite, dice cuántos | I, E | 2026-11-23 |
+| CA-F08 | Borrar categoría con activos: no permite, dice cuántos (`409 CATEGORY_HAS_ACTIVE_PRODUCTS {count}`) | I, E | 2026-11-23 |
 | CA-F09 | Reordenar se refleja en la toma | I, E | 2026-11-23 |
 | CA-U01 | 1 formulario, ≤ 4 campos obligatorios | E | 2026-11-23 |
 | CA-U02 | Agotado en ≤ 2 toques desde la toma | E (contador) | 2026-11-23 |
 | CA-U03 | Errores con campo y cómo corregir | E, A | 2026-11-23 |
 | CA-N01 | Solo el encargado gestiona; agotado también el camarero; en el servidor | S | 2026-11-23 |
 | CA-N02 | Auditoría de cambios de precio | I | 2026-11-23 |
-| CA-N03 | Con 200 productos / 20 categorías se cumplen HU-02/CA-N01, CA-U05, CA-F23 y HU-05/CA-F04 ⚠ I-06, T-17 | P, D | 2026-11-23 |
+| CA-N03 | Con 200 productos / 20 categorías se cumplen, y solo se exigen (lista cerrada), HU-02/CA-N01, CA-U05, CA-F23, CA-N05 y HU-05/CA-F04 (I-06 corregida) | P, E (HU-02/CA-N05 con `tablet-h`/`tablet-v`), D | 2026-11-23 |
 | CA-N04 | WCAG 2.2 AA; etiquetas; teclado sin arrastrar (reordenar incluido) | A, M | 2026-11-23 |
 
 ### HU-06 Modificar o cancelar un pedido enviado
@@ -1004,8 +1298,8 @@ pantalla, teclado y zoom; axe no cubre todo WCAG).
 | CA-F01 | Alta (nombre 1–30 único, rol, PIN) y puede iniciar sesión | I, E | 2026-11-23 |
 | CA-F02 | Cambio de rol aplicado en la siguiente acción, sin volver a entrar | I, R, E (RS-14) | 2026-11-23 |
 | CA-F03 | Desactivar: sesión cerrada ≤ 1 min; no entra; nombre en el histórico | I, R, E (RS-14) | 2026-11-23 |
-| CA-F04 | Restablecer PIN: el anterior deja de valer, contador a 0, cambio obligatorio | I, E (RS-09b, RS-15) | 2026-11-23 |
-| CA-F05 | El único encargado activo no se desactiva ni pierde el rol | I, E (RS-22) | 2026-11-23 |
+| CA-F04 | Restablecer PIN: el anterior deja de valer, contador a 0, cambio obligatorio (`POST /auth/pin`: P-1..P-8 de §5.2.1) | I, E (RS-09b, RS-15) | 2026-11-23 |
+| CA-F05 | El único encargado activo no se desactiva ni pierde el rol (`409 LAST_MANAGER`) | I, E (RS-22) | 2026-11-23 |
 | CA-F06 | Regla de PIN por rol, composición y lista de comunes | U, I, E (RS-01, RS-02) | 2026-11-23 |
 | CA-F07 | Los usuarios no se borran | I, S | 2026-11-23 |
 | CA-F08 | "Desbloquear": puede entrar, contador a 0, acción registrada | I, E (RS-09b) | 2026-11-23 |
@@ -1016,7 +1310,7 @@ pantalla, teclado y zoom; axe no cubre todo WCAG).
 | CA-N01 | Solo el encargado; el PIN no se muestra ni aparece en logs | S, I (RS-29, RS-31) | 2026-11-23 |
 | CA-N02 | Auditoría de altas, roles, (des)activaciones, restablecimientos y desbloqueos | I (RS-30) | 2026-11-23 |
 | CA-N03 | WCAG 2.2 AA; etiquetas; teclado | A, M | 2026-11-23 |
-| CA-N04 | Reconfirmación del PIN en las escrituras (salvo cambiar solo el nombre); fallo: sin efecto, datos conservados, cuenta para su bloqueo ⚠ I-10, T-14 | I, E, S (RS-16) | 2026-11-23 |
+| CA-N04 | Reconfirmación del PIN en las escrituras (salvo cambiar solo el nombre); fallo: sin efecto, datos conservados, cuenta para su bloqueo (I-10); bloqueo temporal → HU-01/CA-F12, indefinido → HU-01/CA-F13 ⚠ I-12, T-20 | I, E, S (RS-16) | 2026-11-23 |
 
 ### HU-08 Resumen de ventas del día
 | ID | Criterio (resumen) | Tipos | Rev. |
@@ -1051,20 +1345,25 @@ se retiran, por si se recupera más adelante (entonces se añade aquí su matriz
 Su efecto en el MVP: valores fijos de instalación, 20 mesas y 10 min
 (supuesto 20), probados en HU-02/CA-F01 y HU-03/CA-F06. La matriz de
 autorización (§5.7) comprueba que no existe ninguna ruta de ajustes expuesta
-(`GET /settings` y `PATCH /settings` → `404` para todos los roles,
-`docs/permisos.md` §3), que `GET /auth/me` entrega a cada rol solo el valor que
-usa (`localConfig`: camarero `tableCount` = 20, barra
-`delayThresholdMinutes` = 10) y que la opción "Ajustes" no aparece en el menú
-del encargado.
+(`GET /settings` y `PATCH /settings` → `404` para todos los roles y sin
+sesión, `docs/arquitectura.md` §5.1), que `GET /auth/me` entrega a cada rol
+solo el valor que usa (`localConfig`: camarero `tableCount` = 20, barra
+`delayThresholdMinutes` = 10, encargado ambos), que `TABLE_COUNT` y
+`DELAY_THRESHOLD_MINUTES` fuera de rango impiden arrancar (`TX-CFG-01`) y que
+la opción "Ajustes" no aparece en el menú del encargado (§5.2.2).
 
 ### Transversales
 | ID | Comprobación | Tipos |
 |---|---|---|
 | TX-CONT-01 | Política rootless de todos los contenedores (RS-36, RS-37, RS-38) | Contenedores |
-| RS-01..RS-43 | Requisitos de `docs/seguridad.md` §7 no ligados a un criterio de historia (cabeceras, TLS, CSRF, BD, imágenes…) | S, D, C según §7 |
+| RS-01..RS-46 | Requisitos de `docs/seguridad.md` §7 no ligados a un criterio de historia (cabeceras, TLS, CSRF, BD, imágenes…) | S, D, C según §7 |
 | TX-SMK-01..07 | Smoke post-despliegue | Smoke |
 | TX-RT-01 | El proxy no almacena SSE en búfer | R |
 | TX-TZ-01 | Fecha de negocio independiente de la zona del contenedor y de la tablet | U, I, E |
+| TX-CFG-01 | `TABLE_COUNT` (1–99) y `DELAY_THRESHOLD_MINUTES` (1–60) fuera de rango impiden arrancar `app` (§5.2.2) | U, I (imagen real) |
+| TX-LOG-01 | Redacción recursiva de claves `/pin/i` y de `__Host-sid` (`docs/logging.md` §4.3, §4.5; RS-29, RS-31) | U |
+| TX-LOG-02 | Logs de `app`, `proxy` y `db` sin PIN, *pepper*, cookie ni datos personales; eventos y métricas de SEC-016 (§5.10) | I |
+| TX-MON-01 | El compactor de Loki borra los logs vencidos en DEMO (§5.10) ⚠ T-22 | C (DEMO) |
 
 ## 11. Criterios de "terminado" (puerta de la Etapa 2, por historia)
 
@@ -1132,8 +1431,8 @@ y 1.1e.
 | T-02 Condiciones de medida | Supuesto 12 y los 8 criterios que lo citan | **Verificado.** Red emulada, 10 dispositivos (simultáneos donde se indica), `menu-200`, ≥ 200 muestras y p95, como se propuso; los 8 criterios del MVP citan el supuesto. La regla añadida en 1.1d ("cumplido solo si se cumple en TESTING y en DEMO") **no era verificable tal cual**: no fijaba carga ni muestras en DEMO, dejaba la puerta de la Etapa 3 sin poder cerrarse (el resultado de DEMO llega en la Etapa 4) y dependía de que DEMO estuviera en el local con su Wi-Fi. La ronda 1.1e la **retira** por decisión del humano (TESTING vinculante, DEMO solo observación), que es verificable y coincide con la alternativa que iba a proponer; aplicada en §5.6 e I-08 |
 | T-03 Total ≤ 200 ms | HU-02/CA-U05 y supuesto 23 | **Verificado.** Dispositivo de referencia con Chromium CPU ×4 mientras no exista; punto de medida definido (del toque al total visible). Muestras: I-07 |
 | T-04 Inicio del "retrasado" | HU-03/CA-F06, CA-F01, CA-F02, CA-F23, CA-F24 y supuesto 24 | **Verificado.** Cuenta desde la hora de entrada en la cola, el paso a "En preparación" no la reinicia (con el ejemplo 9 + 2 min), tolerancia de 60 s y caso de vuelta a la cola. Mejora sobre la propuesta: incluye la decisión del SE (`queued_at`). Límite ≥ N: I-04 |
-| T-05 Sonido y pantalla | HU-03/CA-F14 y CA-N05 | **Verificado**, con dos detalles menores abiertos: T-15 (CA-F14) y T-16 (CA-N05). Estrategia en §8.5 y §8.6 |
-| T-06 "Sin degradar" | HU-05/CA-N03 | **Verificado.** Ahora es medible; queda la duda de si la lista de criterios es cerrada (T-17, baja) |
+| T-05 Sonido y pantalla | HU-03/CA-F14 y CA-N05 | **Verificado**; los dos detalles menores que quedaban, T-15 (CA-F14) y T-16 (CA-N05), se cerraron en la ronda 1.1f (verificado en la 1.6d, §14.2). Estrategia en §8.5 y §8.6 |
+| T-06 "Sin degradar" | HU-05/CA-N03 | **Verificado.** Ahora es medible; la duda de si la lista era cerrada (T-17) quedó resuelta en la 1.1f: lista cerrada (§14.2) |
 | T-07 Tablet 10" | HU-02/CA-N05, CA-U01 y supuesto 23 | **Verificado.** Más preciso que la propuesta (total y "Enviar a barra" sin desplazar) |
 | T-08 "Claramente" | HU-04/CA-U04 | **Verificado.** Viewports aplicados: I-05 |
 | T-09 Resumen ≤ 2 s | HU-08/CA-N02 | **Verificado.** p95, pantalla completa con el desglose de CA-F13, desde el toque o el cambio de fecha, condiciones del supuesto 12 |
@@ -1141,18 +1440,30 @@ y 1.1e.
 | T-11 Ubicación de los tests | `docs/arquitectura.md` §3, §12 (SE) | Resuelto por el SE |
 | T-12 `compose.test.yaml` y sandbox | `docs/infraestructura.md` §9, `docs/seguridad.md` §6.3 | Resuelto (sin validar con imágenes reales); notas 1–5 de Infrastructure pendientes de aplicar en `tests/run.sh` al crearlo |
 
-### 14.2 Hallazgos nuevos (tarea 1.6b)
+### 14.2 Hallazgos de la tarea 1.6b y su cierre (verificado en la 1.6d)
 
 T-13 no se emite: era la objeción a la regla "TESTING y DEMO" del supuesto 12,
-que el humano ha retirado en la ronda 1.1e.
+que el humano ha retirado en la ronda 1.1e. Texto original de cada hallazgo en
+`docs/estado.md`. Verificación hecha el 2026-11-23 contra las historias tras la
+ronda 1.1f y contra `docs/arquitectura.md` tras la 1.3c.
+
+| ID | Responsable | Criterio / archivo | Problema (resumen) | Dónde se resolvió | Resultado de la verificación (1.6d) |
+|---|---|---|---|---|---|
+| T-14 | product-owner, cybersecurity | HU-01/CA-F06, HU-04/CA-F23, HU-07/CA-N04 | Qué pasa con la sesión abierta de una cuenta que se bloquea y qué mensaje ve al reconfirmar | HU-01/CA-F12 y CA-F13 nuevos; HU-04/CA-F23 y HU-07/CA-N04 remiten a ellos; arquitectura §5, §7 (1.3c) | **Verificado (PO), con dos restos.** CA-F12 y CA-F13 tienen resultado esperado comprobable (§5.2.1) y la arquitectura los implementa (`423 LOCKED` sin hash ni conteo; revocación de todas las sesiones a los 20). Restos: (1) las partes (1) y (2) de CA-F13 siguen "a confirmar por Cybersecurity" (fila abierta en `docs/estado.md`); los tests se escriben ya con la lectura del PO, que es también la de la arquitectura. (2) **Conflicto nuevo T-20**: con 5 fallos de reconfirmación en la misma sesión, la arquitectura responde `429` y no el `423` que pide CA-F12 (c) y (d) |
+| T-15 | product-owner | HU-03/CA-F14, CA-F09 | Plazo del aviso y persistencia de la preferencia de sonido | HU-03/CA-F14 ("<= 1 s") y CA-F09 (preferencia en el dispositivo) | **Verificado.** Los dos puntos, tal como se propusieron, más dos precisiones útiles: vale también al entrar con otro usuario y la primera vez está activado. Casos en §8.5. I-09 pasa a ser texto del criterio |
+| T-16 | product-owner | HU-03/CA-N05 | Con qué ajuste de apagado de pantalla se verifica | HU-03/CA-N05 | **Verificado, aceptado con cambio.** Solo el valor mínimo distinto de "nunca" (o el de fábrica, anotado); no se repite con el valor del local. Verificable y suficiente (el mínimo es el caso más exigente). Protocolo de §8.6 ajustado, con una comprobación previa de que el ajuste está aplicado |
+| T-17 | product-owner | HU-05/CA-N03 | Lista cerrada o ejemplos | HU-05/CA-N03 | **Verificado.** Lista cerrada, que añade HU-02/CA-N05 (20 categorías en tablet). I-06 corregida; §5.6.1 y matriz ajustadas |
+| I-01..I-10 | product-owner | §4.5 | Confirmar o corregir las interpretaciones | README de historias, "Interpretaciones de Testing confirmadas por el PO" | **Verificado.** I-01..I-05, I-07, I-08 e I-10 confirmadas tal cual; I-09 confirmada e incorporada a HU-03/CA-F14; I-06 corregida (lista cerrada, T-17). Las ampliaciones del PO (I-01 y I-03 también para CA-F12; I-02 con la nota de SEC-019; I-10 aclarando que el límite por sesión no tiene mensaje propio) están en §4.5. Recuento: 206 criterios, sin huecos ni duplicados, referencias cruzadas válidas (script) |
+| T-18 | cybersecurity | `docs/seguridad.md` §7, RS-18 | "I generado desde `permissions.ts`" toma como oráculo el código que se prueba | — | **Abierto.** Sin cambios en `docs/seguridad.md` §7 (RS-18 sigue igual). Mientras tanto se aplica el principio 2 (§1) |
+
+### 14.3 Hallazgos nuevos (tarea 1.6d)
 
 | ID | Responsable | Criterio / archivo | Problema | Propuesta | Severidad |
 |---|---|---|---|---|---|
-| T-14 | product-owner, cybersecurity | HU-01/CA-F06, HU-04/CA-F23, HU-07/CA-N04 | No se dice qué pasa con la **sesión abierta** de un usuario cuando su cuenta se bloquea mientras la usa (p. ej. el encargado falla 5 veces la reconfirmación al anular un cobro, o alguien falla 5 logins con su nombre desde otra tablet), ni qué mensaje ve al reconfirmar estando bloqueado ("PIN incorrecto" o "Cuenta bloqueada…"). Sin eso, el test no tiene resultado esperado | Añadir a HU-01: "**CA-F12** Dado un usuario con sesión abierta cuya cuenta se bloquea (CA-F06), entonces su sesión sigue abierta, pero mientras dure el bloqueo toda acción que pida reconfirmar su PIN (HU-04/CA-F23, HU-07/CA-N04) se rechaza sin comprobar el PIN con 'Cuenta bloqueada. Espera X min' (o 'Pide al encargado que la desbloquee' si es indefinido)"; las autorizaciones de HU-06 ya están cubiertas por HU-06/CA-F18. Si Cybersecurity prefiere cerrar la sesión, cambiar el criterio en ese sentido | media |
-| T-15 | product-owner | HU-03/CA-F14, CA-F09 | (a) "Se muestra en cuanto se detecta el bloqueo" no tiene límite de tiempo. (b) No se dice si "sonido desactivado" se conserva al recargar la página; de ello depende si tras recargar debe aparecer "Sonido bloqueado" o nada | (a) "…se muestra en ≤ 1 s desde que se abre la cola o falla un aviso". (b) Añadir a CA-F09: "La preferencia de sonido (activado o desactivado) se conserva en ese dispositivo al recargar la página y al volver a iniciar sesión". Mientras tanto se aplica I-09 | baja |
-| T-16 | product-owner | HU-03/CA-N05 | El resultado depende del ajuste de apagado de pantalla del sistema: con "nunca" se cumple sin que la app haga nada, y no se dice con qué ajuste se verifica | Añadir: "…verificado con el apagado automático de pantalla del dispositivo en el valor que quede configurado en el local y en su valor mínimo". Protocolo en §8.6 | baja |
-| T-17 | product-owner | HU-05/CA-N03 | "Se siguen cumpliendo los criterios de rendimiento y UX de HU-02 (…)": no queda claro si la lista entre paréntesis es cerrada o son ejemplos (p. ej. HU-02/CA-U01 con 20 categorías) | Decir "todos los criterios UX y de rendimiento de HU-02, entre ellos…" o "los criterios HU-02/CA-N01, CA-U05 y CA-F23" (lista cerrada). Mientras tanto se aplica la lectura amplia (I-06) | baja |
-| T-18 | cybersecurity | `docs/seguridad.md` §7, RS-18 | "I generado desde `permissions.ts`" toma como oráculo el mismo código que se prueba: un error en la matriz pasaría el test (principio 2 de §1) | "I con la tabla esperada escrita a mano en el test a partir de `docs/permisos.md` §3; un test aparte compara `permissions.ts` con esa tabla" | baja |
+| T-19 | software-engineer | HU-02/CA-F01; `docs/arquitectura.md` §4.1 (tabla de configuración) y §5.1 (`POST /orders`) | Solo se define el código para la mesa "> N" (`422 TABLE_OUT_OF_RANGE`). No se dice qué responde la API a `tableNumber` 0, negativo, > 99, no entero o de un tipo que no es número, ni a un `tableNumber` en un pedido de mostrador. Sin eso, el test de la mesa 0 no tiene resultado esperado (la §8.7 anterior decía `400` para la 0 y la 21, y la 21 era un error) | Escribir en §5.1: "`tableNumber` fuera de 1–99, no entero o con `type = counter` → `400` de validación (`path: ["tableNumber"]`); 1–99 pero > `TABLE_COUNT` → `422 TABLE_OUT_OF_RANGE`". Mientras tanto se aplica I-11 | baja |
+| T-20 | software-engineer, cybersecurity (product-owner si se cambia el criterio) | HU-01/CA-F12 (c) y (d), HU-04/CA-F23, HU-07/CA-N04, HU-07/CA-F04; `docs/arquitectura.md` §7 (`verifyPin`, pasos 2 y 3); ADR-005 revisión (c) | El límite por sesión (paso 2) se comprueba **antes** que el bloqueo de la cuenta (paso 3). En el caso más probable (el encargado falla 5 veces seguidas la reconfirmación en su propia sesión, o el usuario con PIN provisional falla 5 veces el PIN actual) el 5.º fallo bloquea la cuenta 5 min **y** agota el límite de la sesión 10 min. Resultado: (1) durante el bloqueo recibe `429 TOO_MANY_ATTEMPTS` ("Demasiados intentos"), no el `423 LOCKED` / "Cuenta bloqueada. Espera X min" que exige CA-F12 (c); (2) cuando acaba el bloqueo (5 min) sigue rechazado otros ~5 min, contra CA-F12 (d) "cuando termina el bloqueo, puede volver a intentarlo"; (3) I-10 dice que el límite de sesión no tiene mensaje propio en las historias, así que no hay texto para ese `429`. Los tests (P-6 de §5.2.1) no pueden pasar con la historia y la arquitectura a la vez | Opción A (recomendada, sin cambiar la historia): en `verifyPin`, para `confirm` y `change` (el PIN es del propio titular de la sesión) comprobar el bloqueo de la cuenta antes que el límite de sesión, y que el límite de sesión **no** se aplique cuando el usuario verificado es el de la sesión: ya lo cubre su bloqueo de cuenta, y el límite de sesión sigue protegiendo las aprobaciones, que es para lo que lo pidió Cybersecurity (`docs/seguridad.md` §6.3, "evita usar una tablet de camarero para bloquear al encargado"). Opción B: el PO cambia CA-F12 para admitir "Demasiados intentos. Espera X min" con el tiempo mayor de los dos y lo incorpora a I-10. Mientras tanto los tests siguen la historia (I-12) | media |
+| T-21 | software-engineer | `docs/arquitectura.md` §5 ("Autorización del encargado") y §7 paso 2 | (a) "Sumando los tres usos" del límite por sesión no es alcanzable por la API: una sesión de camarero solo hace aprobaciones, una de encargado solo reconfirmaciones (sus acciones de HU-06 omiten `managerApproval`) y una con PIN provisional solo `POST /auth/pin`. No es un error, pero la suma solo se puede probar en unitario. (b) No se dice qué pasa si una sesión de encargado **envía** `managerApproval` (la UI lo omite, pero un cliente manipulado puede mandarlo): ¿se ignora sin verificar ni contar, o se verifica? Si se verificara sin contar, permitiría probar PIN de otros encargados sin límite | (a) Anotar en §7 que la suma por sesión solo se da en la práctica con un uso por sesión, o confirmar que es intencionado (defensa en profundidad). (b) Escribir: "con sesión de encargado, `managerApproval` se ignora: no se verifica ni cuenta, y `authorized_by = actor`" (o rechazarlo con `400`). Testing prueba la opción que se elija | baja |
+| T-22 | monitoring (infrastructure para la configuración de DEMO) | `docs/logging.md` §6.6 ("Testing comprueba en DEMO que el compactor borra") | La comprobación propuesta ("consulta de un intervalo ya vencido sin resultados") no basta y puede no poder hacerse: (1) una consulta vacía también sale si hay `max_query_lookback` o si nunca hubo datos, sin que el compactor haya borrado nada; (2) con `retention_period: 168h` hace falta que DEMO lleve más de 7 días + 2 h (`retention_delete_delay`) + un ciclo de compactación con logs; no está dicho que la Etapa 4 dure tanto, y Loki rechaza por defecto líneas con marca de tiempo antigua (`reject_old_samples_max_age`), así que no se pueden "fabricar" logs vencidos | (a) Definir la evidencia como en `TX-MON-01` (§5.10): configuración sin `max_query_lookback`, métrica de última ejecución correcta de la retención del compactor y *chunks* del intervalo vencido eliminados del volumen, más una consulta de control con datos. (b) Si DEMO va a durar menos de 7 días + 2 h, hacer la comprobación en un Loki de TESTING o de DEMO con `retention_period: 24h` (el mínimo de Loki) desplegado ≥ 26 h antes de la puerta, y dejar en PROD solo la comprobación de configuración. Infrastructure indica la duración prevista de DEMO | baja |
 
-Además, §4.5 recoge las **interpretaciones** I-01..I-10 que aplican los tests;
-el PO debe confirmarlas o corregir los criterios.
+Además, §4.5 recoge las **interpretaciones** vigentes: I-01..I-10 confirmadas
+o corregidas por el PO (1.1f) e I-11, I-12 pendientes de T-19 y T-20.
