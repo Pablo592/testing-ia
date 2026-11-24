@@ -12,6 +12,17 @@
 > un ejemplo erróneo de §5.1 (12345 es una secuencia). Hallazgos nuevos
 > T-28..T-37 (§14.5).
 >
+> **2.1e (2026-11-24, Etapa 2, HU-01):** tests ajustados al contrato aceptado
+> por el SE en la 2.1c (`docs/arquitectura.md` §2.1, §3.1, §5, §5.2, §7,
+> §10.1, §17), a la BD de test de Infrastructure (2.1b/2.1b2, `docs/infraestructura.md`
+> §6, §9.1) y a los textos de UX de la 2.1d. BD por fichero clonada de
+> `app_template` con `test_admin` (§9.2); `tests/run.sh` genera
+> `db_test_admin_password` y ejecuta `migrate-template`; unitario de RS-13
+> contra `parseSettings`; casos nuevos (motivo del `401`, orden de
+> comprobaciones, denegación por defecto, reconexión de la barra, "Acceso
+> denegado" por `403` de la API). T-28..T-32, T-36, T-37 cerrados; hallazgos
+> nuevos T-38..T-43 (§14.6). Trazabilidad: 23/23.
+>
 > Entradas: `docs/reglas-equipo.md`, `docs/historias/` (HU-01..HU-08 y README,
 > rondas 1.1d con IDs estables, 1.1e con las decisiones del humano y 1.1f con
 > T-14..T-17 e I-01..I-10; HU-09 fuera del MVP), `docs/arquitectura.md`
@@ -1186,10 +1197,23 @@ para que los datos de las suites anteriores no influyan).
   mecanismo que en PROD), así también se prueba.
 
 ### 9.2 Integración
-- Una BD plantilla migrada por ejecución (`migrate` sobre `app_template`); cada
-  archivo de test obtiene `CREATE DATABASE t_<archivo> TEMPLATE app_template`
-  y la app de ese worker apunta a ella. Sin estado compartido entre archivos; los
-  workers de Vitest pueden ir en paralelo.
+- Una BD plantilla migrada por ejecución (`migrate-template` sobre
+  `app_template`, después de `migrate` y con su código de salida comprobado en
+  `tests/run.sh`); cada archivo de test obtiene `CREATE DATABASE t_f_<x>
+  TEMPLATE app_template` con el rol `test_admin` (`tests/support/bd-fichero.ts`,
+  `setupFiles`) y la app en proceso y los constructores de datos se conectan a
+  ella con `app_rw`. Los casos que necesitan una BD sin usuarios (RS-09) crean
+  además la suya por test (`montarApp({ bdAislada: true })`). Sin estado
+  compartido entre archivos ni con `cafeteria`.
+- Cierre: pools de `app_rw` → `app.close()` → `DROP DATABASE … WITH (FORCE)`.
+  `test_admin` no puede terminar conexiones de `app_rw` (sin
+  `pg_signal_backend`, a propósito): un `DROP` que falla señala una conexión
+  sin cerrar.
+- **Los ficheros van en serie** (`fileParallelism: false`): el límite de 20
+  conexiones de `app_rw` es compartido por `app`, la app en proceso (`poolMax`
+  4), los constructores (`max` 2) y los comandos (`poolMax` 4); `test_admin`
+  tiene 4. Activar paralelo exige recalcularlo con Infrastructure (no se sube
+  el límite sin Cybersecurity, `docs/infraestructura.md` §9.1).
 - Dentro de un archivo, cada test crea sus propios datos con nombres únicos
   (prefijo aleatorio) y no depende del orden.
 
@@ -1258,7 +1282,8 @@ pantalla, teclado y zoom; axe no cubre todo WCAG).
 #### Ficheros de HU-01 (tarea 2.1, 2026-11-24)
 
 Escritos antes de la implementación contra el contrato de `tests/README.md`
-(fallan hasta que exista el código). `sh tests/run.sh trazabilidad`: 23/23.
+(fallan hasta que exista el código), ajustados en la 2.1e al contrato de la
+arquitectura (§2.1, §5, §7, §10.1). `sh tests/run.sh trazabilidad`: 23/23.
 
 | Fichero (`tests/…`) | Capa | Criterios |
 |---|---|---|
@@ -1266,18 +1291,21 @@ Escritos antes de la implementación contra el contrato de `tests/README.md`
 | `unit/shared/permisos.unit.test.ts` | U | CA-F01, CA-F02, CA-F03, CA-N02 (RS-18, T-18) |
 | `unit/shared/bloqueo.unit.test.ts` | U | CA-F06 (RS-03, I-01) |
 | `unit/shared/minutos-restantes.unit.test.ts` | U | CA-F06, CA-F11, CA-F12 (I-03) |
+| `unit/api/config.unit.test.ts` (2.1e) | U | CA-N06 (RS-13: `SESSION_MAX_HOURS` 1–12, por defecto 12; resto de variables de §10.1) |
+| `unit/web/pin-mensajes.unit.test.ts` (2.1e) | U | CA-N01 (tabla `PinRule` → texto total, con `digits_only` y regla desconocida; import pendiente de T-42) |
 | `integration/api/HU-01-login.int.test.ts` | I | CA-F01..F03 (`/auth/me`, permisos y `localConfig`), CA-F05 (RS-07), CA-F07, CA-F08 (RS-10, RS-11, RS-14), CA-N01 (RS-08, RS-31), CA-U01 (rejilla), RS-24 |
 | `integration/api/HU-01-bloqueo.int.test.ts` | I (FakeClock) | CA-F06 (25 intentos, RS-03), CA-N05 (eventos y métricas, RS-30, RS-47) |
 | `integration/api/HU-01-dispositivo.int.test.ts` | I (FakeClock, `remoteAddress`) | CA-F11 (RS-05, RS-06, I-02), CA-N05 |
 | `integration/api/HU-01-verify-pin.int.test.ts` | I (FakeClock, SSE) | CA-F12 y CA-F13 por `currentPin` y por login (P-1..P-8 de §5.2.1), RS-14, RS-15, RS-16b; HU-07/CA-F04 |
-| `integration/api/HU-01-sesion.int.test.ts` | I (FakeClock, SSE) | CA-F09 (RS-12), CA-N06 (RS-13) |
+| `integration/api/HU-01-sesion.int.test.ts` | I (FakeClock, SSE) | CA-F09 (RS-12; límite exacto 15 min 0 s sin tolerancia, escritura de `last_activity_at` en cada petición, cierre y reconexión de la barra), CA-N06 (RS-13; 12 h 0 min exactas, `sessionMaxHours`), CA-F08 (motivo del `401`) |
 | `integration/realtime/HU-01-revocacion.int.test.ts` | R | CA-F08 (RS-14) |
 | `integration/api/HU-01-encargado-inicial.int.test.ts` | I (BD aislada) | Encargado inicial (RS-09), CA-F06 con `unlock-user` (RS-09b) |
 | `integration/api/HU-01-logs.int.test.ts` | I | CA-N01 (RS-29, TX-LOG-02 parcial), RS-30 |
 | `integration/api/HU-01-autoria.int.test.ts` | I | CA-F10 (se ejecuta al entrar HU-02 y HU-04 en el alcance) |
 | `security/matriz-autorizacion.sec.test.ts` | S | CA-F04, CA-N02 (RS-15, RS-17, RS-18; filas de HU-02..HU-08 según alcance) |
-| `e2e/HU-01-iniciar-sesion.e2e.ts` | E | CA-F01..F04, CA-F06, CA-F07, CA-F08, CA-F09, CA-F11 (presentación del `429`), CA-N01, CA-N06, CA-U01, CA-U04 |
-| `e2e/HU-01-errores.pin.e2e.ts` | E (serie, 4 fallos reales) | CA-F05, CA-U03, CA-F12, CA-F13 (cola de barra → login en ≤ 1 s) |
+| `e2e/HU-01-iniciar-sesion.e2e.ts` | E | CA-F01..F04 ("Acceso denegado" con textos, foco, título y enlace; pantallas vacías; `403 FORBIDDEN` de la API, activo con HU-02), CA-F06, CA-F07, CA-F08 (sin banner tras logout), CA-F09 (banner por `reason: idle` al recargar), CA-F11 (presentación del `429`), CA-N01, CA-N06, CA-U01, CA-U04 |
+| `e2e/HU-01-errores.pin.e2e.ts` | E (serie, 4 fallos reales) | CA-F05, CA-U03, CA-F12 (T-30: "No se ha cambiado el PIN.", teclado deshabilitado), CA-F13 (cola de barra → login en ≤ 1 s, banner) |
+| `e2e/HU-01-reconexion.red.e2e.ts` (2.1e) | E (serie `serie-red`, Toxiproxy) | CA-F09 (barra que se reconecta tras un corte de 3 s sigue dentro) |
 | `e2e/HU-01-teclado.dispositivo.e2e.ts` | E (6 dispositivos) | CA-U02, CA-U04, CA-N04 (objetivos) |
 | `a11y/HU-01-login.a11y.ts` | A | CA-N04, CA-U03, CA-U04 |
 | `visual/HU-01-login.visual.ts` | V | Capturas `tests/screenshots/HU-01/` (375/768/1024/1440/1920) |
@@ -1576,6 +1604,7 @@ captura o traza de Playwright), **agente responsable**.
 | Fecha | Etapa | Suite | Imágenes (digest) / commit | Resultado | Cobertura | Notas |
 |---|---|---|---|---|---|---|
 | — | 1 | — | — | Sin ejecuciones: aún no hay código ni `compose.test.yaml` | — | — |
+| 2026-11-24 | 2 (tarea 2.1e) | `trazabilidad` (`tests/run.sh`, `runner-unit` sin red) | `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:91651731…` / commit `4fafff8` + cambios sin commit de la 2.1e | **Pasa**: HU-01 23/23; sin IDs inexistentes ni retirados | — | Además, análisis de sintaxis de los 50 ficheros `.ts`/`.js` de `tests/` con `node --experimental-strip-types --check` en un contenedor sin red, UID 1000, `--read-only`, `cap-drop ALL` (sin cargar dependencias): sin errores (un falso positivo de `--check` en `support/e2e/red.ts`, que no tiene `import`; cargado como módulo ESM, correcto). Integración, seguridad y E2E siguen sin poder ejecutarse: no hay código ni `APP_IMAGE` (tarea 2.2) |
 | 2026-11-24 | 2 (tarea 2.1) | `trazabilidad` (`tests/run.sh`, `runner-unit` sin red) | `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:91651731…` / commit `9f87021` | **Pasa**: HU-01 23/23 criterios con test o verificación manual; sin IDs inexistentes ni retirados | — | `run.sh` probado de extremo a extremo (secretos en `$XDG_RUNTIME_DIR`, `trap` con `down -v`, `comprobar_enlaces` antes y después). El resto de suites no se puede ejecutar: no existe la imagen de la app (`APP_IMAGE`) ni el código (tarea 2.2); fallarán por diseño hasta entonces |
 
 ## 13. Fallos abiertos
@@ -1660,6 +1689,26 @@ ronda 1.1f y contra `docs/arquitectura.md` tras la 1.3c.
 | T-35 | infrastructure (orquestador para `.gitignore`) | `docs/infraestructura.md` §7.1; `compose.dev.yaml`; `deploy/dev/levantar.sh`; `.gitignore` | `tests/` es paquete del workspace (`@mi-app/tests`): `deps` necesita `./tests/node_modules` en `rw` y `comprobar_enlaces` de `levantar.sh` debería incluirlo (la de `tests/run.sh` ya lo hace). `tests/results/` no está en `.gitignore`: los informes de cada ejecución entrarían en `git add -A` | Añadir `./tests/node_modules` a la lista de permitidos de `deps` y a `comprobar_enlaces`; añadir `tests/results/*` (salvo `.gitkeep`) a `.gitignore` | baja |
 | T-36 | software-engineer, infrastructure | HU-01/CA-N06; RS-13 ("configuración > 12 h → el servidor no arranca") | No hay nombre de variable para la caducidad absoluta configurable a la baja (no está en `docs/infraestructura.md` §6): no se puede escribir el unitario de `config.ts` de RS-13 | Fijar la variable (p. ej. `SESSION_MAX_HOURS`, 1–12, por defecto 12) en §4.1/§7 y en §6 de infraestructura | baja |
 | T-37 | software-engineer (product-owner si se acepta la tolerancia) | HU-01/CA-F09; `docs/arquitectura.md` §7 (`last_activity_at` como mucho cada 30 s) | La inactividad se mide desde `last_activity_at`, que puede ir hasta 30 s por detrás de la última interacción real: una sesión podría cerrarse tras 14 min 30 s sin interacción, antes de los 15 min del criterio. Los tests espacian las peticiones > 30 s y no lo detectan | Actualizar `last_activity_at` si han pasado > 30 s **y** guardar la hora real de la petición (no la del último guardado), o que el PO acepte una tolerancia de −30 s en CA-F09 | baja |
+
+**Estado tras la 2.1e (2026-11-24):** T-28 y T-29 cerrados por Infrastructure
+(2.1b, `docs/infraestructura.md` §9.1: `test_admin`, `app_template`, red
+`db-seed`); los tests y `tests/run.sh` ya los usan. T-30 cerrado por UX
+(2.1d). T-31 cerrado (SE §5.2 y UX `10-acceso-denegado.md`). T-32 cerrado con
+los ajustes de `docs/arquitectura.md` §17 (quedan detalles en T-38..T-42).
+T-36 y T-37 cerrados (SE §7, §10.1; sin tolerancia en CA-F09). T-34:
+implementado por Infrastructure, se verifica en la primera ejecución E2E.
+T-33 y T-35 sin cambios.
+
+### 14.6 Hallazgos nuevos (tarea 2.1e, HU-01)
+
+| ID | Responsable | Criterio / archivo | Problema | Propuesta | Severidad |
+|---|---|---|---|---|---|
+| T-38 | software-engineer | RS-13, HU-01/CA-N06; `docs/arquitectura.md` §10.1 | No está fijada la forma del objeto que devuelve `parseSettings(env)`: el unitario no puede leer el valor por defecto (12) ni el resto sin suponer nombres | Fijarla en §10.1. Propuesta: los nombres de `AppDeps` (`host`, `port`, `metricsPort`, `installation.{tableCount, delayThresholdMinutes}`, `sessionMaxHours`, `publicOrigin`, `trustedProxies: string[]`, `logLevel`, `database.{host, port, database, user}`). Mientras, `tests/support/config.ts` adapta | baja |
+| T-39 | software-engineer | HU-01/CA-F12 (P-1), RS-16b; `docs/arquitectura.md` §5 (orden) y §5.1 (`POST /auth/pin`) | El `403 FORBIDDEN` de `POST /auth/pin` sin PIN provisional no es del RBAC (`session:self`, que todos tienen) y el orden de §5 no dice si va antes o después de zod: con un cuerpo inválido podría salir `400` y la UI/los tests no sabrían qué esperar | Decir que esa comprobación va antes de la validación del cuerpo (p. ej. `preValidation`), igual que el RBAC. La matriz envía de momento un cuerpo bien formado en esa fila | baja |
+| T-40 | software-engineer (cybersecurity) | RS-18 (`GET/PATCH /settings` → `404` para todos); `docs/arquitectura.md` §5 (orden de hooks `onRequest`) | Fastify ejecuta los hooks `onRequest` también en las rutas no encontradas: con el orden fijado, `/settings` daría `401` sin sesión, `403 PIN_CHANGE_REQUIRED` con PIN provisional y quizá `403 FORBIDDEN` (sin `config`) en lugar del `404` que pide RS-18 | Decidir qué responde `/api/v1/<ruta inexistente>`: (a) `404` para todos (los hooks de sesión y permiso se saltan si no hay ruta) o (b) `401`/`403` primero y RS-18 se ajusta (Cybersecurity, dueño de RS-18). El test sigue RS-18 | media (el test fallará por diseño si no se decide) |
+| T-41 | software-engineer, infrastructure | HU-01 dependencia del encargado inicial, CA-F06 (RS-09, RS-09b); `docs/arquitectura.md` §2.1 (códigos de salida 0/2/1) | Los códigos de salida y "stderr sin el PIN" de los envoltorios `create-initial-manager` y `unlock-user` no se pueden probar: no está fijado el comando de la imagen (ruta del script, cómo recibe el nombre) ni un servicio de `compose.test.yaml` que lo ejecute | Fijar el comando (p. ej. `node dist/unlock-user.js <nombre>`) y añadir un servicio efímero `cmd` (perfil `setup`, `app_rw`, `pin_pepper`, nombre/PIN por secreto). Testing añade el caso a la suite `containers` | baja |
+| T-42 | software-engineer (developer) | HU-01/CA-N01; `docs/ux/wireframes/01-login.md` "Reglas de PIN" (tabla total, 2.1d) | UX pide un unitario de la tabla `PinRule` → texto, pero no hay subruta de `@mi-app/web` en §3.1 | Añadir a §3.1 `@mi-app/web/pin-messages` con `pinRuleMessage(rule: string): string` (o el nombre que se elija; se cambia el import del test) | baja |
+| T-43 | software-engineer | HU-01/CA-F09 (barra); `docs/arquitectura.md` §7 (temporizador de 60 s del hub) | La escritura periódica de `last_activity_at` cada 60 s es un temporizador real de la instancia, no del `Clock`: en integración solo se puede probar esperando 60 s reales, y es lo que protege a la barra tras un reinicio brusco de `app` | Permitir fijar el intervalo en `AppDeps` (p. ej. `kitchenActivityIntervalMs?`, por defecto 60 000) o aceptar que se verifica solo en Etapa 3 (reinicio de `app` con la cola abierta). Mientras, se prueban el cierre y la reconexión | baja |
 
 Además, §4.5 recoge las **interpretaciones** vigentes: I-01..I-10 confirmadas
 o corregidas por el PO (1.1f), I-11, I-12 pendientes de T-19 y T-20, e

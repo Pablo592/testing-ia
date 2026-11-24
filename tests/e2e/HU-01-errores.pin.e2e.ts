@@ -72,8 +72,15 @@ test('[HU-01/CA-F12] (c) bloqueo temporal fabricado con la sesión abierta: "Cue
   await cambio.visible();
   await fabricarBloqueo(u.id, { fallos: 10, segundos: 14 * 60 + 10 });
   await cambio.cambiar(u.pin, pinAleatorio('waiter'));
-  await expect(page.getByRole('alert')).toContainText(TEXTOS.cuentaBloqueadaEspera(15));
+  const alerta = page.getByRole('alert');
+  await expect(alerta).toContainText(TEXTOS.cuentaBloqueadaEspera(15));
+  // T-30 (docs/ux/wireframes/01-login.md, 2.1d): "No se ha cambiado el PIN.",
+  // los tres PIN vaciados y teclado y "Guardar PIN" deshabilitados durante la cuenta atrás.
+  await expect(alerta).toContainText(TEXTOS.noSeHaCambiado);
+  await expect(login.campoPin()).toHaveValue('');
   await expect(page.getByRole('button', { name: 'Guardar PIN' })).toBeDisabled();
+  for (const d of ['0', '5', '9']) await expect(login.tecla(d)).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Cerrar sesión' })).toBeEnabled();
   await cambio.visible();
 });
 
@@ -94,6 +101,8 @@ test('[HU-01/CA-F13][RS-14] bloqueo indefinido desde otro dispositivo: la cola d
   await expect(page.getByRole('heading', { name: TEXTOS.quienEres })).toBeVisible({ timeout: 1000 });
   expect(Date.now() - t0).toBeLessThanOrEqual(1500); // 1 s del criterio + latencia de la propia petición
   await expect(page.getByText(TEXTOS.bloqueoIndefinido)).toBeVisible();
+  // Banner del motivo (reason de session.revoked = account_locked_manual), role="status".
+  await expect(new PantallaLogin(page).banner(TEXTOS.bloqueoIndefinido)).toBeVisible();
   // La pantalla no conserva datos de la cola.
   await expect(page.getByRole('heading', { level: 1, name: 'Cola' })).toHaveCount(0);
 

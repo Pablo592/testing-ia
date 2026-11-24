@@ -10,7 +10,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { montarApp, type Ctx } from '../../support/app.ts';
 import {
   codigo,
+  esperar401,
   incidencias,
+  incidenciasDe,
   IP_A,
   IP_B,
   IP_C,
@@ -82,8 +84,10 @@ describe('POST /auth/pin: cambio obligatorio del PIN provisional (P-1..P-4)', ()
       const r = await cambiarPin(cookie, i % 2 ? m.pin : pinIncorrecto(m.pin), pinAleatorio('manager'));
       expect(r.status).toBe(403);
       expect(codigo(r)).toBe('FORBIDDEN');
+      expect(r.body.error.details).toBeUndefined();
     }
     expect(ctx.hasher.verificaciones).toBe(antes);
+    expect(ctx.hasher.hashes).toBe(0);
     expect((await usuario(ctx.bd, m.id)).failed_attempts).toBe(0);
     // La IP A no ha sumado: admite 9 fallos de login sin 429 y el siguiente acierto entra.
     const otro = await crearUsuario(ctx, { rol: 'waiter' });
@@ -109,11 +113,13 @@ describe('POST /auth/pin: cambio obligatorio del PIN provisional (P-1..P-4)', ()
     const otraB = await sesion(ctx, u.nombre, u.pin, IP_B);
     const otraC = await sesion(ctx, u.nombre, u.pin, IP_C);
     const nuevo = pinAleatorio('manager');
+    const hashesAntes = ctx.hasher.hashes;
     const r = await cambiarPin(cookie, u.pin, nuevo);
     expect(r.status).toBe(204);
+    expect(ctx.hasher.hashes - hashesAntes).toBe(1); // hashNewPin, una vez
     expect((await usuario(ctx.bd, u.id)).must_change_pin).toBe(false);
-    expect((await pedir(ctx, { ruta: '/auth/me', cookie: otraB })).status).toBe(401);
-    expect((await pedir(ctx, { ruta: '/auth/me', cookie: otraC })).status).toBe(401);
+    esperar401(await pedir(ctx, { ruta: '/auth/me', cookie: otraB }), { reason: 'revoked', revokedReason: 'pin_changed' });
+    esperar401(await pedir(ctx, { ruta: '/auth/me', cookie: otraC }), { reason: 'revoked', revokedReason: 'pin_changed' });
     const me = await pedir(ctx, { ruta: '/auth/me', cookie });
     expect(me.status).toBe(200);
     expect(me.body.user.mustChangePin).toBe(false);
@@ -144,13 +150,20 @@ describe('POST /auth/pin: cambio obligatorio del PIN provisional (P-1..P-4)', ()
     ['manager', '147258', 'common'],
     ['waiter', '483', 'length'],
     ['waiter', '9876', 'sequence'],
+    ['waiter', '48a1', 'digits_only'],
+    ['kitchen', '381234', 'sequence'],
   ] as const)('[HU-01/CA-N01][RS-01][RS-02] P-4 %s con newPin "%s" → 400 (%s); el PIN no cambia', async (rol, newPin, regla) => {
     const { u, cookie } = await provisional(rol);
     const hashAntes = (await usuario(ctx.bd, u.id)).pin_hash;
+    const hashesAntes = ctx.hasher.hashes;
     const r = await cambiarPin(cookie, u.pin, newPin);
     expect(r.status).toBe(400);
-    expect(incidencias(r)).toContainEqual({ path: ['newPin'], rule: regla });
+    expect(codigo(r)).toBe('VALIDATION_FAILED');
+    // Una sola incidencia por campo: la primera regla que falla (docs/arquitectura.md §5, §7).
+    expect(incidenciasDe(r, ['newPin'])).toEqual([{ path: ['newPin'], rule: regla }]);
     expect(r.raw).not.toContain(newPin);
+    // hashNewPin valida antes de calcular el hash.
+    expect(ctx.hasher.hashes).toBe(hashesAntes);
     const fila = await usuario(ctx.bd, u.id);
     expect(fila.pin_hash).toBe(hashAntes);
     expect(fila.must_change_pin).toBe(true);
@@ -275,6 +288,9 @@ describe('Bloqueo indefinido: se revocan todas las sesiones de la cuenta (CA-F13
     const r = await cambiarPin(cookie, pinIncorrecto(u.pin), pinAleatorio('manager'));
     expect(r.status).toBe(423);
     expect(codigo(r)).toBe('ACCOUNT_LOCKED_MANUAL');
+    // Sin espera que termine sola: ni retryAfterSeconds ni Retry-After.
+    expect(reintentarEn(r)).toBeUndefined();
+    expect(r.headers['retry-after']).toBeUndefined();
 
     const fila = await usuario(ctx.bd, u.id);
     expect(fila.locked_manual).toBe(true);
@@ -284,7 +300,9 @@ describe('Bloqueo indefinido: se revocan todas las sesiones de la cuenta (CA-F13
     expect(sesiones.every((s) => s.revoked_at !== null)).toBe(true);
     // Las tres en la misma transacción.
     expect(new Set(sesiones.map((s) => s.revoked_at!.getTime())).size).toBe(1);
-    for (const c of [cookie, otraB, otraC]) expect((await pedir(ctx, { ruta: '/auth/me', cookie: c })).status).toBe(401);
+    for (const c of [cookie, otraB, otraC]) {
+      esperar401(await pedir(ctx, { ruta: '/auth/me', cookie: c }), { reason: 'revoked', revokedReason: 'account_locked_manual' });
+    }
 
     const ev = ctx.logs.eventos('auth.sessions.revoked').filter((e) => e.target_user_id === u.id);
     expect(ev).toHaveLength(1);
@@ -318,8 +336,12 @@ describe('Bloqueo indefinido: se revocan todas las sesiones de la cuenta (CA-F13
     const cierre = await sse.esperarCierre(1000);
     expect(revocado.llegada - t0).toBeLessThanOrEqual(1000);
     expect(cierre - t0).toBeLessThanOrEqual(1000);
+    // El evento lleva el motivo para el banner de P-01 (docs/arquitectura.md §6).
+    expect(revocado.data).toMatchObject({ reason: 'account_locked_manual' });
 
-    for (const c of [cA, cB, cC]) expect((await pedir(ctx, { ruta: '/auth/me', cookie: c })).status).toBe(401);
+    for (const c of [cA, cB, cC]) {
+      esperar401(await pedir(ctx, { ruta: '/auth/me', cookie: c }), { reason: 'revoked', revokedReason: 'account_locked_manual' });
+    }
     expect((await usuario(ctx.bd, u.id)).locked_manual).toBe(true);
     const ev = ctx.logs.eventos('auth.sessions.revoked').filter((e) => e.target_user_id === u.id);
     expect(ev).toHaveLength(1);

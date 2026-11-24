@@ -102,3 +102,16 @@ export async function sesionesActivas(userId: string): Promise<number> {
   );
   return Number(r.rows[0].n);
 }
+
+/**
+ * Lleva `last_activity_at` de las sesiones abiertas del usuario `minutos` al
+ * pasado (la pila real usa SystemClock). Con ≥ 15 min, la siguiente petición
+ * recibe 401 UNAUTHENTICATED con reason idle (docs/arquitectura.md §7).
+ */
+export async function fabricarInactividad(userId: string, minutos: number): Promise<void> {
+  await bd().query(
+    `UPDATE sessions SET last_activity_at = now() - make_interval(mins => $2::int)
+      WHERE user_id = $1 AND revoked_at IS NULL`,
+    [userId, minutos],
+  );
+}

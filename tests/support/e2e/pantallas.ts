@@ -23,10 +23,51 @@ export const TEXTOS = {
   cuentaBloqueadaEspera: (min: number) => `Cuenta bloqueada. Espera ${min} min`,
   pinActualMal: 'El PIN actual no es correcto.',
   inactividadAviso: 'Tu sesión se cerrará en 60 s por inactividad',
+  pinCambiado: 'PIN cambiado',
+  noSeHaCambiado: 'No se ha cambiado el PIN.',
+  /** Pantallas vacías de HU-01 (docs/ux/wireframes/10-acceso-denegado.md). */
+  pantallaVacia: 'Esta pantalla todavía no está disponible.',
+  // Banners de P-01 por motivo (docs/ux/wireframes/01-login.md, "Vuelta al
+  // inicio de sesión", 2.1d). Los elige el motivo del servidor, nunca el message.
   inactividadBanner: 'Sesión cerrada por inactividad.',
-  caducidadBanner: 'La sesión ha caducado (12 h). Vuelve a entrar con tu PIN.',
+  caducidadBanner: 'La sesión ha caducado por duración máxima. Vuelve a entrar con tu PIN.',
+  /** Patrón para comprobar que NO aparece ningún banner de motivo. */
+  cualquierBanner: /Sesión cerrada por inactividad|La sesión ha caducado|La sesión se ha cerrado|ha restablecido tu PIN|Has cambiado tu PIN|Usuario desactivado|Cuenta bloqueada\. Pide/,
+  // "Acceso denegado" (docs/ux/wireframes/10-acceso-denegado.md, 2.1d).
   accesoDenegado: /acceso denegado/i,
+  accesoDenegadoTitulo: 'Acceso denegado',
+  accesoDenegadoTexto: 'No tienes permiso para ver esta pantalla.',
+  accesoDenegadoAyuda: 'Si la necesitas, pide al encargado que revise tu rol.',
+  accesoDenegadoDocumento: 'Acceso denegado · Café · Toma de pedidos',
 } as const;
+
+/** Banner de P-01 por motivo del 401 / session.revoked. `null` = sin banner. */
+export const BANNER_POR_MOTIVO: Record<string, string | null> = {
+  idle: TEXTOS.inactividadBanner,
+  absolute: TEXTOS.caducidadBanner,
+  user_disabled: 'Usuario desactivado, contacta con el encargado.',
+  pin_reset: 'El encargado ha restablecido tu PIN: entra con el PIN provisional.',
+  pin_changed: 'Has cambiado tu PIN en otro dispositivo: vuelve a entrar.',
+  account_locked_manual: TEXTOS.bloqueoIndefinido,
+  logout: null,
+  sin_detalles: null,
+  desconocido: 'La sesión se ha cerrado. Vuelve a entrar con tu PIN.',
+};
+
+/** Enlace de "Acceso denegado" según el rol: [nombre accesible, ruta]. */
+export function enlaceInicio(rol: 'waiter' | 'kitchen' | 'manager'): [string, string] {
+  return rol === 'kitchen' ? ['Ir a la cola', RUTAS.cola] : ['Ir a Pedidos', RUTAS.pedidos];
+}
+
+/** h1 de cada ruta de primer nivel (wireframes 02, 04, 06, 08, 09). */
+export const TITULO_RUTA: Record<keyof typeof RUTAS, string> = {
+  login: '',
+  pedidos: 'Pedidos',
+  cola: 'Cola',
+  menu: 'Menú',
+  personal: 'Personal',
+  resumen: 'Resumen del día',
+};
 
 function escapar(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -83,6 +124,37 @@ export class PantallaLogin {
 
   alerta(): Locator {
     return this.page.getByRole('alert');
+  }
+
+  /** Banner de motivo del paso 1 (role="status"). */
+  banner(texto: string): Locator {
+    return this.page.getByRole('status').filter({ hasText: texto });
+  }
+}
+
+/** Estado "Acceso denegado" de la layout (la URL no cambia). */
+export class AccesoDenegado {
+  constructor(readonly page: Page) {}
+
+  titulo(): Locator {
+    return this.page.getByRole('heading', { level: 1, name: TEXTOS.accesoDenegadoTitulo });
+  }
+
+  async comprobar(rol: 'waiter' | 'kitchen' | 'manager'): Promise<void> {
+    await expect(this.titulo()).toBeVisible();
+    // Único elemento visible con ese texto (no se repite en el contenido ni en aria-live).
+    await expect(this.page.getByText(TEXTOS.accesoDenegado).filter({ visible: true })).toHaveCount(1);
+    await expect(this.page.getByText(TEXTOS.accesoDenegadoTexto, { exact: true })).toBeVisible();
+    await expect(this.page.getByText(TEXTOS.accesoDenegadoAyuda, { exact: true })).toBeVisible();
+    await expect(this.page).toHaveTitle(TEXTOS.accesoDenegadoDocumento);
+    await expect(this.titulo()).toBeFocused();
+    const [nombre] = enlaceInicio(rol);
+    await expect(this.enlace(rol)).toBeVisible();
+    await expect(this.page.getByRole('button', { name: nombre, exact: true })).toHaveCount(0);
+  }
+
+  enlace(rol: 'waiter' | 'kitchen' | 'manager'): Locator {
+    return this.page.getByRole('link', { name: enlaceInicio(rol)[0], exact: true });
   }
 }
 

@@ -7,6 +7,8 @@ import {
   codigo,
   cookieSesion,
   errorSinId,
+  esperar401,
+  incidencias,
   iniciarSesion,
   ipUnica,
   pedir,
@@ -170,7 +172,7 @@ describe('Cierre de sesión', () => {
     const out = await pedir(ctx, { metodo: 'POST', ruta: '/auth/logout', cookie });
     expect([200, 204]).toContain(out.status);
     const me = await pedir(ctx, { ruta: '/auth/me', cookie });
-    expect(me.status).toBe(401);
+    esperar401(me, { reason: 'revoked', revokedReason: 'logout' });
     const [s] = await sesionesDe(ctx.bd, u.id);
     expect(s.revoked_at).not.toBeNull();
     expect(ctx.logs.eventos('auth.logout').some((e) => e.user_id === u.id)).toBe(true);
@@ -184,9 +186,10 @@ describe('Cierre de sesión', () => {
     expect((await pedir(ctx, { ruta: '/auth/me', cookie: c2 })).status).toBe(200);
   });
 
-  test('[HU-01/CA-F08] sin sesión, /auth/me y /auth/logout responden 401', async () => {
-    expect((await pedir(ctx, { ruta: '/auth/me' })).status).toBe(401);
-    expect((await pedir(ctx, { metodo: 'POST', ruta: '/auth/logout' })).status).toBe(401);
+  test('[HU-01/CA-F08] sin sesión, /auth/me y /auth/logout responden 401 UNAUTHENTICATED sin details', async () => {
+    esperar401(await pedir(ctx, { ruta: '/auth/me' }), null);
+    esperar401(await pedir(ctx, { metodo: 'POST', ruta: '/auth/logout' }), null);
+    esperar401(await pedir(ctx, { ruta: '/auth/me', cookie: '__Host-sid=' + 'B'.repeat(43) }), null);
   });
 });
 
@@ -250,17 +253,17 @@ describe('Almacenamiento del PIN', () => {
 });
 
 describe('Peticiones del login fuera de contrato', () => {
-  test('[HU-01/CA-F05][RS-24] POST /auth/login sin Origin o con Origin ajeno → 403; sin JSON → 415', async () => {
+  test('[HU-01/CA-F05][RS-24] POST /auth/login sin Origin o con Origin ajeno → 403 ORIGIN_NOT_ALLOWED; sin JSON → 415 UNSUPPORTED_MEDIA_TYPE', async () => {
     const u = await crearUsuario(ctx, { rol: 'waiter' });
+    const antes = ctx.hasher.verificaciones;
     const sinOrigen = await pedir(ctx, { metodo: 'POST', ruta: '/auth/login', cuerpo: { name: u.nombre, pin: u.pin }, sinOrigen: true });
     expect(sinOrigen.status).toBe(403);
-    const ajeno = await pedir(ctx, {
-      metodo: 'POST',
-      ruta: '/auth/login',
-      cuerpo: { name: u.nombre, pin: u.pin },
-      cabeceras: { origin: 'https://evil.test' },
-    });
-    expect(ajeno.status).toBe(403);
+    expect(codigo(sinOrigen)).toBe('ORIGIN_NOT_ALLOWED');
+    for (const origin of ['https://evil.test', 'https://cafe.test:8443', 'http://cafe.test', 'null']) {
+      const ajeno = await pedir(ctx, { metodo: 'POST', ruta: '/auth/login', cuerpo: { name: u.nombre, pin: u.pin }, cabeceras: { origin } });
+      expect(ajeno.status, origin).toBe(403);
+      expect(codigo(ajeno), origin).toBe('ORIGIN_NOT_ALLOWED');
+    }
     const texto = await pedir(ctx, {
       metodo: 'POST',
       ruta: '/auth/login',
@@ -268,7 +271,48 @@ describe('Peticiones del login fuera de contrato', () => {
       cabeceras: { 'content-type': 'application/x-www-form-urlencoded' },
     });
     expect(texto.status).toBe(415);
+    expect(codigo(texto)).toBe('UNSUPPORTED_MEDIA_TYPE');
+    // Nada de lo anterior al handler verifica el PIN ni crea sesión.
+    expect(ctx.hasher.verificaciones).toBe(antes);
     expect(await sesionesDe(ctx.bd, u.id)).toHaveLength(0);
+  });
+
+  test('[HU-01/CA-F05] cuerpo que no es JSON → 400 VALIDATION_FAILED con { path: [], rule: invalid_json }', async () => {
+    const r = await pedir(ctx, { metodo: 'POST', ruta: '/auth/login', cuerpo: '{"name": ', ip: ipUnica() });
+    expect(r.status).toBe(400);
+    expect(codigo(r)).toBe('VALIDATION_FAILED');
+    expect(incidencias(r)).toEqual([{ path: [], rule: 'invalid_json' }]);
+  });
+
+  test('[HU-01/CA-F05] falta el nombre o sobra una clave → 400 VALIDATION_FAILED con path y regla del catálogo', async () => {
+    const sinNombre = await pedir(ctx, { metodo: 'POST', ruta: '/auth/login', cuerpo: { pin: '4831' }, ip: ipUnica() });
+    expect(sinNombre.status).toBe(400);
+    expect(incidencias(sinNombre)).toContainEqual({ path: ['name'], rule: 'required' });
+    const tipo = await pedir(ctx, { metodo: 'POST', ruta: '/auth/login', cuerpo: { name: 7, pin: '4831' }, ip: ipUnica() });
+    expect(incidencias(tipo)).toContainEqual({ path: ['name'], rule: 'type' });
+    const catalogo = ['required', 'type', 'format', 'enum', 'min', 'max', 'min_length', 'max_length', 'not_allowed', 'invalid_json'];
+    for (const i of [...incidencias(sinNombre), ...incidencias(tipo)]) {
+      expect(catalogo, JSON.stringify(i)).toContain(i.rule);
+      for (const parte of i.path) expect(['string', 'number']).toContain(typeof parte);
+    }
+  });
+
+  test('[HU-01/CA-F08][RS-24] orden de comprobaciones: Origin antes que sesión (POST /auth/logout sin cookie y sin Origin → 403 ORIGIN_NOT_ALLOWED)', async () => {
+    const r = await pedir(ctx, { metodo: 'POST', ruta: '/auth/logout', sinOrigen: true });
+    expect(r.status).toBe(403);
+    expect(codigo(r)).toBe('ORIGIN_NOT_ALLOWED');
+    // Con Origin correcto y sin cookie, ya es la sesión la que falla.
+    esperar401(await pedir(ctx, { metodo: 'POST', ruta: '/auth/logout' }), null);
+    // GET no comprueba Origin.
+    esperar401(await pedir(ctx, { ruta: '/auth/me', cabeceras: { origin: 'https://evil.test' } }), null);
+  });
+
+  test('[HU-01/CA-F08][RS-24] con sesión válida, un logout con Origin ajeno → 403 y la sesión sigue', async () => {
+    const u = await crearUsuario(ctx, { rol: 'waiter' });
+    const cookie = await sesion(ctx, u.nombre, u.pin);
+    const r = await pedir(ctx, { metodo: 'POST', ruta: '/auth/logout', cookie, cabeceras: { origin: 'https://evil.test' } });
+    expect(codigo(r)).toBe('ORIGIN_NOT_ALLOWED');
+    expect((await pedir(ctx, { ruta: '/auth/me', cookie })).status).toBe(200);
   });
 
   test('[HU-01/CA-N01][RS-31] un PIN con formato inválido da 400 sin repetir el valor recibido', async () => {

@@ -2,13 +2,14 @@
 // Compone la app en proceso con FakeClock, BD real, hasher espía y logs en
 // memoria (docs/testing.md §5.2, T-10). Nada de esto existe en la imagen: son
 // dependencias inyectadas, no endpoints de prueba.
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { buildApp } from '@mi-app/api/app';
 import { createPinHasher } from '@mi-app/api/auth/hasher';
 import { FakeClock } from './reloj.ts';
 import { CapturaLogs } from './logs.ts';
-import { bdAdmin, bdApp, type ConfigBd, variable } from './entorno.ts';
+import { bdApp, type ConfigBd, variable } from './entorno.ts';
+import { borrarBd, crearBdDesdePlantilla, nombreBdPrueba } from './bd-admin.ts';
 
 export const ORIGEN = 'https://cafe.test';
 /** IP del proxy de confianza en las pruebas en proceso (trustedProxies). */
@@ -22,6 +23,8 @@ export interface PinHasher {
 export interface HasherEspia extends PinHasher {
   /** Número de veces que se ha calculado una verificación argon2id. */
   verificaciones: number;
+  /** Número de hashes nuevos calculados (hashNewPin, docs/arquitectura.md §2.1). */
+  hashes: number;
 }
 
 interface RespuestaInject {
@@ -43,6 +46,8 @@ export interface AppFastify {
   ready(): Promise<unknown>;
   metricsText(): Promise<string>;
   hasRoute(opts: { method: string; url: string }): boolean;
+  /** API de Fastify para registrar una ruta (solo la usa RS-17, denegación por defecto). */
+  route(opts: { method: string; url: string; config?: unknown; handler: () => unknown }): unknown;
 }
 
 export interface RutaRegistrada {
@@ -76,7 +81,11 @@ export function hasherDePrueba(): PinHasher {
 function espiar(h: PinHasher): HasherEspia {
   const e: HasherEspia = {
     verificaciones: 0,
-    hash: (pin) => h.hash(pin),
+    hashes: 0,
+    hash: (pin) => {
+      e.hashes += 1;
+      return h.hash(pin);
+    },
     verify: async (hash, pin) => {
       e.verificaciones += 1;
       return h.verify(hash, pin);
@@ -87,8 +96,35 @@ function espiar(h: PinHasher): HasherEspia {
 
 export interface OpcionesApp {
   inicio?: string;
-  /** BD propia creada desde la plantilla migrada (necesita el rol de T-28). */
+  /**
+   * BD propia de ESTE test, clonada de la plantilla migrada (T-28). Por
+   * defecto la app usa la BD del fichero (tests/support/bd-fichero.ts), que
+   * comparten los tests del fichero; esta opción es para los casos que
+   * necesitan una BD sin ningún usuario (RS-09).
+   */
   bdAislada?: boolean;
+  /** AppDeps.sessionMaxHours (docs/arquitectura.md §2.1, §10.1). Sin valor: el por defecto (12). */
+  sessionMaxHours?: number;
+  /**
+   * Se llama con la instancia antes de `ready()`. Solo para RS-17: añadir una
+   * ruta sin declaración y comprobar la denegación por defecto. Nada de esto
+   * existe en la imagen.
+   */
+  antesDeReady?: (app: AppFastify) => void;
+}
+
+/** Dependencias de buildApp con los valores de prueba (para los tests que la llaman directamente). */
+export function depsApp(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    clock: new FakeClock(),
+    database: bdApp(),
+    pinHasher: hasherReal,
+    publicOrigin: ORIGEN,
+    trustedProxies: [IP_PROXY],
+    installation: { tableCount: 20, delayThresholdMinutes: 10 },
+    logDestination: new CapturaLogs().stream,
+    ...extra,
+  };
 }
 
 export async function montarApp(op: OpcionesApp = {}): Promise<Ctx> {
@@ -100,62 +136,66 @@ export async function montarApp(op: OpcionesApp = {}): Promise<Ctx> {
   let nombreBdAislada: string | undefined;
   let configBd = bdApp();
   if (op.bdAislada) {
-    nombreBdAislada = `t_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
-    const admin = new pg.Client(bdAdmin());
-    await admin.connect();
-    try {
-      const plantilla = process.env.DATABASE_TEMPLATE ?? 'app_template';
-      await admin.query(`CREATE DATABASE "${nombreBdAislada}" TEMPLATE "${plantilla}"`);
-    } finally {
-      await admin.end();
-    }
+    nombreBdAislada = nombreBdPrueba('a');
+    await crearBdDesdePlantilla(nombreBdAislada);
     configBd = bdApp(nombreBdAislada);
   }
 
-  const app = (await buildApp({
-    clock: reloj,
-    database: configBd,
-    pinHasher: hasher,
-    publicOrigin: ORIGEN,
-    trustedProxies: [IP_PROXY],
-    installation: { tableCount: 20, delayThresholdMinutes: 10 },
-    logDestination: logs.stream,
-    logLevel: 'info',
-    onRoute: (r: RutaRegistrada) => {
-      rutas.push({ method: r.method, url: r.url, config: r.config });
-    },
-  })) as unknown as AppFastify;
-  await app.ready();
+  let app: AppFastify | undefined;
+  let bd: pg.Pool | undefined;
+  // Orden de cierre obligatorio: pools de app_rw → app (cierra su pool en
+  // onClose) → DROP de la BD aislada (falla si queda una conexión de app_rw).
+  const cerrar = async () => {
+    await bd?.end().catch(() => undefined);
+    await app?.close();
+    if (nombreBdAislada) await borrarBd(nombreBdAislada);
+  };
 
-  const bd = new pg.Pool({ ...configBd, max: 2 });
+  try {
+    app = (await buildApp({
+      clock: reloj,
+      database: configBd,
+      pinHasher: hasher,
+      publicOrigin: ORIGEN,
+      trustedProxies: [IP_PROXY],
+      installation: { tableCount: 20, delayThresholdMinutes: 10 },
+      ...(op.sessionMaxHours === undefined ? {} : { sessionMaxHours: op.sessionMaxHours }),
+      logDestination: logs.stream,
+      logLevel: 'info',
+      onRoute: (r: RutaRegistrada) => {
+        rutas.push({ method: r.method, url: r.url, config: r.config });
+      },
+    })) as unknown as AppFastify;
+    op.antesDeReady?.(app);
+    await app.ready();
+    bd = new pg.Pool({ ...configBd, max: 2 });
+  } catch (e) {
+    await cerrar().catch(() => undefined);
+    throw e;
+  }
+
+  const appLista = app!;
+  const bdLista = bd!;
   return {
-    app,
+    app: appLista,
     reloj,
     hasher,
     logs,
     rutas,
-    bd,
+    bd: bdLista,
     configBd,
     async escuchar() {
-      return app.listen({ port: 0, host: '127.0.0.1' });
+      return appLista.listen({ port: 0, host: '127.0.0.1' });
     },
-    async cerrar() {
-      await bd.end().catch(() => undefined);
-      await app.close();
-      if (nombreBdAislada) {
-        const admin = new pg.Client(bdAdmin());
-        await admin.connect();
-        try {
-          await admin.query(`DROP DATABASE IF EXISTS "${nombreBdAislada}" WITH (FORCE)`);
-        } finally {
-          await admin.end();
-        }
-      }
-    },
+    cerrar,
   };
 }
 
-/** Dependencias para los comandos de host (createInitialManager, unlockUser). */
+/**
+ * CommandDeps de createInitialManager y unlockUser (docs/arquitectura.md §2.1).
+ * unlockUser acepta el mismo objeto (su tipo es un Pick de este). El pool del
+ * comando usa poolMax de configBd (4) y lo cierra el propio comando.
+ */
 export function depsComando(ctx: Ctx) {
   return { clock: ctx.reloj, database: ctx.configBd, pinHasher: ctx.hasher, logDestination: ctx.logs.stream };
 }

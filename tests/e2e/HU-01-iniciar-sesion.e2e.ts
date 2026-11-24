@@ -6,10 +6,23 @@ import {
   caducarSesiones,
   cerrarSemilla,
   fabricarBloqueo,
+  fabricarInactividad,
   sembrarUsuario,
   sesionesActivas,
 } from '../support/e2e/semilla.ts';
-import { BarraSuperior, CambioPin, entrarComo, PantallaLogin, RUTAS, TEXTOS } from '../support/e2e/pantallas.ts';
+import {
+  AccesoDenegado,
+  BANNER_POR_MOTIVO,
+  BarraSuperior,
+  CambioPin,
+  enlaceInicio,
+  entrarComo,
+  PantallaLogin,
+  RUTAS,
+  TEXTOS,
+  TITULO_RUTA,
+} from '../support/e2e/pantallas.ts';
+import { enAlcance } from '../support/alcance.ts';
 import { pinAleatorio } from '../support/datos.ts';
 
 test.afterAll(async () => {
@@ -45,17 +58,20 @@ test.describe('Destino y funciones por rol', () => {
     const u = await sembrarUsuario({ rol: 'manager' });
     await entrarComo(page, u);
     const barra = new BarraSuperior(page);
-    const destinos: [string, string][] = [
-      ['Cola de barra', RUTAS.cola],
-      ['Menú', RUTAS.menu],
-      ['Personal', RUTAS.personal],
-      ['Resumen del día', RUTAS.resumen],
+    const destinos: [string, string, string, boolean][] = [
+      ['Cola de barra', RUTAS.cola, TITULO_RUTA.cola, false],
+      ['Menú', RUTAS.menu, TITULO_RUTA.menu, !enAlcance('HU-05')],
+      ['Personal', RUTAS.personal, TITULO_RUTA.personal, !enAlcance('HU-07')],
+      ['Resumen del día', RUTAS.resumen, TITULO_RUTA.resumen, !enAlcance('HU-08')],
     ];
-    for (const [opcion, ruta] of destinos) {
+    for (const [opcion, ruta, titulo, vacia] of destinos) {
       await barra.gestion().click();
       await barra.opcionGestion(opcion).click();
       await expect(page).toHaveURL(new RegExp(`${ruta}$`));
+      await expect(barra.titulo(titulo)).toBeVisible();
       await expect(page.getByText(TEXTOS.accesoDenegado)).toHaveCount(0);
+      // Pantallas vacías de HU-01 hasta que llegue su historia (wireframe 10).
+      if (vacia) await expect(page.getByText(TEXTOS.pantallaVacia, { exact: true })).toBeVisible();
       // CA-U04: nombre y rol visibles en todas las pantallas.
       await expect(barra.usuario(u)).toBeVisible();
     }
@@ -77,13 +93,75 @@ test.describe('Destino y funciones por rol', () => {
           if (r.url().includes('/api/v1/') && !/\/auth\/me|\/events|\/session\/activity|\/telemetry/.test(r.url())) peticionesApi.push(r.url());
         });
         await page.goto(ruta);
-        await expect(page.getByText(TEXTOS.accesoDenegado)).toBeVisible();
+        const denegado = new AccesoDenegado(page);
+        await denegado.comprobar(rol);
+        // La URL no cambia y la barra superior sigue con nombre y rol (CA-U04).
+        await expect(page).toHaveURL(new RegExp(`${ruta}$`));
+        await expect(new BarraSuperior(page).usuario(u)).toBeVisible();
         // No se cargan datos de la función denegada.
         expect(peticionesApi, ruta).toEqual([]);
         page.removeAllListeners('request');
       }
+      // El enlace lleva al inicio del rol.
+      const denegado = new AccesoDenegado(page);
+      await denegado.enlace(rol).click();
+      await expect(page).toHaveURL(new RegExp(`${enlaceInicio(rol)[1]}$`));
+      await expect(denegado.titulo()).toHaveCount(0);
       await ctx.close();
     }
+  });
+
+  test('[HU-01/CA-F04] un 403 FORBIDDEN de la API en una pantalla montada la sustituye por "Acceso denegado" y recarga /auth/me', { tag: ['@HU-01', '@CA-F04'] }, async ({ page }) => {
+    // P-02 pide su snapshot (GET /orders/floor) al montarse desde HU-02 (docs/arquitectura.md §5.2, §6).
+    test.skip(!enAlcance('HU-02'), 'P-02 no pide datos hasta HU-02 (tests/support/alcance.ts)');
+    const u = await sembrarUsuario({ rol: 'waiter' });
+    await entrarComo(page, u);
+    await page.route('**/api/v1/orders/floor', (route) =>
+      route.fulfill({
+        status: 403,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { code: 'FORBIDDEN', message: 'x', requestId: 'r' } }),
+      }),
+    );
+    const recargaMe = page.waitForRequest((r) => r.url().endsWith('/api/v1/auth/me'));
+    await page.goto(RUTAS.pedidos);
+    await new AccesoDenegado(page).comprobar('waiter');
+    await recargaMe;
+    await expect(page).toHaveURL(new RegExp(`${RUTAS.pedidos}$`));
+  });
+
+  test('[HU-01/CA-F04] otros 403 (PIN_CHANGE_REQUIRED) no muestran "Acceso denegado"', { tag: ['@HU-01', '@CA-F04'] }, async ({ page }) => {
+    const u = await sembrarUsuario({ rol: 'waiter', pinProvisional: true });
+    await new PantallaLogin(page).iniciarSesion(u);
+    await new CambioPin(page).visible();
+    await page.goto(RUTAS.pedidos);
+    await expect(page.getByText(TEXTOS.accesoDenegado)).toHaveCount(0);
+  });
+});
+
+test.describe('Banner de P-01 por el motivo del 401 (sin evento SSE)', () => {
+  test('[HU-01/CA-F09] sesión caducada por inactividad mientras la pantalla estaba apagada: al recargar, P-01 con "Sesión cerrada por inactividad."', { tag: ['@HU-01', '@CA-F09'] }, async ({ page }) => {
+    const u = await sembrarUsuario({ rol: 'waiter' });
+    await entrarComo(page, u);
+    await fabricarInactividad(u.id, 16);
+    await page.reload();
+    const login = new PantallaLogin(page);
+    await expect(page.getByRole('heading', { name: TEXTOS.quienEres })).toBeVisible();
+    await expect(login.banner(BANNER_POR_MOTIVO.idle!)).toBeVisible();
+    // Desaparece al elegir un usuario.
+    await login.elegir(u);
+    await expect(page.getByText(TEXTOS.inactividadBanner)).toHaveCount(0);
+  });
+
+  test('[HU-01/CA-F08] tras cerrar sesión (revokedReason logout) no hay banner, tampoco al recargar', { tag: ['@HU-01', '@CA-F08'] }, async ({ page }) => {
+    const u = await sembrarUsuario({ rol: 'waiter' });
+    await entrarComo(page, u);
+    await new BarraSuperior(page).cerrarSesion().click();
+    await expect(page.getByRole('heading', { name: TEXTOS.quienEres })).toBeVisible();
+    await expect(page.getByText(TEXTOS.cualquierBanner)).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole('heading', { name: TEXTOS.quienEres })).toBeVisible();
+    await expect(page.getByText(TEXTOS.cualquierBanner)).toHaveCount(0);
   });
 });
 
@@ -324,6 +402,6 @@ test.describe('Cierre automático', () => {
     await caducarSesiones(u.id, -1);
     await page.clock.fastForward('15:00');
     await expect(page.getByRole('heading', { name: TEXTOS.quienEres })).toBeVisible();
-    await expect(page.getByText(TEXTOS.caducidadBanner)).toBeVisible();
+    await expect(new PantallaLogin(page).banner(TEXTOS.caducidadBanner)).toBeVisible();
   });
 });

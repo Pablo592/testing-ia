@@ -22,7 +22,8 @@ const chromium = {
   },
 };
 
-const NORMALES = /e2e\/.*(?<!\.pin)\.e2e\.ts$/;
+// *.pin.e2e.ts (PIN erróneo) y *.red.e2e.ts (cortes de Toxiproxy) van en serie aparte.
+const NORMALES = /e2e\/.*(?<!\.pin|\.red)\.e2e\.ts$/;
 const DISPOSITIVO = /e2e\/.*\.dispositivo\.e2e\.ts$/;
 
 export default defineConfig({
@@ -63,6 +64,8 @@ export default defineConfig({
     { name: 'movil', testMatch: DISPOSITIVO, use: { ...chromium, viewport: { width: 375, height: 812 }, hasTouch: true } },
     // PIN erróneo: un solo navegador y en serie (presupuesto de fallos por IP, tests/README.md).
     { name: 'serie-pin', testMatch: /e2e\/.*\.pin\.e2e\.ts$/, fullyParallel: false, use: { ...chromium, viewport: { width: 1280, height: 800 }, hasTouch: true } },
+    // Cortes de red con Toxiproxy (proxy compartido): un worker y nada más en paralelo.
+    { name: 'serie-red', testMatch: /e2e\/.*\.red\.e2e\.ts$/, fullyParallel: false, use: { ...chromium, viewport: { width: 1280, height: 800 }, hasTouch: true } },
     { name: 'a11y', testMatch: /a11y\/.*\.a11y\.ts$/, use: { ...chromium, viewport: { width: 1280, height: 800 } } },
     { name: 'visual', testMatch: /visual\/.*\.visual\.ts$/, use: { ...chromium } },
     // Semilla de datos para k6 (tests/run.sh perf); no abre navegador.

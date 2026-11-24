@@ -4,17 +4,20 @@
 // ejecuta cuando la historia está en tests/support/alcance.ts.
 //
 // Para cada ruta × {sin sesión, camarero, barra, encargado, PIN provisional}:
-//   - sin sesión → 401;
+//   - sin sesión → 401 UNAUTHENTICATED sin details;
 //   - PIN provisional → 403 PIN_CHANGE_REQUIRED (salvo /auth/me, /auth/pin, /auth/logout);
 //   - rol sin permiso → 403 FORBIDDEN y la BD no cambia;
 //   - rol con permiso → la autorización deja pasar (ni 401 ni esos 403; el
 //     cuerpo vacío puede dar 400/404/409, que no se evalúan aquí).
-// El middleware de permisos va antes de la validación (docs/arquitectura.md §5, §7).
+// Orden fijo de las comprobaciones (docs/arquitectura.md §5): Origin → sesión
+// → PIN provisional → permiso → 415/400 → handler. Por eso un rol sin permiso
+// recibe 403 aunque el cuerpo sea inválido, y sin Origin (métodos que
+// modifican) el 403 ORIGIN_NOT_ALLOWED llega antes que el 401.
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { enAlcance } from '../support/alcance.ts';
 import { montarApp, type Ctx } from '../support/app.ts';
-import { codigo, pedir, sesion } from '../support/http.ts';
+import { codigo, esperar401, pedir, sesion } from '../support/http.ts';
 import { crearUsuario, type Rol } from '../support/fixtures.ts';
 import { huella } from '../support/bd.ts';
 import { PERMISOS_ESPERADOS } from '../support/oraculo-permisos.ts';
@@ -32,6 +35,12 @@ interface Fila {
   /** Flujo SSE: las celdas permitidas se prueban en tests/integration/realtime. */
   sse?: boolean;
   query?: string;
+  /**
+   * Cuerpo bien formado para las celdas de la tabla. Solo /auth/pin: su
+   * 403 FORBIDDEN sin PIN provisional (permiso session:self, que todos tienen)
+   * no lo da el RBAC; con `{}` podría salir antes el 400 de zod (hallazgo T-39).
+   */
+  cuerpo?: unknown;
 }
 
 const W: Rol = 'waiter';
@@ -43,7 +52,7 @@ const TABLA: Fila[] = [
   { historia: 'HU-01', metodo: 'GET', patron: '/auth/me', permiso: 'session:self', roles: [W, K, M], conProvisional: true },
   { historia: 'HU-01', metodo: 'POST', patron: '/auth/logout', permiso: 'session:self', roles: [W, K, M], conProvisional: true },
   // POST /auth/pin: solo con PIN provisional; sin él → 403 FORBIDDEN para todos los roles.
-  { historia: 'HU-01', metodo: 'POST', patron: '/auth/pin', permiso: 'session:self', roles: [], conProvisional: true },
+  { historia: 'HU-01', metodo: 'POST', patron: '/auth/pin', permiso: 'session:self', roles: [], conProvisional: true, cuerpo: { currentPin: '000000', newPin: '739164' } },
   { historia: 'HU-01', metodo: 'POST', patron: '/session/activity', permiso: 'session:self', roles: [W, K, M] },
   { historia: 'HU-01', metodo: 'GET', patron: '/events', permiso: 'events:subscribe', roles: [W, K, M], sse: true },
   // HU-05
@@ -135,15 +144,16 @@ for (const f of TABLA) {
       test(`[HU-01/CA-F04][HU-01/CA-N02][RS-18] ${q} → ${permitido ? 'autorizado' : 'denegado'}`, async () => {
         const cookie = await cookieDe(q);
         const antes = await huella(ctx.bd);
-        const r = await pedir(ctx, { metodo: f.metodo, ruta: concreta(f), cookie, cuerpo: f.metodo === 'GET' ? undefined : {} });
+        const r = await pedir(ctx, { metodo: f.metodo, ruta: concreta(f), cookie, cuerpo: f.metodo === 'GET' ? undefined : (f.cuerpo ?? {}) });
         if (q === 'anonimo') {
-          expect(r.status).toBe(401);
+          esperar401(r, null);
         } else if (q === 'provisional' && !f.conProvisional) {
           expect(r.status).toBe(403);
           expect(codigo(r)).toBe('PIN_CHANGE_REQUIRED');
         } else if (!permitido) {
           expect(r.status).toBe(403);
           expect(codigo(r)).toBe('FORBIDDEN');
+          expect(r.body.error.details, 'FORBIDDEN sin details').toBeUndefined();
         } else {
           expect(r.status).not.toBe(401);
           expect(['FORBIDDEN', 'PIN_CHANGE_REQUIRED']).not.toContain(codigo(r));
@@ -151,9 +161,44 @@ for (const f of TABLA) {
         if (!permitido) expect(await huella(ctx.bd), 'sin efecto en BD').toBe(antes);
       });
     }
+
+    if (f.metodo !== 'GET') {
+      test(`[HU-01/CA-F04][RS-24] sin Origin → 403 ORIGIN_NOT_ALLOWED antes que la sesión (anónimo y encargado)`, async () => {
+        for (const q of ['anonimo', M] as Quien[]) {
+          const cookie = await cookieDe(q);
+          const antes = await huella(ctx.bd);
+          const r = await pedir(ctx, { metodo: f.metodo, ruta: concreta(f), cookie, cuerpo: f.cuerpo ?? {}, sinOrigen: true });
+          expect(r.status, q).toBe(403);
+          expect(codigo(r), q).toBe('ORIGIN_NOT_ALLOWED');
+          expect(await huella(ctx.bd), 'sin efecto en BD').toBe(antes);
+        }
+      });
+
+      const sinPermiso = ([W, K, M] as Rol[]).filter((q) => !f.roles.includes(q));
+      // /auth/pin se excluye: su 403 no es del RBAC (T-39).
+      if (f.roles.length > 0 && sinPermiso.length > 0) {
+        test(`[HU-01/CA-F04][HU-01/CA-N02] rol sin permiso con cuerpo inválido (no JSON, texto) → 403 FORBIDDEN, no 400/415`, async () => {
+          for (const q of sinPermiso) {
+            const cookie = await cookieDe(q);
+            const noJson = await pedir(ctx, { metodo: f.metodo, ruta: concreta(f), cookie, cuerpo: '{"x": ' });
+            expect([noJson.status, codigo(noJson)], `${q} no JSON`).toEqual([403, 'FORBIDDEN']);
+            const texto = await pedir(ctx, {
+              metodo: f.metodo,
+              ruta: concreta(f),
+              cookie,
+              cuerpo: 'a=1',
+              cabeceras: { 'content-type': 'application/x-www-form-urlencoded' },
+            });
+            expect([texto.status, codigo(texto)], `${q} texto`).toEqual([403, 'FORBIDDEN']);
+          }
+        });
+      }
+    }
   });
 }
 
+// RS-18 pide 404 para todos; con los hooks onRequest de §5 podría salir antes
+// 401/403 (hallazgo T-40, pendiente del SE y Cybersecurity).
 describe('Rutas que no existen en el MVP (HU-09 fuera)', () => {
   for (const metodo of ['GET', 'PATCH'] as const) {
     test(`[HU-01/CA-F04][RS-18] ${metodo} /settings → 404 para todos`, async () => {
@@ -166,6 +211,30 @@ describe('Rutas que no existen en el MVP (HU-09 fuera)', () => {
 });
 
 describe('Denegación por defecto (RS-17)', () => {
+  test('[HU-01/CA-N02][RS-17] una ruta sin permission/public/internal en config responde 403 FORBIDDEN, sin ejecutar el handler', async () => {
+    let ejecutado = 0;
+    const c = await montarApp({
+      antesDeReady: (app) => {
+        // Solo en proceso: la imagen no tiene esta ruta. Se registra sin config.
+        app.route({ method: 'GET', url: '/api/v1/prueba-sin-declaracion', handler: () => ((ejecutado += 1), { ok: true }) });
+        app.route({ method: 'POST', url: '/api/v1/prueba-sin-declaracion', handler: () => ((ejecutado += 1), { ok: true }) });
+      },
+    });
+    try {
+      const m = await crearUsuario(c, { rol: M });
+      const cookie = await sesion(c, m.nombre, m.pin);
+      for (const metodo of ['GET', 'POST']) {
+        const r = await pedir(c, { metodo, ruta: '/prueba-sin-declaracion', cookie, cuerpo: metodo === 'GET' ? undefined : {} });
+        expect([r.status, codigo(r)], metodo).toEqual([403, 'FORBIDDEN']);
+      }
+      // Sin sesión, antes la sesión (401).
+      esperar401(await pedir(c, { ruta: '/prueba-sin-declaracion' }), null);
+      expect(ejecutado).toBe(0);
+    } finally {
+      await c.cerrar();
+    }
+  });
+
   test('[HU-01/CA-N02][RS-17] toda ruta registrada declara un permiso conocido, o es pública/interna de la lista cerrada', () => {
     expect(ctx.rutas.length).toBeGreaterThan(0);
     const conocidos = new Set(Object.values(PERMISOS_ESPERADOS).flat());

@@ -187,4 +187,19 @@ describe('Registro de bloqueos (CA-N05)', () => {
     expect(valorMetrica(metricas, 'auth_verifications_total', { purpose: 'login', result: 'locked' })).toBe(1);
   });
 
+  test('[HU-01/CA-N05][RS-47] cada instancia de buildApp tiene su propio registro de métricas: dos a la vez no se mezclan ni fallan', async () => {
+    // Una segunda instancia en el mismo proceso: con el registro global de
+    // prom-client fallaría por métricas duplicadas o sumaría las dos.
+    const otra = await montarApp();
+    try {
+      const u = await crearUsuario(ctx, { rol: 'waiter' });
+      for (let i = 0; i < 5; i++) await fallar(u);
+      const aqui = await ctx.app.metricsText();
+      const alli = await otra.app.metricsText();
+      expect(valorMetrica(aqui, 'auth_lockouts_total', { kind: 'temporary', purpose: 'login', target_role: 'waiter' })).toBe(1);
+      expect(valorMetrica(alli, 'auth_lockouts_total', { kind: 'temporary', purpose: 'login', target_role: 'waiter' })).toBe(0);
+    } finally {
+      await otra.cerrar();
+    }
+  });
 });

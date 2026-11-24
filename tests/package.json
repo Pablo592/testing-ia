@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@mi-app/api": "workspace:*",
-    "@mi-app/shared": "workspace:*"
+    "@mi-app/shared": "workspace:*",
+    "@mi-app/web": "workspace:*"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.2",

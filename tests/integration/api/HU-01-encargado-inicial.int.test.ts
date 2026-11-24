@@ -3,8 +3,12 @@
 // operador del sistema con `unlock-user`); RS-09, RS-09b.
 // RS-09 necesita una BD sin encargados: BD aislada creada desde la plantilla
 // migrada (rol de TESTING con CREATEDB, hallazgo T-28).
+// Contrato (docs/arquitectura.md §2.1): createInitialManager → 'created' |
+// 'skipped' o rechaza con InvalidPinError { rule } sin el PIN en el mensaje;
+// unlockUser → 'unlocked' | 'not_found'. Los envoltorios de la imagen salen
+// con 0 (created/skipped/unlocked), 2 (not_found) y 1 (error): hallazgo T-41.
 import { afterEach, describe, expect, test } from 'vitest';
-import { createInitialManager, unlockUser } from '@mi-app/api/commands';
+import { createInitialManager, InvalidPinError, unlockUser } from '@mi-app/api/commands';
 import { depsComando, montarApp, type Ctx } from '../../support/app.ts';
 import { codigo, iniciarSesion, pedir, sesion } from '../../support/http.ts';
 import { crearUsuario, nombreUnico, pinAleatorio, pinIncorrecto } from '../../support/fixtures.ts';
@@ -32,19 +36,67 @@ describe('Encargado inicial (create-initial-manager)', () => {
     expect(fila).toMatchObject({ role: 'manager', must_change_pin: true, active: true, failed_attempts: 0, pin_digits: 6 });
     expect(fila!.pin_hash.startsWith('$argon2id$')).toBe(true);
     expect(ctx.logs.eventos('staff.initial_manager.created')).toHaveLength(1);
+    // Auditoría user.created con actor system (actor_id nulo, como en user.unlocked).
+    const audit = await ctx.bd.query(`SELECT actor_id, action FROM audit_log WHERE entity_id = $1`, [fila!.id]);
+    expect(audit.rows).toEqual([{ actor_id: null, action: 'user.created' }]);
 
     expect(await createInitialManager(depsComando(ctx), { name: nombreUnico('Otra'), pin: pinAleatorio('manager') })).toBe('skipped');
     expect(await encargados(ctx)).toBe(1);
   });
 
-  test.each([['48317'], ['4831'], ['1234567'], ['123456'], ['111111']])(
-    '[HU-01/CA-N01][RS-09] PIN provisional "%s" que no cumple las reglas de encargado → rechazado, no crea nada',
-    async (pin) => {
+  test.each([
+    ['48317', 'manager_length'],
+    ['4831', 'manager_length'],
+    ['1234567', 'manager_length'],
+    ['123456', 'sequence'],
+    ['111111', 'all_same'],
+    ['121212', 'repeated_block'],
+    ['48a173', 'digits_only'],
+  ])(
+    '[HU-01/CA-N01][RS-09] PIN provisional "%s" que no cumple las reglas de encargado → InvalidPinError (%s), no crea nada',
+    async (pin, regla) => {
       ctx = await montarApp({ bdAislada: true });
-      await expect(createInitialManager(depsComando(ctx), { name: nombreUnico('Marta'), pin })).rejects.toThrow();
+      let error: unknown;
+      try {
+        await createInitialManager(depsComando(ctx), { name: nombreUnico('Marta'), pin });
+      } catch (e) {
+        error = e;
+      }
+      expect(error).toBeInstanceOf(InvalidPinError);
+      expect((error as { rule?: string }).rule).toBe(regla);
+      expect(String((error as Error).message)).not.toContain(pin);
+      expect(await encargados(ctx)).toBe(0);
+      expect(ctx.logs.texto()).not.toContain(pin);
+    },
+  );
+
+  test.each([[''], ['   '], ['M'.repeat(31)]])(
+    '[HU-07/CA-F04][RS-09] nombre "%s" fuera de 1–30 caracteres tras recortar → rechazado, no crea nada',
+    async (nombre) => {
+      ctx = await montarApp({ bdAislada: true });
+      await expect(createInitialManager(depsComando(ctx), { name: nombre, pin: pinAleatorio('manager') })).rejects.toThrow();
       expect(await encargados(ctx)).toBe(0);
     },
   );
+
+  test('[HU-07/CA-F04][RS-09] si existe un encargado, aunque esté desactivado → skipped sin tocar nada', async () => {
+    ctx = await montarApp({ bdAislada: true });
+    const m = await crearUsuario(ctx, { rol: 'manager', activo: false });
+    const antes = await usuario(ctx.bd, m.id);
+    expect(await createInitialManager(depsComando(ctx), { name: nombreUnico('Otra'), pin: pinAleatorio('manager') })).toBe('skipped');
+    expect(await encargados(ctx)).toBe(1);
+    expect(await usuario(ctx.bd, m.id)).toEqual(antes);
+  });
+
+  test('[HU-07/CA-F04][RS-09] dos ejecuciones simultáneas crean un solo encargado (pg_advisory_xact_lock)', async () => {
+    ctx = await montarApp({ bdAislada: true });
+    const r = await Promise.all([
+      createInitialManager(depsComando(ctx), { name: nombreUnico('Uno'), pin: pinAleatorio('manager') }),
+      createInitialManager(depsComando(ctx), { name: nombreUnico('Dos'), pin: pinAleatorio('manager') }),
+    ]);
+    expect([...r].sort()).toEqual(['created', 'skipped']);
+    expect(await encargados(ctx)).toBe(1);
+  });
 
   test('[HU-07/CA-F04][HU-01/CA-F03] primer inicio de sesión del encargado inicial: obligado a cambiar el PIN y después accede a todo', async () => {
     ctx = await montarApp({ bdAislada: true });
@@ -89,7 +141,9 @@ describe('Desbloqueo por el operador del sistema (unlock-user)', () => {
   test('[HU-01/CA-F06][RS-09b] tras unlock-user el contador empieza de cero: 4 fallos no bloquean', async () => {
     ctx = await montarApp();
     const u = await crearUsuario(ctx, { rol: 'waiter', fallos: 7, bloqueadoHasta: new Date('2026-11-24T09:10:00Z') });
-    await unlockUser(depsComando(ctx), u.nombre);
+    // unlockUser acepta el subconjunto { clock, database, logDestination } (Pick de CommandDeps).
+    const { clock, database, logDestination } = depsComando(ctx);
+    expect(await unlockUser({ clock, database, logDestination }, u.nombre.toUpperCase())).toBe('unlocked');
     for (let i = 0; i < 4; i++) {
       expect((await iniciarSesion(ctx, u.nombre, pinIncorrecto(u.pin))).res.status).toBe(401);
     }
@@ -98,6 +152,17 @@ describe('Desbloqueo por el operador del sistema (unlock-user)', () => {
 
   test('[HU-01/CA-F06] unlock-user de un nombre inexistente no cambia nada', async () => {
     ctx = await montarApp();
+    const antes = await ctx.bd.query(`SELECT count(*)::text AS n FROM audit_log WHERE action = 'user.unlocked'`);
     expect(await unlockUser(depsComando(ctx), nombreUnico('nadie'))).toBe('not_found');
+    const despues = await ctx.bd.query(`SELECT count(*)::text AS n FROM audit_log WHERE action = 'user.unlocked'`);
+    expect(despues.rows).toEqual(antes.rows);
+  });
+
+  test('[HU-01/CA-F06][RS-09b] unlock-user de un usuario no bloqueado también audita user.unlocked como system', async () => {
+    ctx = await montarApp();
+    const u = await crearUsuario(ctx, { rol: 'waiter' });
+    expect(await unlockUser(depsComando(ctx), u.nombre)).toBe('unlocked');
+    const audit = await ctx.bd.query(`SELECT actor_id FROM audit_log WHERE entity_id = $1 AND action = 'user.unlocked'`, [u.id]);
+    expect(audit.rows).toEqual([{ actor_id: null }]);
   });
 });

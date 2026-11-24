@@ -87,12 +87,64 @@ export function codigo(r: Resp): string | undefined {
   return r.body?.error?.code;
 }
 
+/**
+ * Segundos de espera de un 423 LOCKED / 429 (docs/arquitectura.md §5). Además
+ * de devolverlo, comprueba el contrato: entero ≥ 1 y cabecera Retry-After con
+ * el mismo valor; si no hay `retryAfterSeconds`, tampoco debe haber cabecera
+ * (423 ACCOUNT_LOCKED_MANUAL). Lanza si no se cumple.
+ */
 export function reintentarEn(r: Resp): number | undefined {
-  return r.body?.error?.details?.retryAfterSeconds;
+  const v: unknown = r.body?.error?.details?.retryAfterSeconds;
+  const cabecera = r.headers['retry-after'];
+  if (v === undefined) {
+    if (cabecera !== undefined) throw new Error(`Retry-After (${String(cabecera)}) sin details.retryAfterSeconds`);
+    return undefined;
+  }
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) {
+    throw new Error(`retryAfterSeconds debe ser un entero ≥ 1 (recibido ${JSON.stringify(v)})`);
+  }
+  if (String(cabecera) !== String(v)) {
+    throw new Error(`Retry-After (${String(cabecera)}) distinto de retryAfterSeconds (${v})`);
+  }
+  return v;
 }
 
-export function incidencias(r: Resp): { path: string[]; rule: string }[] {
+/** `issues[].path` como lo da zod: los índices de array son números (docs/arquitectura.md §5). */
+export type RutaCampo = (string | number)[];
+
+export function incidencias(r: Resp): { path: RutaCampo; rule: string }[] {
   return r.body?.error?.details?.issues ?? [];
+}
+
+/** Incidencias de un campo concreto (path exacto). */
+export function incidenciasDe(r: Resp, path: RutaCampo): { path: RutaCampo; rule: string }[] {
+  return incidencias(r).filter((i) => JSON.stringify(i.path) === JSON.stringify(path));
+}
+
+export function detalles(r: Resp): Record<string, unknown> | undefined {
+  return r.body?.error?.details;
+}
+
+/** Motivo de fin de sesión de un 401 UNAUTHENTICATED (docs/arquitectura.md §5). */
+export type Motivo401 =
+  | { reason: 'idle' }
+  | { reason: 'absolute' }
+  | { reason: 'revoked'; revokedReason: 'logout' | 'user_disabled' | 'pin_reset' | 'pin_changed' | 'account_locked_manual' };
+
+/**
+ * Comprueba un 401 UNAUTHENTICATED y su `details`: con motivo si la cookie es
+ * de una sesión que existió; sin `details` si no hay cookie o el token es
+ * desconocido (`motivo` = null).
+ */
+export function esperar401(r: Resp, motivo: Motivo401 | null): void {
+  if (r.status !== 401 || codigo(r) !== 'UNAUTHENTICATED') {
+    throw new Error(`se esperaba 401 UNAUTHENTICATED, llegó ${r.status} ${codigo(r) ?? ''}: ${r.raw.slice(0, 200)}`);
+  }
+  const d = detalles(r);
+  const esperado = motivo === null ? undefined : motivo;
+  if (JSON.stringify(d) !== JSON.stringify(esperado)) {
+    throw new Error(`details del 401: esperado ${JSON.stringify(esperado)}, recibido ${JSON.stringify(d)}`);
+  }
 }
 
 export async function iniciarSesion(

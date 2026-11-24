@@ -1,0 +1,46 @@
+// BD efímeras de integración (docs/testing.md §9.2; docs/infraestructura.md
+// §9.1, T-28): clon de app_template con test_admin y borrado al terminar.
+//
+// `DROP DATABASE … WITH (FORCE)` no puede cerrar conexiones de app_rw
+// (test_admin no tiene pg_signal_backend, a propósito): antes de borrar hay que
+// cerrar todos los pools (el de la app en proceso, en app.close(), y los de los
+// constructores de datos). Si queda una conexión abierta, el DROP falla y el
+// test lo informa: es una fuga de conexiones, no un fallo de infraestructura.
+import { randomUUID } from 'node:crypto';
+import pg from 'pg';
+import { bdAdmin, plantilla } from './entorno.ts';
+
+function nombreSeguro(n: string): string {
+  if (!/^t_[a-z0-9_]{1,40}$/.test(n)) throw new Error(`nombre de BD de prueba no válido: ${n}`);
+  return n;
+}
+
+export function nombreBdPrueba(prefijo = ''): string {
+  const p = prefijo.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 20);
+  return nombreSeguro(`t_${p}${p ? '_' : ''}${randomUUID().replace(/-/g, '').slice(0, 12)}`);
+}
+
+async function conAdmin<T>(fn: (c: pg.Client) => Promise<T>): Promise<T> {
+  const c = new pg.Client(bdAdmin());
+  await c.connect();
+  try {
+    return await fn(c);
+  } finally {
+    await c.end();
+  }
+}
+
+export async function crearBdDesdePlantilla(nombre: string): Promise<void> {
+  await conAdmin((c) => c.query(`CREATE DATABASE "${nombreSeguro(nombre)}" TEMPLATE "${plantilla()}"`));
+}
+
+export async function borrarBd(nombre: string): Promise<void> {
+  try {
+    await conAdmin((c) => c.query(`DROP DATABASE IF EXISTS "${nombreSeguro(nombre)}" WITH (FORCE)`));
+  } catch (e) {
+    throw new Error(
+      `No se pudo borrar la BD de prueba ${nombre}: ¿queda abierta una conexión de app_rw ` +
+        `(pool sin cerrar o app sin close())? ${(e as Error).message}`,
+    );
+  }
+}

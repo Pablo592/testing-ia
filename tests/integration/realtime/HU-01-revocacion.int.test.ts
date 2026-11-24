@@ -46,6 +46,8 @@ describe('Flujo SSE y sesión', () => {
     const cierre = await sse.esperarCierre(1000);
     expect(ev.llegada - t0).toBeLessThanOrEqual(1000);
     expect(cierre - t0).toBeLessThanOrEqual(1000);
+    // Mismo valor que details.revokedReason del 401 (docs/arquitectura.md §5, §6).
+    expect(ev.data).toMatchObject({ reason: 'logout' });
     expect((await abrirSse(base, cookie)).status).toBe(401);
   });
 

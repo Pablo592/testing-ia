@@ -26,19 +26,30 @@ export interface ConfigBd {
   poolMax?: number;
 }
 
+/**
+ * BD de este fichero de integración: la fija tests/support/bd-fichero.ts
+ * (setupFiles de vitest.integration.config.ts) con un clon de app_template.
+ * Si no hay (E2E, semilla de k6), se usa DATABASE_NAME.
+ */
+export const VAR_BD_FICHERO = 'TEST_FILE_DATABASE';
+
 /** Conexión con el rol de la aplicación (app_rw). */
 export function bdApp(database?: string): ConfigBd {
   return {
     host: variable('DATABASE_HOST'),
     port: Number(process.env.DATABASE_PORT ?? '5432'),
-    database: database ?? variable('DATABASE_NAME'),
+    database: database ?? (process.env[VAR_BD_FICHERO] || variable('DATABASE_NAME')),
     user: variable('DATABASE_APP_USER'),
     password: secreto('DATABASE_APP_PASSWORD_FILE'),
     poolMax: 4,
   };
 }
 
-/** Rol solo de TESTING con CREATEDB (para BD aisladas, hallazgo T-28). */
+/**
+ * Rol solo de TESTING con CREATEDB (T-28, docs/infraestructura.md §9.1): se
+ * conecta a la BD `postgres`, clona app_template y borra sus clones. No lee
+ * tablas de la app. Límite de 4 conexiones: se usa un Client por operación.
+ */
 export function bdAdmin(): ConfigBd {
   return {
     host: variable('DATABASE_HOST'),
@@ -47,6 +58,10 @@ export function bdAdmin(): ConfigBd {
     user: variable('DATABASE_ADMIN_USER'),
     password: secreto('DATABASE_ADMIN_PASSWORD_FILE'),
   };
+}
+
+export function plantilla(): string {
+  return variable('DATABASE_TEMPLATE');
 }
 
 export const RESULTADOS = process.env.RESULTS_DIR ?? 'results/local';

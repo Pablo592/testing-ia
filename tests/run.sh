@@ -157,7 +157,9 @@ generar_secreto() {
   umask 077
   head -c 48 /dev/urandom | base64 | tr -d '/+=\n' | head -c 48 > "$TEST_SECRETS_DIR/$1"
 }
-for s in db_superuser_password db_owner_password db_app_password db_backup_password pin_pepper; do
+# db_test_admin_password: rol test_admin, solo TESTING (T-28, docs/infraestructura.md
+# §9.1). Sin ese fichero `db` no se crea y fallan todas las suites con BD.
+for s in db_superuser_password db_owner_password db_app_password db_backup_password pin_pepper db_test_admin_password; do
   generar_secreto "$s"
 done
 
@@ -226,7 +228,20 @@ levantar_bd_y_migrar() {
   $PC --profile "$1" up -d db
   esperar_sano db
   # Código de salida real de las migraciones (no dentro del up: §4.3).
-  $PC --profile setup run --rm --no-deps migrate
+  migrar migrate
+}
+
+migrar() {
+  # $1 servicio del perfil setup (migrate | migrate-template). Se comprueba su
+  # código de salida de forma explícita: si falla, la suite no se ejecuta.
+  set +e
+  $PC --profile setup run --rm --no-deps "$1"
+  rc_mig=$?
+  set -e
+  if [ "$rc_mig" -ne 0 ]; then
+    echo "ERROR: '$1' terminó con código $rc_mig; no se ejecutan las pruebas." >&2
+    exit 1
+  fi
 }
 
 ejecutar() {
@@ -256,6 +271,11 @@ case "$SUITE" in
     ;;
   integration|security)
     levantar_bd_y_migrar integration
+    # Plantilla app_template migrada (T-28, docs/infraestructura.md §9.1): cada
+    # fichero de integración clona su BD desde ella con test_admin
+    # (tests/support/bd-fichero.ts). Debe terminar antes de los tests: nadie
+    # puede estar conectado a la plantilla durante CREATE DATABASE … TEMPLATE.
+    migrar migrate-template
     $PC --profile integration up -d app
     esperar_sano app
     if [ "$SUITE" = "integration" ]; then
@@ -277,6 +297,8 @@ case "$SUITE" in
         ejecutar e2e runner-e2e $PW $PROYECTOS_E2E || RC=$?
         # Serie con PIN erróneo: un worker (presupuesto de fallos por IP, tests/README.md).
         ejecutar e2e runner-e2e $PW --project=serie-pin --workers=1 || RC=$?
+        # Serie con cortes de red (Toxiproxy es compartido: nada más en paralelo).
+        ejecutar e2e runner-e2e $PW --project=serie-red --workers=1 || RC=$?
         ;;
       a11y) ejecutar e2e runner-e2e $PW --project=a11y || RC=$? ;;
       visual) ejecutar e2e runner-e2e $PW --project=visual --workers=1 || RC=$? ;;

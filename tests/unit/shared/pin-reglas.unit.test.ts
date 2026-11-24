@@ -110,6 +110,29 @@ describe('[HU-01/CA-N01][RS-02] Composición del PIN', () => {
     }
   });
 
+  test('[HU-01/CA-N01] sin vuelta de 9 a 0: 7890, 8901, 9012, 2109 y 1098 no son "sequence" (docs/arquitectura.md §7)', () => {
+    for (const pin of ['7890', '8901', '9012', '2109', '1098']) {
+      expect(validatePin(pin, 'waiter'), pin).not.toEqual({ ok: false, rule: 'sequence' });
+    }
+  });
+
+  test('[HU-01/CA-N01] "repeated_block" exige que el PIN entero sea el bloque repetido: 12121, 48348, 121234 no lo son', () => {
+    // 5 dígitos no es múltiplo de 2 ni de 3; 121234 repite "12" pero no entero
+    // (y contiene 1234: es "sequence").
+    for (const pin of ['12121', '48348']) {
+      expect(validatePin(pin, 'waiter'), pin).not.toEqual({ ok: false, rule: 'repeated_block' });
+    }
+    expect(validatePin('121234', 'waiter')).toEqual({ ok: false, rule: 'sequence' });
+  });
+
+  test('[HU-01/CA-N01] orden: "digits_only" antes que la longitud; la cadena vacía es "length"/"manager_length"', () => {
+    expect(validatePin('48a', 'waiter')).toEqual({ ok: false, rule: 'digits_only' });
+    expect(validatePin('48a1', 'manager')).toEqual({ ok: false, rule: 'digits_only' });
+    expect(validatePin('４８３１７３', 'manager')).toEqual({ ok: false, rule: 'digits_only' });
+    expect(validatePin('', 'manager')).toEqual({ ok: false, rule: 'manager_length' });
+    expect(validatePin('', 'kitchen')).toEqual({ ok: false, rule: 'length' });
+  });
+
   test('[HU-01/CA-N01] orden de las reglas: longitud antes que composición', () => {
     // 11111 es "mismo dígito" pero para un encargado falla antes por longitud.
     expect(validatePin('11111', 'manager')).toEqual({ ok: false, rule: 'manager_length' });
