@@ -25,7 +25,9 @@
 #                        Ficheros: db_superuser_password, db_owner_password,
 #                        db_app_password, db_backup_password, pin_pepper y
 #                        db_test_admin_password (T-28; solo existe en TESTING).
-# Opcionales: APP_TZ (por defecto UTC), TEST_RESULTS_DIR (./tests/results).
+# Opcionales: APP_TZ (por defecto UTC), TEST_RESULTS_DIR (./tests/results),
+#   TEST_PROXY_APP_SUBNET (10.89.240.0/29) y TEST_PROXY_IP (10.89.240.2): cambiar
+#   en ejecuciones en paralelo.
 
 x-podman:
   in_pod: false
@@ -48,11 +50,18 @@ x-hardening: &hardening
 x-app-env: &app-env
   NODE_ENV: production
   TZ: ${APP_TZ:-UTC}
-  BUSINESS_TIMEZONE: Europe/Madrid
   LOG_LEVEL: info
   DATABASE_HOST: db
   DATABASE_PORT: "5432"
   DATABASE_NAME: cafeteria
+  # Configuración no secreta de config.ts (docs/arquitectura.md §10.1). En el
+  # ancla común porque parseSettings la valida también en migrate.
+  # Origen que usan los navegadores de Playwright (BASE_URL, a través de Toxiproxy).
+  PUBLIC_ORIGIN: https://toxiproxy:8443
+  # Solo la IP fija de proxy en la red proxy-app (RS-06, SEC-003).
+  TRUSTED_PROXIES: ${TEST_PROXY_IP:-10.89.240.2}
+  METRICS_PORT: "9464"
+  SESSION_MAX_HOURS: "12"
 
 x-runner: &runner
   <<: *hardening
@@ -209,7 +218,8 @@ services:
       DATABASE_PASSWORD_FILE: /run/secrets/db_app_password
       PIN_PEPPER_FILE: /run/secrets/pin_pepper
     secrets: [db_app_password, pin_pepper]
-    networks: [backend]
+    # backend: db. proxy-app: solo recibe de proxy (único origen de confianza).
+    networks: [backend, proxy-app]
     depends_on:
       db: { condition: service_healthy }
     # HEALTHCHECK de la imagen (node dist/healthcheck.js), docs/logging.md §8.1.
@@ -234,7 +244,11 @@ services:
       - ./deploy/proxy/Caddyfile:/etc/caddy/Caddyfile:ro
       # CA interna generada en esta ejecución; los ejecutores la montan en ro.
       - caddy-data:/data
-    networks: [backend, edge]
+    # proxy ya no está en backend: solo ve a app (proxy-app) y a los clientes (edge).
+    networks:
+      proxy-app:
+        ipv4_address: ${TEST_PROXY_IP:-10.89.240.2}
+      edge: {}
     depends_on:
       app: { condition: service_healthy }
     healthcheck:
@@ -404,6 +418,14 @@ networks:
   # Solo db y runner-e2e (T-29).
   db-seed:
     internal: true
+  # Solo proxy y app. Subred fija para que proxy tenga una IP conocida
+  # (TRUSTED_PROXIES). Dos ejecuciones EN PARALELO necesitan valores distintos
+  # de TEST_PROXY_APP_SUBNET y TEST_PROXY_IP (si no, Podman rechaza la red).
+  proxy-app:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${TEST_PROXY_APP_SUBNET:-10.89.240.0/29}
 
 volumes:
   caddy-data: {}

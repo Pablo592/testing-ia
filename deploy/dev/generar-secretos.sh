@@ -25,6 +25,12 @@ random_b64() {
   head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n'
 }
 
+# Pepper de PIN: 48 bytes aleatorios -> 64 caracteres. config.ts exige un
+# contenido >= 32 bytes (docs/arquitectura.md §10.1); se comprueba abajo.
+random_pepper() {
+  head -c 48 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n'
+}
+
 # PIN provisional de 6 dígitos que cumple las reglas de docs/seguridad.md
 # §6.1.2 (SEC-014): no todos iguales; sin 4+ dígitos consecutivos ascendentes o
 # descendentes en cualquier posición; no formado por un bloque repetido
@@ -85,7 +91,14 @@ write_secret db_superuser_password random_b64
 write_secret db_owner_password     random_b64
 write_secret db_app_password       random_b64
 write_secret db_backup_password    random_b64
-write_secret pin_pepper            random_b64
+write_secret pin_pepper            random_pepper
 write_secret initial_manager_name  manager_name
 write_secret initial_manager_pin   random_pin
+# Un pepper conservado de antes puede ser más corto: se detiene sin mostrarlo.
+# (El de 32 bytes en base64url de versiones anteriores tiene 43 y vale.)
+if [ "$(wc -c < "$DIR/pin_pepper")" -lt 32 ]; then
+  echo "ERROR: .secrets/dev/pin_pepper tiene menos de 32 bytes (config.ts no arrancará)." >&2
+  echo "Bórralo y vuelve a ejecutar este script (invalida los PIN guardados en la BD de DEV)." >&2
+  exit 1
+fi
 echo "Listo. Para ver el PIN provisional del encargado: cat .secrets/dev/initial_manager_pin"

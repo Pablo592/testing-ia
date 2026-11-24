@@ -74,11 +74,19 @@ x-node-image: &node-image
 x-api-env: &api-env
   NODE_ENV: development
   TZ: UTC
-  BUSINESS_TIMEZONE: Europe/Madrid
   LOG_LEVEL: debug
   DATABASE_HOST: db
   DATABASE_PORT: "5432"
   DATABASE_NAME: cafeteria
+  # Configuración no secreta de config.ts (docs/arquitectura.md §10.1). En el
+  # ancla común porque parseSettings la valida también en migrate e init-manager.
+  # Origen del servidor Vite: el navegador habla con él y Vite reenvía /api.
+  PUBLIC_ORIGIN: http://localhost:5173
+  # Vacía en DEV: no hay Caddy; no se acepta X-Forwarded-For de nadie.
+  TRUSTED_PROXIES: ""
+  # /metrics dentro del contenedor; no se publica en el host.
+  METRICS_PORT: "9464"
+  SESSION_MAX_HOURS: "12"
 
 services:
 

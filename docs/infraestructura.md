@@ -266,7 +266,10 @@ cambian en `compose.dev.yaml` (pídelo a Infrastructure; no se edita en solitari
 | `HOST`, `PORT` | ✓ | | | `0.0.0.0`, `3000` |
 | `TABLE_COUNT`, `DELAY_THRESHOLD_MINUTES` | ✓ | | | `20`, `10` (no secretas; arquitectura §4.1; `config.ts` no arranca fuera de 1–99 / 1–60). Igual en `app` de TESTING/DEMO/PROD |
 | `TZ` | ✓ | ✓ | ✓ | `UTC` (la fecha de negocio no depende de la zona del contenedor) |
-| `BUSINESS_TIMEZONE` | ✓ | ✓ | ✓ | `Europe/Madrid` |
+| `PUBLIC_ORIGIN` (obligatoria) | ✓ | ✓ | ✓ | `http://localhost:5173` (origen de Vite; Vite reenvía `/api` sin cambiar `Origin`). TESTING: `https://toxiproxy:8443`. DEMO/PROD: el nombre del local, p. ej. `https://caja.local:8443` (Etapas 4–5) |
+| `TRUSTED_PROXIES` | ✓ | ✓ | ✓ | vacía (no hay Caddy). TESTING: `10.89.240.2`, la IP fija de `proxy` en la red `proxy-app` (§9.1). DEMO/PROD: la IP de `proxy` en su red interna |
+| `METRICS_PORT` | ✓ | ✓ | ✓ | `9464` (no se publica en el host) |
+| `SESSION_MAX_HOURS` | ✓ | ✓ | ✓ | `12` (entero 1–12; fuera de rango no arranca, RS-13). Igual en todos los entornos salvo que el cliente pida menos |
 | `LOG_LEVEL` | ✓ | ✓ | ✓ | `debug` |
 | `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_NAME` | ✓ | ✓ | ✓ | `db`, `5432`, `cafeteria` |
 | `DATABASE_USER` | `app_rw` | `app_owner` | `app_rw` | |
@@ -277,6 +280,20 @@ cambian en `compose.dev.yaml` (pídelo a Infrastructure; no se edita en solitari
 
 - `config.ts` lee los secretos desde los ficheros `*_FILE` (recortando el
   salto de línea final si lo hubiera) y falla al arrancar si faltan.
+- Nombres y rangos: `docs/arquitectura.md` §10.1. `PUBLIC_ORIGIN`,
+  `TRUSTED_PROXIES`, `METRICS_PORT` y `SESSION_MAX_HOURS` van en el ancla
+  común (`x-api-env` en DEV, `x-app-env` en TESTING), así que también los
+  reciben `migrate` e `init-manager`/`migrate-template`: §10.1 dice que
+  `migrate` y los comandos no arrancan si falla `parseSettings`, y
+  `PUBLIC_ORIGIN` no tiene valor por defecto. Son no secretas; si el
+  software-engineer confirma que `migrate` no las valida, se pueden quitar de ahí.
+- **`BUSINESS_TIMEZONE` retirada (2.1c):** la zona de negocio es una
+  constante (`Europe/Madrid`) de `packages/shared`; `config.ts` no la lee.
+- *Pepper* (`pin_pepper`): `config.ts` exige **≥ 32 bytes**.
+  `generar-secretos.sh` lo crea con 48 bytes aleatorios (64 caracteres
+  base64url) y se detiene si el que ya existe tiene menos de 32 (el de DEV
+  actual tiene 43: vale). En TESTING, `tests/run.sh` genera 48 caracteres a
+  partir de 48 bytes aleatorios (≥ 32; mínimo 48 en 200 pruebas).
 - Scripts esperados: `apps/api`: `dev`, `db:migrate`, `create-initial-manager`
   (idempotente: no hace nada si ya hay un encargado); `apps/web`: `dev`.
 - `GET /healthz` en `api` (lo usa el healthcheck). Raíz del sistema de
@@ -563,6 +580,26 @@ Notas y cambios que se piden a Testing (respuesta a T-12):
 | `runner-integration` | `backend` | `app_rw` + `test_admin` | `db_app_password`, `db_test_admin_password` (**ya no** `db_owner_password`) | `DATABASE_HOST/PORT/NAME`, `DATABASE_APP_USER=app_rw`, `DATABASE_APP_PASSWORD_FILE`, `DATABASE_ADMIN_USER=test_admin`, `DATABASE_ADMIN_PASSWORD_FILE`, `DATABASE_TEMPLATE=app_template` |
 | `runner-e2e` (también la semilla de k6) | `edge`, `db-seed` | `app_rw` | `db_app_password`, `pin_pepper` | `DATABASE_HOST/PORT/NAME`, `DATABASE_APP_USER`, `DATABASE_APP_PASSWORD_FILE`, `PIN_PEPPER_FILE`, `TOXIPROXY_API`, `SSL_CERT_FILE` |
 | `runner-perf` (k6), `runner-unit`, `runner-security`, `zap` | sin cambios | ninguno | ninguno | sin cambios |
+| `app` | `backend`, `proxy-app` | `app_rw` | `db_app_password`, `pin_pepper` | §6 (con `PUBLIC_ORIGIN=https://toxiproxy:8443`, `TRUSTED_PROXIES=10.89.240.2`) |
+| `proxy` | `proxy-app` (IP fija `10.89.240.2`), `edge` | — | — | sin cambios; **ya no está en `backend`** (no llega a `db`) |
+
+**Red `proxy-app` y `TRUSTED_PROXIES` (2.1b2).** `app` solo acepta
+`X-Forwarded-For` de la IP de `proxy`. Para que esa IP sea conocida, `proxy`
+y `app` comparten una red `internal` propia con subred fija
+(`TEST_PROXY_APP_SUBNET`, por defecto `10.89.240.0/29`) y `proxy` tiene IP
+fija (`TEST_PROXY_IP`, por defecto `10.89.240.2`); `TRUSTED_PROXIES` es esa
+IP sola, no la subred. El resto de contenedores llega a `app` por `backend`
+(p. ej. `runner-integration` con `API_URL`) y no es de confianza. Dos
+ejecuciones **en paralelo** necesitan valores distintos de esas dos
+variables; si no, Podman rechaza la segunda red (falla, no se mezclan).
+`tests/run.sh` ejecuta las suites en serie, así que hoy no hace falta.
+Comprobado: `proxy` arranca con `10.89.240.2` en `proxy-app` (interna,
+`10.89.240.0/29`) y otra IP en `edge`.
+
+**`PUBLIC_ORIGIN` en TESTING** es un único origen: `https://toxiproxy:8443`
+(el `BASE_URL` de los navegadores). Una petición que modifica estado enviada
+a `DIRECT_URL` (`https://proxy:8443`) con `Origin: https://proxy:8443` se
+rechazará (RS-24). Es lo correcto; Testing lo tiene en cuenta.
 
 Variables con los nombres de `tests/README.md` §6.
 
