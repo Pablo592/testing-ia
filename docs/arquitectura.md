@@ -30,6 +30,11 @@
 > **instantánea** guardada al cerrar, sección "Cambios tras el cierre"
 > (cancelaciones, anulaciones y cobros posteriores, HU-08/CA-F05, CA-F15),
 > cerrojo de cierre e índices para HU-08/CA-N02 (§4.4). Registro en la §16.
+>
+> Revisión 2026-11-24 (tarea 1.7o): aislamiento `READ COMMITTED` y orden de
+> sentencias de las transacciones del cerrojo de cierre, y `409
+> DAY_ALREADY_CLOSED` (nunca `500`) con dos cierres en paralelo (T-26, §4.4,
+> §9). Registro en la §16.
 
 ## 1. Visión general
 
@@ -546,13 +551,82 @@ de calcular la instantánea:
 - `POST /reports/daily/:date/closing` abre su transacción con
   `pg_advisory_xact_lock(CASH_CLOSING_LOCK)` (exclusivo), lee
   `closed_at = clock.now()`, ejecuta `computeDailySummary(…, cutoff =
-  closed_at)` e inserta la fila (`INSERT`; si ya existe → `409
-  DAY_ALREADY_CLOSED`).
+  closed_at)` e inserta la fila (orden exacto y aislamiento abajo).
 - `CASH_CLOSING_LOCK` es una constante de `apps/api/src/db/locks.ts`. Se toma
   antes de cualquier `FOR UPDATE`, así que no hay interbloqueos. El cierre se
   guarda una vez al día y tarda milisegundos: la espera de los cobros es
   despreciable. Lo demás (líneas, preparación) no toma el cerrojo: solo cambia
   pedidos abiertos, que no están en la instantánea.
+
+**Aislamiento y orden de las transacciones del cerrojo [1.7o, T-26].** Las
+cuatro transacciones que toman `CASH_CLOSING_LOCK` (cierre, cobro, anulación y
+cancelación) corren en **`READ COMMITTED`** (el valor por defecto de
+PostgreSQL; el helper de transacción no lo cambia y ninguna de ellas usa
+`REPEATABLE READ` ni `SERIALIZABLE`). Motivo: en `REPEATABLE READ` la foto se
+toma al empezar la primera sentencia, que es el propio
+`pg_advisory_xact_lock`, **antes** de esperar al cerrojo; un cobro que confirma
+mientras el cierre espera tendría `paid_at < closed_at` y no saldría ni en la
+instantánea ni en la sección (rompería CA-F07 y CA-F15 b). En `READ COMMITTED`
+cada sentencia toma su foto al empezar, así que todas las que van después del
+cerrojo ven lo confirmado por quien lo tenía.
+
+Orden obligatorio en el cierre (una sola transacción, una sentencia por paso):
+
+1. `BEGIN` (`READ COMMITTED`).
+2. `SELECT pg_advisory_xact_lock(CASH_CLOSING_LOCK)`: espera a que confirmen o
+   deshagan todos los cobros, anulaciones y cancelaciones en vuelo.
+3. `SELECT 1 FROM cash_closings WHERE business_date = $date`: si existe →
+   `ROLLBACK` y `409 DAY_ALREADY_CLOSED` (no se calcula nada).
+4. `closed_at = clock.now()` (en la aplicación, **después** del paso 2).
+5. `computeDailySummary(tx, date, bounds, cutoff = closed_at)` (varias
+   sentencias).
+6. `INSERT INTO cash_closings … ON CONFLICT (business_date) DO NOTHING
+   RETURNING business_date`: si no devuelve fila → `ROLLBACK` y `409
+   DAY_ALREADY_CLOSED`.
+7. `COMMIT` y `201`.
+
+Orden obligatorio en cobro, anulación y cancelación: `BEGIN` (`READ
+COMMITTED`) → `SELECT pg_advisory_xact_lock_shared(CASH_CLOSING_LOCK)` →
+`clock.now()` → `SELECT … FOR UPDATE` y comprobaciones (§9) → escrituras →
+`COMMIT`. Ninguna sentencia de lectura ni de escritura de datos va antes del
+cerrojo (las validaciones de entrada con zod y la autorización, que no tocan
+la BD, sí).
+
+Por qué el reparto es exacto con este orden:
+- Escritura que confirma antes del cierre: el paso 2 espera a su `COMMIT`, y su
+  `clock.now()` fue anterior; su hora es `<=` `closed_at` y los pasos 5 y
+  siguientes la ven confirmada. Si es `<`, va a la instantánea; si es igual, a
+  la sección (regla del instante igual).
+- Escritura que llega mientras el cierre tiene el cerrojo: espera a su
+  `COMMIT`, y su `clock.now()` es posterior al de `closed_at`, así que su hora
+  es `>=` `closed_at` y va a la sección.
+- Coherencia de la instantánea entre sentencias (CA-F14) aunque `READ
+  COMMITTED` tome una foto por sentencia: mientras el cierre tiene el cerrojo
+  exclusivo no puede confirmarse ningún cobro, anulación ni cancelación, y las
+  líneas solo cambian en pedidos `open` (comprobado bajo `FOR UPDATE`, §9),
+  que no entran en las cifras guardadas; un pedido cobrado o cancelado no
+  puede volver a `open` sin una anulación, que necesita el cerrojo. Nada de
+  lo que lee `computeDailySummary` en el cierre puede cambiar entre los pasos 5
+  y 6.
+- Supuesto: una sola instancia de `app` con un solo reloj del sistema (§1,
+  §13). Si el reloj retrocediera (ajuste NTP brusco justo durante un cierre) el
+  reparto podría fallar; riesgo aceptado en el MVP, sin código adicional.
+
+**Dos cierres en paralelo (C-19, CA-N03).** El cerrojo exclusivo los
+serializa: el segundo entra cuando el primero ha confirmado y el paso 3 ya ve
+la fila → `409 DAY_ALREADY_CLOSED`. El paso 6 (`ON CONFLICT DO NOTHING`) es la
+segunda barrera si algún día el cerrojo faltara: la PK de `cash_closings`
+nunca llega a lanzar `23505`. Además, el traductor de errores de BD del
+repositorio de cierres convierte un `23505` sobre `cash_closings_pkey` en
+`DayAlreadyClosedError` (→ `409 DAY_ALREADY_CLOSED`) por defensa; **nunca**
+sale un `500` por esta causa. `ON CONFLICT DO NOTHING` solo necesita el
+privilegio `INSERT` y no dispara el trigger que rechaza `UPDATE` (§4.1). El
+`201` lo recibe exactamente la petición cuya fila se insertó, con su
+`countedCashCents` y su `closedBy`.
+
+**Lectura del resumen (`GET /reports/daily`).** No toma el cerrojo y sigue en
+una transacción de solo lectura `REPEATABLE READ` (abajo): no usa `clock.now()`
+como corte, así que la foto tomada en la primera sentencia es la correcta.
 
 **Sección "Cambios tras el cierre" (CA-F05, CA-F13, CA-F15).** Solo con el día
 cerrado. Parámetros: `$date`, `$closedAt` (de `cash_closings`) y `$dayEnd`.
@@ -1071,6 +1145,12 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
   y cancelación, que leen la hora del `Clock` **después** de tomarlo. Así el
   reparto entre la instantánea (`< closed_at`) y "Cambios tras el cierre"
   (`>= closed_at`) no deja nada fuera ni lo cuenta dos veces (§4.4).
+  **[1.7o]** Las cuatro transacciones corren en `READ COMMITTED` (por defecto)
+  y la primera sentencia es el cerrojo; en el cierre, `clock.now()` se lee
+  después del cerrojo y de comprobar que el día no está cerrado. Dos cierres
+  en paralelo: uno `201` y el otro `409 DAY_ALREADY_CLOSED` (comprobación tras
+  el cerrojo + `INSERT … ON CONFLICT DO NOTHING`; un `23505` en
+  `cash_closings_pkey` se traduce también a `409`, nunca `500`).
 
 ## 10. Despliegue con contenedores rootless
 
@@ -1241,7 +1321,7 @@ ajustes por la §15 (HU-09 fuera del MVP).
 | SEC-010 (resto) | **Decidido:** imagen de `app`/`migrate` con `USER 1000:1000` numérico y `COPY --chown=1000:1000` (no 65532); ejecución `--user 1000:1000`; secretos `uid=1000,gid=1000,mode=0400` | §10, ADR-001 |
 | HU-09 fuera del MVP | Sin tabla `settings`, sin `GET/PATCH /settings`, sin `settings.updated`, sin auditoría de ajustes ni permisos `settings:*`. Mesas (20) y umbral (10 min) son configuración de instalación de solo lectura (`TABLE_COUNT`, `DELAY_THRESHOLD_MINUTES` en `config.ts`, con rangos). Se **mantiene** `localConfig` en `GET /auth/me` (y `delayThresholdMinutes` en `/kitchen/queue`): el cliente necesita los valores y no hace falta una ruta más | §3, §4.1, §5, §5.1, §6, §7, §9, §10, ADR-001, ADR-003, ADR-004, ADR-008 |
 
-## 16. Registro de decisiones de la ronda de cierre (1.7a y 1.7h)
+## 16. Registro de decisiones de la ronda de cierre (1.7a, 1.7h y 1.7o)
 
 Nota (1.7h): la cabecera ya remitía a esta sección para la revisión 1.7a, pero
 la sección no existía. Las filas de 1.7a se reconstruyen a partir del resumen
@@ -1260,3 +1340,4 @@ de la cabecera; el detalle está en las secciones citadas.
 | Productos de un día cerrado (1.7h) | Los de la instantánea: una anulación o un cobro posteriores al cierre no los cambian (CA-F05, CA-F15 b) | §4.4 |
 | HU-08/CA-N02 (1.7h) | Índices `payments (business_date)`, `order_lines (order_id)`, `orders (cancelled_at) WHERE status = 'cancelled'` y PK de `payment_orders`; lectura en una transacción `REPEATABLE READ` de solo lectura | §4.1, §4.4 |
 | HU-08/CA-F03 en día cerrado (1.7h) | El aviso de pedidos sin cobrar se calcula al consultar, no es parte de la instantánea (coincide con I-15) | §4.4, §5.1 |
+| T-26 (Testing, media) (1.7o) | **Resuelto.** Cierre, cobro, anulación y cancelación en `READ COMMITTED` (no `REPEATABLE READ`, cuya foto se tomaría en la sentencia del cerrojo, antes de esperar). Orden del cierre: cerrojo exclusivo → comprobar que el día no está cerrado → `clock.now()` → `computeDailySummary` → `INSERT … ON CONFLICT DO NOTHING`; escritores: cerrojo compartido → `clock.now()` → `FOR UPDATE` → escrituras. Coherencia entre sentencias garantizada por el cerrojo exclusivo. Dos cierres en paralelo → un `201` y un `409 DAY_ALREADY_CLOSED`; un `23505` en `cash_closings_pkey` se traduce a `409`, nunca `500`. `GET /reports/daily` sigue en `REPEATABLE READ` de solo lectura (no toma el cerrojo). Sin ADR: no cambia ninguna decisión de ADR-008 | §4.4, §9 |
