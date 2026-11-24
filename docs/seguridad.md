@@ -9,6 +9,10 @@
 > dictámenes sobre HU-01/CA-F13, T-14, T-18, T-20, umbrales de alertas,
 > comandos del temporizador, `NoNewPrivileges`, salida de Alertmanager y
 > telemetría previa a la sesión (§6.4); hallazgos nuevos SEC-023..SEC-025.
+> Revisión 1.7j, 2026-11-24: verificación de SEC-024 sobre `docs/logging.md`
+> 1.7b (§3.2, §6.3, §7.4), del dictamen T-20 en `SessionPinProbing` y
+> `auth.verify.rate_limited`, y de la telemetría `pre_session` (§6.4.1)
+> frente a las condiciones de §6.4 "UX (1.2c)". Sin hallazgos nuevos.
 > Entradas: `docs/historias/` (README + HU-01..HU-09, IDs estables `CA-`),
 > `docs/arquitectura.md`, `docs/decisiones/ADR-001..008`, `docs/ux/`,
 > `docs/infraestructura.md`, `compose.dev.yaml`, `compose.test.yaml`,
@@ -1144,7 +1148,9 @@ contenedores. El escaneo de imágenes (RS-39) sigue pendiente de la Etapa 2.
 - Responsable: monitoring (`docs/logging.md` §6.3 y §7.4); developer en la Etapa 2 (inicializar las series)
 - Cómo corregir: (a) añadir la etiqueta `target_role` (`waiter` \| `kitchen` \| `manager`) a `auth_lockouts_total` y la alerta `ManagerLocked`: `increase(auth_lockouts_total{target_role="manager"}[5m]) > 0`, crítica **[24h]** (o la misma condición en Loki sobre `auth.account.locked` con `target_role`); (b) `LockoutSpray` con ventana de **1 h**; (c) en `docs/logging.md` §6, regla: todos los contadores usados en alertas se crean con valor 0 al arrancar `app` para cada combinación de etiquetas de enum (`auth_lockouts_total`, `auth_verifications_total`, `csrf_rejected_total`, `staff_privilege_changes_total`, `auth_pin_change_rejected_total`), y Testing lo comprueba leyendo `/metrics` tras el arranque. Además, ajustar el texto de `SessionPinProbing` al dictamen T-20 (solo `purpose="approval"`).
 - Cómo verificar: RS-47.
-- Estado: abierto (media, no bloquea)
+- Verificación 1.7j (2026-11-24, `docs/logging.md` revisión 1.7b, commit 5df5a84):
+  (a) `target_role` (`waiter` \| `kitchen` \| `manager`) en `auth.account.locked` (§3.2) y en `auth_lockouts_total` (§6.3); `new_role` en `staff_privilege_changes_total` (con `none` en `deactivated`/`pin_reset`), coherente con la regla `PrivilegeChange`; alerta `ManagerLocked` = `increase(auth_lockouts_total{target_role="manager"}[5m]) > 0`, cualquier `kind`, crítica, incluida en la lista [24h] de §7.0 y en §7.4: **cumple**. (b) `LockoutSpray` con ventana de **1 h**: **cumple**. (c) regla "series a 0 desde el arranque" en §6.3 con RS-47, para cada combinación de etiquetas de enum de `auth_lockouts_total`, `auth_verifications_total`, `auth_login_attempts_total`, `csrf_rejected_total`, `authz_denied_total`, `staff_privilege_changes_total`, `auth_pin_change_rejected_total` y `payments_voided_total` (más de lo pedido), responsable developer en la Etapa 2 y comprobación de Testing en `/metrics`: **cumple**. T-20: `auth.verify.rate_limited` y `SessionPinProbing` limitan `scope = session` a `purpose = "approval"` y remiten `confirm`/`change` a `LockoutRepeated`/`AccountLockedManual`, coherente con `docs/arquitectura.md` (reconfirmación y `POST /auth/pin` sin límite por sesión): **cumple**. La cardinalidad añadida es acotada (`auth_lockouts_total` 2 × 4 × 3 = 24 series).
+- Estado: verificado (en diseño, 1.7j). La implementación se comprueba con RS-47 (I en la Etapa 2; D en DEMO)
 
 ## SEC-025: Diferencia de tiempo que revela que el encargado elegido está bloqueado
 - Severidad: baja
@@ -1157,7 +1163,32 @@ contenedores. El escaneo de imágenes (RS-39) sigue pendiente de la Etapa 2.
 
 ---
 
-### Resumen para la puerta de la Etapa 1 (revisión 1.4c, 2026-11-23)
+### Resumen para la puerta de la Etapa 1 (revisión 1.7j, 2026-11-24)
+- **Altos o críticos abiertos: ninguno.** Sin hallazgos nuevos en 1.7j.
+- **SEC-024** (media, monitoring): **verificado** en diseño (`docs/logging.md`
+  1.7b); RS-47 lo comprueba en la implementación.
+- Telemetría `pre_session` (`docs/logging.md` §6.4.1): cumple las cinco
+  condiciones de §6.4 "UX (1.2c)": (1) solo en memoria, también sin Service
+  Worker; (2) ≤ 20 pasos y ≤ 10 min, solo `login`/`pin_change`, primer lote
+  tras `succeeded`/`saved` dentro de RS-43; (3) solo `flow`, `step`,
+  `pre_session` y `duration_s` en el paso de éxito, sin usuario, longitud
+  del PIN, dígitos, tiempos entre pulsaciones **ni hora por paso** (más
+  estricto de lo exigido); (4) marcados `pre_session: true`, sin líneas de
+  log, sin `user_id`/`session_id` ni BD, solo contadores agregados; (5) se
+  vacía al cerrar sesión, con `401` por revocación o caducidad y en
+  `idle_logout`. RS-43 no cambia (sin endpoint sin sesión ni excepción para
+  la sesión provisional). Que "Cambiar de usuario" en P-01 no vacíe el búfer
+  se acepta: no hay sesión y los pasos no llevan identidad. Riesgo residual
+  aceptado (sin hallazgo): una sesión válida puede inflar los contadores
+  agregados de `login`/`pin_change` (≤ 20 elementos por lote, ≤ 1 lote/30 s),
+  igual que con el resto de la telemetría; solo afecta a métricas de UX.
+- Abiertos que no bloquean: SEC-003 (media), SEC-023 (media; Infrastructure
+  indica verificación real en 1.7c, pendiente de que Cybersecurity la
+  registre aquí), SEC-025 (baja).
+- Contenedores: sin cambios respecto a 1.4c (esta revisión no toca compose ni
+  `deploy/`).
+
+### Resumen para la puerta de la Etapa 1 (revisión 1.4c, 2026-11-23; histórico, sustituido por el de 1.7j)
 - **Altos o críticos abiertos: ninguno.** SEC-016 (alta) **verificado**:
   `verifyPin` única con límite por IP, bloqueo y revocación, y `POST /auth/pin`
   solo para el PIN provisional. SEC-001 (alta) verificado y SEC-002 (alta)
