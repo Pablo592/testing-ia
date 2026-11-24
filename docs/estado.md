@@ -29,9 +29,15 @@ historias las propone el Product Owner sin entrevista al cliente real).
 | 1.6d | testing | Cubrir las rondas 1.1f, 1.3c y 1.6c en `docs/testing.md` (incluido `422 TABLE_OUT_OF_RANGE`) | Hecho (206 criterios trazados; T-14..T-17 e I-01..I-10 verificados; casos de `verifyPin`, configuración fija, logs y códigos de error; T-19..T-22 nuevos) |
 | 1.6e | monitoring | Restos de la 1.3c en `docs/logging.md` (`settings.changed`, `__Host-sid`) | Hecho (sin `settings.changed`; `app.started` registra mesas y umbral; `__Host-sid` en la redacción; eventos `auth.verify.*`, `auth.sessions.revoked`, `auth.reconfirm.failed`, `staff.unlocked`; métrica `auth_verifications_total`; alertas `AccountLockedManual`, `SessionPinProbing`) |
 | 1.1f | product-owner | T-14..T-17 e interpretaciones I-01..I-10 de Testing | Hecho (HU-01/CA-F12 bloqueo temporal y CA-F13 bloqueo indefinido; T-15, T-16 (solo valor mínimo) y T-17 (lista cerrada) aceptados; I-01..I-10 confirmadas salvo I-06, corregida) |
+| 1.7a | software-engineer | Ronda de cierre: T-19, T-20 (opción A), T-21, SEC-025 y preguntas de UX (`expires_at`, cambio obligatorio de PIN) | En curso |
+| 1.7b | monitoring | Ronda de cierre: SEC-024, telemetría `pre_session` (condiciones de Cybersecurity), `screen` P-01..P-11 y flujos de `flujos.md` §10, T-22 | En curso |
+| 1.7c | infrastructure | Ronda de cierre: SEC-023, duración de DEMO (T-22), `mkdir .secrets` en `run.sh`, CA y pantalla completa en barra para el manual | En curso |
+| 1.7d | product-owner | Ronda de cierre: interpretaciones de HU-08/CA-F13 propuestas por UX | En curso |
 | 1.2b | ux-designer | Actualizar wireframes con los cambios del PO (ronda 1.1c) + SEC-007 y mensajes de bloqueo | Hecho (reconfirmación de PIN en cobro y Personal, desbloqueo, estados de bloqueo en login, "Activar sonido"/Wake Lock y 409 en la cola, "AÑADIDO hh:mm"; P-12 Ajustes condicionada a HU-09) |
 
 ## Decisiones del humano
+**2026-11-23.** Ronda de cierre 1.7 antes de la aprobación de la puerta de la Etapa 1 (opción A).
+
 **2026-11-23. Criterio: "los supuestos que supongan una menor carga".** El
 Orquestador lo aplica así (el humano puede corregir cualquier punto):
 - **Preguntas abiertas 1–14:** se cierran con el supuesto actual del PO, que ya es el de menor alcance: sin ticket fiscal (el local usa otra caja fiscal), sin impresión, una sola estación de preparación, sin variantes con precio, sin dividir la cuenta, PIN, cancelación con autorización del encargado según HU-06, un solo tipo de IVA sin desglose, sin modo sin conexión (solo aviso + borrador), local que cierra antes de medianoche en `Europe/Madrid`, conservación de datos sin borrado en el MVP. Pregunta 13: se confirma el estado "Servido" (supuesto 18), porque quitarlo obligaría a rehacer historias, wireframes y arquitectura.
