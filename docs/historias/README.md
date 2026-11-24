@@ -227,6 +227,21 @@ Texto original de las preguntas:
 
 ## Registro de cambios
 
+- **2026-11-24, tarea 2.1g [Cambio 2026-11-24, 2.1g]** (hallazgo T-33 de
+  Testing y hallazgo opcional H-2.1d-02 de UX). Solo redacción, sin cambio de
+  alcance:
+  - **T-33 aceptado:** HU-01/CA-F13 quita la marca "A confirmar por
+    Cybersecurity". Los dos puntos que dejó el PO como provisionales están
+    confirmados en `docs/seguridad.md` §6.4: (1) todo bloqueo indefinido, sea
+    cual sea el origen de los fallos (incluidos los inicios de sesión desde
+    otro dispositivo), revoca todas las sesiones de la cuenta; (2) una pantalla
+    sin interacción vuelve al inicio de sesión en <= 1 s (RS-14). La conducta
+    verificable es la que ya se testeaba.
+  - **H-2.1d-02 aceptado:** HU-01/CA-F12 (c) dice "los datos escritos no se
+    pierden (salvo los PIN, que se vacían siempre, CA-U03 y RS-29b)", también en
+    la reconfirmación.
+  - Mismos IDs; ninguno nuevo, retirado ni renumerado.
+
 - **2026-11-24, tarea 2.0 [Cambio 2026-11-24, 2.0]** (hallazgo H-1.7g-01 de
   UX, `docs/ux/wireframes/09-resumen-dia.md`; decisión del humano del
   2026-11-24 en `docs/estado.md`, "Decisiones del humano"): **supuesto 25
