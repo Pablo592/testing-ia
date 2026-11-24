@@ -2,7 +2,7 @@
 
 Formato: ASCII en Markdown (se lee en cualquier editor). Son wireframes de **estructura y comportamiento**: los colores, tamaños y componentes salen de `../design-system.md`, y los flujos, el recuento de toques y la telemetría, de `../flujos.md`.
 Estado: **pendiente de aprobación humana de la dirección visual** antes de programar.
-Última actualización: tarea 1.7g (2026-11-24, P-11: HU-08/CA-F15 del PO en 1.7f; columna "Cobros tras el cierre" en "Cambios tras el cierre", resuelve H-1.7e-01). Anterior: tarea 1.7e (2026-11-24, CA-F05 y CA-F13 confirmados por el PO en 1.7d; sección "Cambios tras el cierre"); tarea 1.2c (2026-11-23), con HU-01..HU-08 tras las rondas 1.1d, 1.1e y 1.1f del PO y la arquitectura 1.3c (`POST /auth/pin` solo para el cambio obligatorio). HU-09 queda fuera del MVP.
+Última actualización: tarea 2.1d (2026-11-24, Etapa 2: "Acceso denegado" y pantallas vacías de HU-01 en `10-acceso-denegado.md`; banners de P-01 por motivo; T-30; `digits_only`). Anterior: tarea 1.7g (2026-11-24, P-11: HU-08/CA-F15 del PO en 1.7f; columna "Cobros tras el cierre" en "Cambios tras el cierre", resuelve H-1.7e-01). Anterior: tarea 1.7e (2026-11-24, CA-F05 y CA-F13 confirmados por el PO en 1.7d; sección "Cambios tras el cierre"); tarea 1.2c (2026-11-23), con HU-01..HU-08 tras las rondas 1.1d, 1.1e y 1.1f del PO y la arquitectura 1.3c (`POST /auth/pin` solo para el cambio obligatorio). HU-09 queda fuera del MVP.
 
 | ID | Archivo | Pantalla | Historias | Prioridad |
 |---|---|---|---|---|
@@ -15,6 +15,7 @@ Estado: **pendiente de aprobación humana de la dirección visual** antes de pro
 | P-08 | `07-modificar-cancelar.md` | Detalle, modificar y cancelar (+ autorización del encargado) | HU-06 | Should |
 | P-10 | `08-personal.md` | Personal (+ desbloqueo, reconfirmación) | HU-07 | Should |
 | P-11 | `09-resumen-dia.md` | Resumen del día (+ desglose por usuario, SEC-008) | HU-08 | Could |
+| — | `10-acceso-denegado.md` [2.1d] | Estado "Acceso denegado" de la layout (sin ID de pantalla) y pantallas vacías de HU-01 (`h1` de Menú, Personal y Resumen del día) | HU-01 | Must |
 | ~~P-12~~ | `06-gestion-menu.md` (al final, solo referencia) | ~~Ajustes del local~~ | ~~HU-09~~ | **Fuera del MVP** (descartada por el humano el 2026-11-23; supuesto 20) |
 
 ## Matriz: criterio de la historia -> pantalla
@@ -29,12 +30,13 @@ Los criterios se citan con su ID estable `HU-xx/CA-xnn` (`docs/historias/README.
 | HU-01/CA-U02 | Teclado con botones >= 44x44 | P-01, P-06, P-07, P-08, P-10 | 72x72 px (64 en 375 px) |
 | HU-01/CA-U03, CA-F05 | Error junto al campo, en texto; PIN vaciado | P-01 | "Usuario o PIN incorrectos" bajo el campo |
 | HU-01/CA-U04 | Nombre y rol en todas las pantallas | Todas | Barra superior (design-system §5.11) |
-| HU-01/CA-F01, CA-F02, CA-F03 | Destino según el rol; gestión solo para el encargado | P-01 -> P-02 / P-05 | "Gestión" solo en la barra del encargado |
+| HU-01/CA-F01, CA-F02, CA-F03 | Destino según el rol; gestión solo para el encargado | P-01 -> P-02 / P-05; `/menu`, `/personal`, `/resumen` [2.1d] | "Gestión" solo en la barra del encargado; en HU-01, Menú, Personal y Resumen del día existen vacías con su `h1` (`10-acceso-denegado.md`) [2.1d] |
+| HU-01/CA-F04 [2.1d] | "Acceso denegado" por URL sin ejecutar la acción | Estado de la layout en cualquier ruta sin permiso | `h1` "Acceso denegado", texto y enlace "Ir a Pedidos" / "Ir a la cola"; no monta la pantalla ni carga sus datos (design-system §5.13) |
 | HU-01/CA-F06, CA-F11 | Bloqueo progresivo con tiempo restante, indefinido y por dispositivo | P-01 | "Mensajes de bloqueo"; minutos redondeados hacia arriba (I-03) [1.2c] |
 | HU-01/CA-F07 | "Usuario desactivado, contacta con el encargado" | P-01 | Estado "Desactivado" |
-| HU-01/CA-F09, CA-N06 | Cierre por inactividad (15 min) y caducidad de 12 h | P-01, P-05 | Aviso a los 14 min; "Vuelta al inicio de sesión"; aviso de 12 h en barra [1.2c] |
-| HU-01/CA-F12 [1.2c] | Bloqueo temporal con la sesión abierta: "Cuenta bloqueada. Espera X min" al reconfirmar, sin hacer la acción y sin perder datos | P-07/P-02 (anulación), P-10 | design-system §5.10b, fila `423 LOCKED` |
-| HU-01/CA-F13 [1.2c] | Bloqueo indefinido: sesiones revocadas, se pierde lo escrito, login con "Cuenta bloqueada. Pide al encargado que la desbloquee" | P-01 y todas | "Vuelta al inicio de sesión" |
+| HU-01/CA-F09, CA-N06 | Cierre por inactividad (15 min) y caducidad de 12 h | P-01, P-05 | Aviso a los 14 min; "Vuelta al inicio de sesión" con el banner por `reason` (`idle`, `absolute`) [2.1d]; aviso de 12 h en barra [1.2c] |
+| HU-01/CA-F12 [1.2c, 2.1d] | Bloqueo temporal con la sesión abierta: "Cuenta bloqueada. Espera X min" al reconfirmar, sin hacer la acción y sin perder datos | P-07/P-02 (anulación), P-10, P-01 (cambio obligatorio del PIN) [2.1d] | design-system §5.10b y `01-login.md` "Cambio obligatorio del PIN", filas `423 LOCKED` (T-30) |
+| HU-01/CA-F13 [1.2c] | Bloqueo indefinido: sesiones revocadas, se pierde lo escrito, login con "Cuenta bloqueada. Pide al encargado que la desbloquee" | P-01 y todas | "Vuelta al inicio de sesión" (`revokedReason` `account_locked_manual`) [2.1d] |
 | HU-01/CA-N01 | PIN de 6 dígitos para encargado | P-01, P-07, P-08, P-10 | Etiqueta "(6 dígitos)" y 6 indicadores |
 | **HU-02** | | | |
 | HU-02/CA-U01 | <= 6 toques (3 productos de la categoría inicial); +1 por cambio de categoría | P-02 -> P-03 -> P-04 | 1 + 1 + 3 + 1 (flujos §3) |
@@ -106,7 +108,7 @@ Los criterios se citan con su ID estable `HU-xx/CA-xnn` (`docs/historias/README.
 | HU-07/CA-U01 | Alta en 1 formulario de 3 campos | P-10 | Nombre, rol, PIN |
 | HU-07/CA-U02, CA-F10 | Lista con nombre, rol y estado en texto (incluido "Bloqueado") | P-10 | Tabla |
 | HU-07/CA-F05 | "Debe existir al menos un encargado activo" | P-10 | "Desactivar" deshabilitado con el texto |
-| HU-07/CA-F06 | Rechazo de PIN indicando la regla | P-10, P-01 | "Reglas de PIN" |
+| HU-07/CA-F06 | Rechazo de PIN indicando la regla | P-10, P-01 | "Reglas de PIN": un texto por `PinRule`, incluido `digits_only` [2.1d] |
 | HU-07/CA-F08 | Desbloquear | P-10 | Acción "Desbloquear" |
 | HU-07/CA-F04, CA-F09 | Cambio obligatorio del PIN (provisional o promoción a encargado) | P-01 | "Cambio obligatorio del PIN"; sin cambio voluntario en el MVP [1.2c] |
 | HU-07/CA-N04 | PIN del encargado en cada escritura; con cuenta bloqueada, HU-01/CA-F12 y CA-F13 | P-10 | Reconfirmación en cada diálogo [1.2c] |

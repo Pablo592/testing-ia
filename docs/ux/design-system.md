@@ -1,7 +1,7 @@
 # Design system — Toma de pedidos (cafetería)
 
 Autor: UX/UI Designer · Etapa 1, tareas 1.2, 1.2b y 1.2c · Fecha: 2026-11-23
-Los cambios de la tarea 1.2b (hallazgos resueltos por el PO en la ronda 1.1c) van marcados **[1.2b]**; los de la tarea 1.2c (rondas 1.1d, 1.1e y 1.1f del PO), **[1.2c]**.
+Los cambios de la tarea 1.2b (hallazgos resueltos por el PO en la ronda 1.1c) van marcados **[1.2b]**; los de la tarea 1.2c (rondas 1.1d, 1.1e y 1.1f del PO), **[1.2c]**; los de la tarea 2.1d (rutas de la SPA y "Acceso denegado" de la 2.1c del SE, T-30), **[2.1d]**.
 Estado: **propuesta, pendiente de aprobación humana** (dirección visual).
 
 ## 0. Principios
@@ -290,7 +290,7 @@ Tras cualquier respuesta, el PIN se vacía de la pantalla y de la memoria del cl
 Los iconos 🔒 y ⚠ son `lock` y `triangle-alert` de Lucide. Bloqueo = bloque de estilo Aviso; error = texto `danger`. Los dos llevan texto, así que nunca dependen solo del color.
 
 ### 5.11 Barra superior (en todas las pantallas)
-64 px. Izquierda: título de la pantalla. Derecha: **"Lucía · Camarero"** (nombre y rol en texto, HU-01) y el botón "Cerrar sesión" (icono + texto, 48 px). El encargado tiene además el botón "Menú de gestión". En barra se añaden el interruptor de sonido ("Sonido: activado" / "Sonido: desactivado") y el indicador de conexión. [1.2c] Si el navegador bloquea el audio con el sonido activado, el interruptor se sustituye por el texto "🔇 Sonido bloqueado" y el botón `touch-bar` "Activar sonido" (72 px de alto, >= 160 px de ancho, fondo de Aviso) hasta que se pulse (HU-03/CA-F14; detalle en `wireframes/04-cola-barra.md`). Si la pantalla no puede mantenerse encendida (Wake Lock rechazado o no disponible), aviso "⚠ La pantalla puede apagarse" en la zona de estado (HU-03/CA-N05). Los avisos de la barra superior nunca reducen el alto de las tarjetas.
+64 px. Izquierda: título de la pantalla, que es el **único `h1`** de la página [2.1d] ("Pedidos", "Cola", "Menú", "Personal", "Resumen del día", "Acceso denegado"; los contadores como "· 7" van fuera del `h1`). El título del documento es "<h1> · Café · Toma de pedidos" (WCAG 2.4.2) y, en cada cambio de pantalla de la SPA, el foco pasa al `h1` (`tabindex="-1"`) para que el lector de pantalla lo anuncie (2.4.3). Derecha: **"Lucía · Camarero"** (nombre y rol en texto, HU-01) y el botón "Cerrar sesión" (icono + texto, 48 px). El encargado tiene además el botón "Menú de gestión". En barra se añaden el interruptor de sonido ("Sonido: activado" / "Sonido: desactivado") y el indicador de conexión. [1.2c] Si el navegador bloquea el audio con el sonido activado, el interruptor se sustituye por el texto "🔇 Sonido bloqueado" y el botón `touch-bar` "Activar sonido" (72 px de alto, >= 160 px de ancho, fondo de Aviso) hasta que se pulse (HU-03/CA-F14; detalle en `wireframes/04-cola-barra.md`). Si la pantalla no puede mantenerse encendida (Wake Lock rechazado o no disponible), aviso "⚠ La pantalla puede apagarse" en la zona de estado (HU-03/CA-N05). Los avisos de la barra superior nunca reducen el alto de las tarjetas.
 
 ### 5.12 Estados vacío, cargando y error (obligatorios en cada lista)
 | Estado | Patrón |
@@ -299,6 +299,21 @@ Los iconos 🔒 y ⚠ son `lock` y `triangle-alert` de Lucide. Bloqueo = bloque 
 | Cargando | Esqueleto con la forma del contenido final (sin spinner a pantalla completa); si tarda más de 1 s, texto "Cargando pedidos…" |
 | Error | Bloque de error en línea con causa y "Reintentar"; el contenido anterior se mantiene visible si existe |
 | Éxito | Toast con el resultado y el identificador ("Pedido 42 cobrado") |
+
+### 5.13 Estado "Acceso denegado" [2.1d] (HU-01/CA-F04; `docs/arquitectura.md` §5.2)
+Lo muestra la guarda de ruta dentro de la layout normal cuando la sesión no tiene el permiso de la ruta, o cuando una pantalla montada recibe `403 FORBIDDEN`. No monta la pantalla pedida ni cambia la URL. Wireframe y textos: `wireframes/10-acceso-denegado.md`.
+
+| Parte | Especificación |
+|---|---|
+| Barra superior | La de §5.11, con `h1` "Acceso denegado", nombre y rol, "Cerrar sesión" (y "Gestión" si es encargado) |
+| Bloque | Centrado, ancho máx. 560 px, `space-8` (64 px) desde la barra; a 375 px, a todo el ancho con 16 px de margen |
+| Icono | `lock` de Lucide, 48 px, `text-secondary`, `aria-hidden` |
+| Texto 1 | "No tienes permiso para ver esta pantalla." · `text-lg`, `text` (17,06:1 sobre `bg`) |
+| Texto 2 | "Si la necesitas, pide al encargado que revise tu rol." · `text-base`, `text-secondary` (7,24:1 sobre `bg`) |
+| Acción | Enlace con estilo `primario` (único primario), `touch-lg`, ancho mín. 240 px: "Ir a Pedidos" (camarero/cajero, encargado) o "Ir a la cola" (barra) |
+| Foco | Al `h1` al mostrarse; después, Tab: barra superior → acción |
+
+El texto "Acceso denegado" aparece **una sola vez** en la página (el `h1`): ni el bloque ni una región `aria-live` lo repiten.
 
 ## 6. Movimiento y sonido
 - Transiciones <= 200 ms; con `prefers-reduced-motion` se desactivan. Nada parpadea más de 3 veces por segundo (WCAG 2.3.1).

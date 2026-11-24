@@ -3,6 +3,7 @@
 Autor: UX/UI Designer · Etapa 1, tareas 1.2, 1.2b y 1.2c · Fecha: 2026-11-23
 Entradas: `docs/historias/` (HU-01..HU-08 tras las rondas 1.1d, 1.1e y 1.1f; supuestos 1-24; HU-09 fuera del MVP), `docs/seguridad.md` §6.1 y §6.3 (PIN, bloqueo, SEC-007). Estado: **propuesta, pendiente de aprobación humana**.
 Cambios de la tarea 1.2b: estado "Servido" y "Cobrados hoy" (§4, §5), "Deshacer" de "Empezar" (§4), autorización y reconfirmación del encargado (§6, §7), bloqueos (§1) y Ajustes vinculados a HU-09 (§9).
+Cambios de la tarea 2.1d (2026-11-24): rutas de la SPA y "Acceso denegado" (§0), banners de vuelta al login por motivo y texto del `423` en el cambio obligatorio del PIN (§1, T-30), `screen` de "Acceso denegado" (§10.2).
 Cambios de la tarea 1.2c: HU-09 y P-12 fuera del MVP (§0, §9), cambio obligatorio del PIN y sesiones bloqueadas o revocadas (§1, HU-01/CA-F12, CA-F13), sonido y pantalla encendida en barra (§4), desglose por usuario del resumen (§8, SEC-008) y flujos y pasos de la telemetría del cliente (§10, M-03).
 
 Convenciones:
@@ -51,6 +52,12 @@ Pasos en texto:
 - P-02 tiene dos pestañas: "Pedidos activos" y "Cobrados hoy" (1 toque, HU-04).
 - **Todas las pantallas** llevan la barra superior con "Nombre · Rol" y "Cerrar sesión" (HU-01).
 
+**Rutas de la SPA [2.1d]** (`docs/arquitectura.md` §5.2): `/` P-01, `/pedidos` P-02, `/cola` P-05, `/menu` P-09, `/personal` P-10, `/resumen` P-11; las demás pantallas serán subrutas de su historia.
+- Sin sesión, cualquier ruta → `/` (P-01). Tras entrar, siempre al inicio del rol, no a la ruta pedida.
+- Con sesión y sin permiso para la ruta (por URL, o `403 FORBIDDEN` con la pantalla abierta) → estado **"Acceso denegado"** en la misma URL, con la barra superior y el enlace "Ir a Pedidos" / "Ir a la cola" (1 toque al inicio del rol). Wireframe: `wireframes/10-acceso-denegado.md`.
+- Ruta desconocida → inicio del rol.
+- En HU-01, `/menu`, `/personal` y `/resumen` existen vacías (barra superior con su `h1` y "Esta pantalla todavía no está disponible.").
+
 La pantalla P-02 Pedidos ya está definida en HU-02 (sección "Lista Pedidos"), HU-03 ("Listos para servir") y HU-04 ("Cobrados hoy"), tras el hallazgo de UX resuelto por el PO.
 
 ---
@@ -80,12 +87,12 @@ Pasos:
 
 Ramas: error (mensaje junto al campo, en texto, PIN vaciado), bloqueo progresivo 5/15/60 min con cuenta atrás, bloqueo indefinido hasta que un encargado desbloquee, bloqueo del dispositivo (`429`), usuario desactivado (textos exactos en `wireframes/01-login.md`, "Mensajes de bloqueo"), PIN provisional, cierre de sesión (vuelve a P-01) y cierre automático por inactividad. A los 14 min, aviso "Tu sesión se cerrará en 60 s por inactividad · Seguir conectado"; a los 15 min, P-01 con el mensaje "Sesión cerrada por inactividad". La sesión de rol barra no caduca por inactividad con la cola abierta; la del encargado sí, aunque tenga la cola abierta (HU-01/CA-F09). Todas caducan a las 12 h (HU-01/CA-N06) [1.2c].
 
-**[1.2c] Cambio obligatorio del PIN** (HU-07/CA-F04, CA-F09): no existe el cambio voluntario en el MVP. Con `mustChangePin`, tras el login o en la siguiente acción si el rol cambia a encargado con un PIN corto: PIN actual (1) -> PIN nuevo (2) -> repetir (3) -> "Guardar PIN". Mensajes de `403`, `423` y `429` en `wireframes/01-login.md`.
+**[1.2c] Cambio obligatorio del PIN** (HU-07/CA-F04, CA-F09): no existe el cambio voluntario en el MVP. Con `mustChangePin`, tras el login o en la siguiente acción si el rol cambia a encargado con un PIN corto: PIN actual (1) -> PIN nuevo (2) -> repetir (3) -> "Guardar PIN". Mensajes de `403`, `423` y `429` en `wireframes/01-login.md`. [2.1d, T-30] Es una acción de la sesión que pide el propio PIN, así que con la cuenta en bloqueo temporal muestra "Cuenta bloqueada. Espera X min" (HU-01/CA-F12 (c)), igual que la reconfirmación.
 
 **[1.2c] Cuenta bloqueada con la sesión abierta** (ronda 1.1f):
 - Bloqueo temporal (HU-01/CA-F12): la sesión sigue. Las acciones que piden su propio PIN (anular un cobro, escrituras de Personal) muestran "Cuenta bloqueada. Espera X min" junto al PIN, no se hacen y conservan lo escrito; el resto de funciones siguen disponibles.
 - Bloqueo indefinido (HU-01/CA-F13): todas sus sesiones se revocan; cada dispositivo vuelve a P-01 (en <= 1 s si la pantalla está abierta), lo escrito se pierde y el login muestra "Cuenta bloqueada. Pide al encargado que la desbloquee".
-- Motivos de vuelta a P-01 y sus textos: `wireframes/01-login.md`, "Vuelta al inicio de sesión".
+- Motivos de vuelta a P-01 y sus textos: `wireframes/01-login.md`, "Vuelta al inicio de sesión". [2.1d] El banner se elige por `reason`/`revokedReason` del `401` o por `reason` de `session.revoked`, lo que llegue antes.
 
 Criterios UX cubiertos: <= 2 pasos; teclado de 72 px (>= 44); error en texto junto al campo y PIN vaciado; nombre y rol en la barra superior de todas las pantallas.
 
@@ -288,7 +295,7 @@ Define las **listas cerradas** (enums) que usan las métricas UX de `docs/loggin
 - La telemetría no cuenta como actividad para la inactividad de 15 min (RS-43).
 
 ### 10.2 Pantallas (`screen`)
-`P-01`, `P-02`, `P-03`, `P-04`, `P-05`, `P-06`, `P-07`, `P-08`, `P-09`, `P-10`, `P-11`. **P-12 no existe en el MVP** (HU-09 descartada): no se incluye en el enum. Los diálogos cuentan como la pantalla que los abre (p. ej. la anulación desde "Cobrados hoy" es `P-02`; desde el ticket, `P-07`). La pantalla de cambio obligatorio del PIN cuenta como `P-01`.
+`P-01`, `P-02`, `P-03`, `P-04`, `P-05`, `P-06`, `P-07`, `P-08`, `P-09`, `P-10`, `P-11`. **P-12 no existe en el MVP** (HU-09 descartada): no se incluye en el enum. Los diálogos cuentan como la pantalla que los abre (p. ej. la anulación desde "Cobrados hoy" es `P-02`; desde el ticket, `P-07`). La pantalla de cambio obligatorio del PIN cuenta como `P-01`. [2.1d] El estado "Acceso denegado" no tiene valor propio y no envía pasos de flujo ni señales, salvo `client_js_errors_total`, que usa el `screen` de la ruta pedida.
 
 ### 10.3 Flujos y pasos (`flow`, `step`)
 
