@@ -1,11 +1,21 @@
 # Estado del proyecto
 
-**Etapa actual:** 1 — Planificación y diseño (en curso, desde 2026-11-21)
+**Etapa actual:** 2 — Desarrollo (desde 2026-11-24). Etapa 1 aprobada por el humano el 2026-11-24.
 
 **Proyecto:** software de toma de pedidos para una cafetería (simulación; las
 historias las propone el Product Owner sin entrevista al cliente real).
 
-## Tareas en curso
+## Tareas de la Etapa 2
+Una historia a la vez, en el orden de `docs/historias/README.md`: HU-01, HU-05, HU-02, HU-03, HU-04, HU-06, HU-07, HU-08.
+
+| # | Agente | Tarea | Estado |
+|---|---|---|---|
+| 2.0 | product-owner | Supuesto nuevo en el README: los "Cobros tras el cierre" no separan efectivo (decisión H-1.7g-01) | En cola |
+| 2.1 | testing | HU-01: tests de la historia (y `tests/run.sh` con los requisitos de `docs/infraestructura.md` §7.1) | En cola |
+| 2.2 | developer | HU-01: estructura inicial del monorepo e implementación de la historia | En cola |
+| 2.3 | cybersecurity / ux-designer | HU-01: revisión de la entrega | En cola |
+
+## Tareas de la Etapa 1 (cerrada)
 | # | Agente | Tarea | Estado |
 |---|---|---|---|
 | 1.1 | product-owner | Historias de usuario con criterios de aceptación | Hecho (8 historias: 5 Must, 2 Should, 1 Could) |
@@ -49,6 +59,12 @@ historias las propone el Product Owner sin entrevista al cliente real).
 | 1.2b | ux-designer | Actualizar wireframes con los cambios del PO (ronda 1.1c) + SEC-007 y mensajes de bloqueo | Hecho (reconfirmación de PIN en cobro y Personal, desbloqueo, estados de bloqueo en login, "Activar sonido"/Wake Lock y 409 en la cola, "AÑADIDO hh:mm"; P-12 Ajustes condicionada a HU-09) |
 
 ## Decisiones del humano
+**2026-11-24. Puerta de la Etapa 1 aprobada** (historias, wireframes y arquitectura). Además:
+- **H-1.7g-01:** no se separa el efectivo de los "Cobros tras el cierre"; se anota como supuesto (PO, tarea 2.0).
+- **T-27:** se resuelve en la Etapa 2: el SE fija `BEGIN ISOLATION LEVEL READ COMMITTED` explícito antes de implementar HU-08 y el developer lo implementa con esa historia.
+- **Supuesto 21:** se mantiene la pantalla de barra de 24" o más.
+- Aviso de monitoring sobre alertas por correo: informado al humano.
+
 **2026-11-23.** Ronda de cierre 1.7 antes de la aprobación de la puerta de la Etapa 1 (opción A).
 
 **2026-11-23. Criterio: "los supuestos que supongan una menor carga".** El
@@ -61,7 +77,7 @@ Orquestador lo aplica así (el humano puede corregir cualquier punto):
 
 ## Bloqueos
 - **Push (2026-11-24):** la sesión del orquestador no tiene acceso a la clave SSH (`Permission denied (publickey)`); el humano hace el push a mano. Último commit subido por el humano: `c3059aa` (1.7g).
-- Puerta de la Etapa 1 (2026-11-24): **ronda de cierre 1.7 terminada (1.7a–1.7q)**; **sin hallazgos críticos ni altos abiertos** (Cybersecurity 1.7q). Pendiente: aprobación del humano (historias, wireframes y arquitectura) y sus decisiones sobre H-1.7g-01, T-27, supuesto 21 y aviso de alertas por correo.
+- Puerta de la Etapa 1 (2026-11-24): **ronda de cierre 1.7 terminada (1.7a–1.7q)**; **sin hallazgos críticos ni altos abiertos** (Cybersecurity 1.7q). **Aprobada por el humano el 2026-11-24.**
 
 ## Hallazgos reportados a otros agentes
 | Fecha | Reporta | Responsable | Descripción | Estado |
@@ -144,7 +160,7 @@ Orquestador lo aplica así (el humano puede corregir cualquier punto):
 | 2026-11-23 | monitoring | infrastructure | Al unificar §10/§11.1: directorio de métricas, métricas de horario y fichero de estado de OOM en el temporizador; `MaxRetentionSec=30day` en journald; red de Alertmanager hacia SMTP; plantilla `deploy/monitoring/alertmanager.yml.tmpl` generada en el despliegue | Resuelto (Infrastructure 1.5b) |
 | 2026-11-23 | monitoring | software-engineer | `docs/arquitectura.md` §11: regla de redacción de toda clave cuyo nombre contenga `pin` y campo `provisional_credential` en lugar de `must_change_pin` en `auth.login.succeeded` | Resuelto (SE 1.3c) |
 | 2026-11-23 | monitoring | testing | Test unitario de la redacción de `docs/logging.md` §4.5 y comprobar en DEMO que el compactor de Loki borra | Resuelto (Testing 1.6d) |
-| 2026-11-23 | monitoring | humano (orquestador) | Las alertas [24h] llegan por correo y por sí solas no despiertan a nadie: quien las reciba debe configurar un aviso en el móvil para el asunto `[mi-app CRÍTICA]`. Margen de 15 min tras la apertura (ajustable). Informativo | Abierto |
+| 2026-11-23 | monitoring | humano (orquestador) | Las alertas [24h] llegan por correo y por sí solas no despiertan a nadie: quien las reciba debe configurar un aviso en el móvil para el asunto `[mi-app CRÍTICA]`. Margen de 15 min tras la apertura (ajustable). Informativo | Informado al humano (2026-11-24). Cerrado |
 | 2026-11-23 | software-engineer | cybersecurity | Ajustar `docs/permisos.md` y `docs/seguridad.md` a la 1.3c: quitar `settings.updated` (§3.2:77) y la tabla `settings` (§6); `app`/`migrate` de 65532 a 1000:1000 (§8.1:232-233, seguridad:609); fila "Revocación" (§5) con el bloqueo indefinido y "cambio obligatorio del PIN provisional"; "Límite por origen" (§5:156) y seguridad §6.1.5:253 deben incluir `confirmPin` y `currentPin`; `POST /auth/pin` solo con PIN provisional (§3.2). Validar `403 PIN_INVALID` y la revocación ampliada (venga el fallo de donde venga) | Resuelto (Cybersecurity 1.4c) |
 | 2026-11-23 | software-engineer | infrastructure | Imagen de `app`: `USER 1000:1000`, `COPY --chown=1000:1000`; Quadlet/compose: `User=1000` y secretos `uid=1000,gid=1000,mode=0400`; variables normales `TABLE_COUNT=20` y `DELAY_THRESHOLD_MINUTES=10`; `migrate` ya no crea la fila de `settings` | Resuelto (Infrastructure 1.5b; el Containerfile de `app` se crea en la Etapa 2) |
 | 2026-11-23 | software-engineer | monitoring | `docs/logging.md`:184 sobra `settings.changed`; §4.3 y §4.5: la cookie es `__Host-sid` | Resuelto (Monitoring 1.6e) |
@@ -170,12 +186,12 @@ Orquestador lo aplica así (el humano puede corregir cualquier punto):
 | 2026-11-23 | cybersecurity | monitoring | **SEC-024 (media)** (a) no hay alerta de bloqueo de encargado (§6.1.7, HU-01/CA-N05): etiqueta `target_role` en `auth_lockouts_total` y alerta `ManagerLocked`; (b) `LockoutSpray` debe mirar 1 h, no 15 min; (c) los contadores de alertas deben existir con 0 desde el arranque (`docs/logging.md` §6.3:604, §7.4:949-950). RS-47 | Verificado (cybersecurity 1.7j; implementación con RS-47 en Etapa 2 y DEMO). Cerrado |
 | 2026-11-23 | cybersecurity | software-engineer | **SEC-025 (baja)** En `managerApproval`, un encargado bloqueado recibe respuesta sin calcular el hash y la diferencia de tiempo revela el bloqueo (`docs/arquitectura.md:705-710`). Propuesta: igualar el tiempo con una espera, no con un hash real. RS-16d | Corregido en diseño (SE 1.7a, `docs/arquitectura.md` §7). Pendiente de verificación por Cybersecurity (no bloquea; RS-16d en la Etapa 2) |
 | 2026-11-24 | ux-designer | product-owner | **H-1.7e-01 (media)** Ningún criterio de HU-08 dice qué pasa con un **cobro hecho después del cierre** sobre un pedido de ese día que quedó sin cobrar (CA-F03 permite cerrar con pedidos abiertos; CA-F05 solo cubre anulaciones y cancelaciones). Heurística 1 de Nielsen. **Propuesta:** que el PO decida si van en "Cambios tras el cierre" (columna "Cobros tras el cierre") o en otro sitio | Resuelto (PO 1.7f: HU-08/CA-F15; UX 1.7g: wireframe). Cerrado |
-| 2026-11-24 | ux-designer | product-owner (decide el humano) | **H-1.7g-01 (media, no bloquea)** Los "Cobros tras el cierre" (CA-F15 c) no separan efectivo y tarjeta y no entran en el efectivo esperado de ningún cierre: el efectivo que entra en caja tras el cierre no se concilia en ninguna pantalla (CA-F04). **Propuesta:** línea "de ellos en efectivo: N · importe", o anotarlo como supuesto. El PO lo descartó en 1.7f por "menor carga"; se pregunta al humano en la puerta | Pendiente de decisión del humano |
+| 2026-11-24 | ux-designer | product-owner (decide el humano) | **H-1.7g-01 (media, no bloquea)** Los "Cobros tras el cierre" (CA-F15 c) no separan efectivo y tarjeta y no entran en el efectivo esperado de ningún cierre: el efectivo que entra en caja tras el cierre no se concilia en ninguna pantalla (CA-F04). **Propuesta:** línea "de ellos en efectivo: N · importe", o anotarlo como supuesto. El PO lo descartó en 1.7f por "menor carga"; se pregunta al humano en la puerta | Decidido por el humano (2026-11-24): no se separa; supuesto (PO 2.0). Cerrado |
 | 2026-11-24 | testing | product-owner (software-engineer en 1.7h) | **T-23 (media hasta cerrar 1.7h, luego baja)** CA-F07 dice "hasta la hora del cierre" (inclusivo) y la arquitectura usa `< closed_at`. **Propuesta:** "antes de la hora del cierre". La parte de arquitectura (instantánea, `>= closed_at`, `CASH_CLOSING_LOCK`) la verifica Testing al cerrar 1.7h | Resuelto y verificado (Testing 1.7m). Cerrado |
 | 2026-11-24 | testing | product-owner | **T-24 (baja)** CA-F05 "pedidos de ese día cancelados después del cierre": ¿día del pedido o de la cancelación? **Propuesta:** "cancelados ese día, sea cual sea el día del pedido" (CA-F11; tests aplican I-16) | Resuelto y verificado (Testing 1.7m). Cerrado |
 | 2026-11-24 | testing | product-owner, ux-designer | **T-25 (baja)** Confirmar que el aviso "Hay N pedidos sin cobrar" (CA-F03) de un día cerrado se calcula al consultar y no es una cifra del cierre guardado (I-15) | Resuelto y verificado (Testing 1.7m). Cerrado |
 | 2026-11-24 | testing | software-engineer | **T-26 (media)** `docs/arquitectura.md` §4.4 no fija el aislamiento de la transacción de `POST /reports/daily/:date/closing`. Con `REPEATABLE READ` la foto se toma en el `pg_advisory_xact_lock` antes de esperar al cerrojo: un cobro que confirma mientras el cierre espera quedaría fuera de la instantánea y de la sección. **Propuesta:** cierre en `READ COMMITTED` (o cerrojo antes de abrir la foto) y violación de la PK de `cash_closings` → `409 DAY_ALREADY_CLOSED`. Lo prueban C-09 (b) y C-19 | Resuelto (SE 1.7o) y verificado (Testing 1.7p). Cerrado |
-| 2026-11-24 | testing | software-engineer (infrastructure si se elige la comprobación de entorno) | **T-27 (baja)** §4.4 confía en que `READ COMMITTED` sea el valor por defecto; si `default_transaction_isolation` cambia en la configuración, la BD o el rol, T-26 reaparece sin aviso. **Propuesta preferida:** `BEGIN ISOLATION LEVEL READ COMMITTED` explícito en las cuatro transacciones del cerrojo; alternativa: comprobarlo al arrancar o en el smoke. C-09 (b-RR) depende de la opción | Abierto (no bloquea) |
+| 2026-11-24 | testing | software-engineer (infrastructure si se elige la comprobación de entorno) | **T-27 (baja)** §4.4 confía en que `READ COMMITTED` sea el valor por defecto; si `default_transaction_isolation` cambia en la configuración, la BD o el rol, T-26 reaparece sin aviso. **Propuesta preferida:** `BEGIN ISOLATION LEVEL READ COMMITTED` explícito en las cuatro transacciones del cerrojo; alternativa: comprobarlo al arrancar o en el smoke. C-09 (b-RR) depende de la opción | Decidido por el humano (2026-11-24): se resuelve en la Etapa 2 (SE antes de HU-08) |
 
 ## Ciclos de retroceso (máximo 3 por funcionalidad)
 | Funcionalidad | Ciclos | Motivo del último |
