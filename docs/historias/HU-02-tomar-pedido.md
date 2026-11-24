@@ -11,7 +11,7 @@ para **enviarlo a barra sin errores de transcripción y sin tener que ir a avisa
 ## Criterios de aceptación
 
 ### Funcionales
-- **CA-F01** Dado un camarero con sesión iniciada, cuando pulsa "Nuevo pedido", entonces debe elegir el tipo: "Mesa" (con número de mesa de 1 a N, donde N es el número de mesas configurado: HU-09 o supuesto 20) o "Mostrador/Para llevar" (con nombre o referencia opcional del cliente, máximo 30 caracteres).
+- **CA-F01** Dado un camarero con sesión iniciada, cuando pulsa "Nuevo pedido", entonces debe elegir el tipo: "Mesa" (con número de mesa de 1 a N, donde N es el número de mesas fijado en la instalación, 20 por defecto: supuesto 20 **[Cambio 2026-11-23, 1.1e: HU-09 fuera del MVP]**) o "Mostrador/Para llevar" (con nombre o referencia opcional del cliente, máximo 30 caracteres).
 - **CA-F02** Dado un pedido en edición, cuando toca un producto disponible del menú, entonces se añade con cantidad 1; si lo toca de nuevo, la cantidad pasa a 2, y así sucesivamente.
 - **CA-F03** Dado un producto en el pedido, cuando pulsa "+" o "-", entonces la cantidad sube o baja en 1; al llegar a 0 la línea se elimina.
 - **CA-F04** Dado un producto en el pedido, cuando añade una nota (máximo 100 caracteres, p. ej. "sin azúcar", "leche de avena"), entonces la nota se guarda en esa línea y se muestra en barra.
@@ -71,3 +71,8 @@ _Cambios 2026-11-21 (tarea 1.1d: T-01, T-02, T-03, T-07): IDs estables;
 condiciones de medida (supuesto 12) y dispositivo de referencia (supuesto 23);
 "uso posible en tablet de 10"" sustituido por CA-N05 (la accesibilidad queda
 sola en CA-N04)._
+
+_Cambios 2026-11-23 (tarea 1.1e, decisión del humano): HU-09 queda fuera del
+MVP; en CA-F01 el número de mesas N es el fijado en la instalación (supuesto 20,
+20 mesas). Las condiciones de medida del supuesto 12 son vinculantes solo en
+TESTING._

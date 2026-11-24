@@ -27,7 +27,7 @@ para **preparar los pedidos en el orden correcto y avisar a sala cuando están l
 - **CA-F05** **[Cambio 2026-11-21]** Dado un pedido que barra acaba de cambiar con "Empezar" o "Listo", cuando barra pulsa "Deshacer" en los 30 s siguientes, entonces el pedido vuelve al estado anterior ("Empezar" deshecho: vuelve a "Pendiente"; "Listo" deshecho: vuelve a "En preparación" y a la cola), sin que cambie su estado de cobro. "Deshacer" se aplica solo a la última acción hecha en esa pantalla; a los 30 s deja de estar disponible.
 - **CA-F11** **[Cambio 2026-11-21]** Dado un pedido "Listo" que sala ya ha marcado "Servido", entonces "Deshacer" de barra ya no está disponible para ese pedido.
 - **CA-F12** Dado cualquier cambio de estado de preparación (Empezar, Listo, Servido, Deshacer), entonces el estado de cobro del pedido no cambia.
-- **CA-F06** **[Cambio 2026-11-21, T-04]** Dado un pedido con preparación "Pendiente" o "En preparación" para el que han pasado N minutos o más desde su hora de entrada en la cola (supuesto 24: la de envío, o la del añadido si volvió a la cola desde "Listo" o "Servido"), entonces se resalta visualmente como retrasado, con icono y texto (no solo color), como máximo 60 s después de cumplirse los N minutos. Pasar de "Pendiente" a "En preparación" no reinicia la cuenta (p. ej. con N = 10, un pedido de 9 min en "Pendiente" y 2 min en "En preparación" está retrasado). N = 10 por defecto; lo configura el encargado (HU-09, propuesta; hasta que exista, valor fijado en la instalación, supuesto 20).
+- **CA-F06** **[Cambio 2026-11-21, T-04]** Dado un pedido con preparación "Pendiente" o "En preparación" para el que han pasado N minutos o más desde su hora de entrada en la cola (supuesto 24: la de envío, o la del añadido si volvió a la cola desde "Listo" o "Servido"), entonces se resalta visualmente como retrasado, con icono y texto (no solo color), como máximo 60 s después de cumplirse los N minutos. Pasar de "Pendiente" a "En preparación" no reinicia la cuenta (p. ej. con N = 10, un pedido de 9 min en "Pendiente" y 2 min en "En preparación" está retrasado). N = 10, valor fijado en la instalación (supuesto 20) **[Cambio 2026-11-23, 1.1e: HU-09 fuera del MVP]**.
 - **CA-F07** Dado un pedido modificado o cancelado (HU-06) mientras está en la cola, entonces la tarjeta se actualiza y muestra la etiqueta "MODIFICADO" o "CANCELADO" hasta que barra la confirme con un toque; un pedido cancelado sale de la cola al confirmar la etiqueta.
 - **CA-F13** Dado un pedido con preparación "Listo" o "Servido" al que se añaden productos (HU-06), entonces vuelve a la cola con preparación "Pendiente" y las líneas nuevas marcadas "AÑADIDO".
 - **CA-F08** Dada la pantalla de barra abierta, entonces los pedidos nuevos aparecen sin que nadie tenga que recargar la página.
@@ -79,3 +79,8 @@ del cómputo de "retrasado" (supuesto 24); sonido bloqueado por el navegador
 (supuesto 12); orden y espera por hora de entrada en la cola cuando un pedido
 vuelve desde "Listo"/"Servido" (CA-F02, CA-F23, CA-F24; hallazgo del Software
 Engineer, `docs/arquitectura.md` §4.2)._
+
+_Cambios 2026-11-23 (tarea 1.1e, decisión del humano): HU-09 queda fuera del
+MVP; en CA-F06 el umbral N = 10 min es fijo en la instalación (supuesto 20).
+Supuesto 18 ("Servido") confirmado por el humano. Las condiciones de medida del
+supuesto 12 son vinculantes solo en TESTING._

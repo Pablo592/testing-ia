@@ -1,11 +1,15 @@
 # HU-09: Configurar los ajustes del local
 
-> **PROPUESTA PARA EL HUMANO [Cambio 2026-11-21]:** historia nueva, no incluida
-> todavía en el MVP aprobado. Nace del hallazgo del UX Designer "Configuración
-> sin historia" (`docs/estado.md`). Prioridad propuesta: **media (Should)**. Si
-> no se aprueba, el número de mesas y el umbral de retraso se fijan en la
-> instalación (supuesto 20 del README) y solo se cambian reinstalando o
-> mediante soporte técnico.
+> **FUERA DEL MVP: descartada por el humano el 2026-11-23 [Cambio 2026-11-23, 1.1e].**
+> No se diseña, implementa ni prueba en el MVP, y sus criterios no se validan en
+> la Etapa 3. Se aplica el supuesto 20 del README: 20 mesas y aviso de retraso a
+> los 10 min, fijados en la instalación; solo cambian reinstalando o mediante
+> soporte técnico. El texto se conserva como referencia por si se recupera más
+> adelante; sus IDs no se reutilizan.
+>
+> _Origen (2026-11-21): propuesta del PO a partir del hallazgo del UX Designer
+> "Configuración sin historia" (`docs/estado.md`), con prioridad propuesta media
+> (Should)._
 
 Como **encargado**
 quiero **indicar cuántas mesas tiene el local y a partir de cuántos minutos un pedido se considera retrasado**
@@ -36,12 +40,16 @@ para **que la toma de pedidos muestre solo mis mesas reales y que barra vea como
 - **CA-N02** Auditoría: cada cambio registra usuario, fecha/hora, valor anterior y valor nuevo.
 - **CA-N03** Accesibilidad: cumple WCAG 2.2 nivel AA (criterio común del README).
 
-Prioridad: media (Should) — propuesta, pendiente de aprobación humana.
+Prioridad: fuera del MVP (descartada por el humano el 2026-11-23). ~~media (Should) — propuesta, pendiente de aprobación humana.~~
 
-Dependencias: HU-01. (HU-02 y HU-03 usan sus valores; hasta que exista, se usan los valores de instalación del supuesto 20.)
+Dependencias: HU-01. Ninguna historia del MVP depende de esta: HU-02/CA-F01 y HU-03/CA-F06 usan los valores fijos del supuesto 20.
 
 _Los rangos 1-99 mesas y 1-60 minutos vienen de la propuesta de diseño P-12
 (`docs/ux/wireframes/06-gestion-menu.md`) y son supuestos a validar (supuesto 20)._
 
 _Cambios 2026-11-21 (tarea 1.1d: T-01, T-02): IDs estables; condiciones de
 medida del plazo de 5 s de CA-F02 (supuesto 12)._
+
+_Cambios 2026-11-23 (tarea 1.1e, decisión del humano): historia fuera del MVP.
+P-12 (Ajustes) y la pregunta sobre reconfirmar el PIN del encargado en esta
+historia (SEC-007) quedan sin efecto._
