@@ -66,24 +66,54 @@ Un pedido tiene **dos estados independientes** (supuesto 14):
   alternativa a arrastrar 2.5.7). Sustituye a las menciones anteriores a
   WCAG 2.1 AA. Se verifica con herramienta automática más revisión manual.
 
+## Identificadores de los criterios [Cambio 2026-11-21]
+
+Cada criterio de aceptación empieza por un ID estable (hallazgo T-01 de
+Testing), para poder trazarlo a sus tests:
+
+| Prefijo | Sección | Ejemplo |
+|---|---|---|
+| `CA-F` | Funcionales | `**CA-F01**` |
+| `CA-U` | UX (medibles) | `**CA-U01**` |
+| `CA-N` | No funcionales | `**CA-N01**` |
+
+- El ID es único **dentro de cada historia**. Fuera de ella se cita con la
+  historia delante: `HU-03/CA-F06`.
+- Se numera con dos dígitos, de forma correlativa dentro de cada prefijo: el
+  criterio nuevo recibe el número siguiente al más alto que haya existido en
+  esa historia y prefijo.
+- **Un ID nunca se renumera**, aunque se reordene o se modifique el criterio.
+  Por eso el orden de lectura no tiene por qué coincidir con el numérico (p. ej.
+  en HU-03 `CA-F23` va detrás de `CA-F01`).
+- **Un criterio eliminado retira su ID**: no se reutiliza para otro criterio.
+  Se deja la línea `**CA-Fxx** [Retirado AAAA-MM-DD: motivo]` para que los
+  tests que lo citaban se puedan localizar.
+- Si un criterio cambia de significado, se modifica con una marca
+  `[Cambio AAAA-MM-DD, origen]` y conserva su ID; Testing revisa sus tests.
+
 ## Supuestos inventados (a validar por el humano)
 
 > Los marcados con **[Cambio 2026-11-21]** se han añadido o modificado al
-> resolver los hallazgos del Software Engineer y del UX Designer
+> resolver los hallazgos del Software Engineer, del UX Designer, de Testing
+> (T-01..T-09) y de Cybersecurity (SEC-001, SEC-004, SEC-007, SEC-008)
 > (`docs/estado.md`) y el humano tiene que validarlos igual que los demás.
+> Los de la ronda 1.1d son: 6, 11 (bloqueo y caducidad), 12, 22, 23 y 24.
 
 1. **Un solo local**, con hasta unas 20 mesas numeradas y venta en mostrador/para llevar.
 2. **Hasta 15 empleados** dados de alta y **hasta 10 dispositivos** a la vez.
 3. **Volumen:** hasta 500 pedidos al día; menú de hasta 200 productos en 20 categorías.
 4. Hay **una sola pantalla de preparación** (barra y cocina comparten la cola). No se separan los pedidos por estación.
 5. Interfaz **solo en español**; moneda **euro**; **precios con IVA incluido** y un único tipo de IVA por producto. No se desglosa el IVA en el MVP.
-6. Se accede con **usuario + PIN de 4 a 6 dígitos** (lo normal en hostelería), no con contraseña ni con tarjeta.
+6. Se accede con **usuario + PIN de 4 a 6 dígitos** (lo normal en hostelería), no con contraseña ni con tarjeta. **[Cambio 2026-11-21, SEC-001]** El rol encargado usa siempre un PIN de **6 dígitos**; camarero/cajero y barra, de 4 a 6. Se rechazan los PIN triviales (todos iguales, secuencias, bloques repetidos, lista de PIN comunes) (HU-01/CA-N01, HU-07/CA-F06). Decisión de Cybersecurity (`docs/seguridad.md` §6.1).
 7. El **pago con tarjeta se hace en un datáfono externo** y el cajero solo lo registra a mano. No hay integración.
 8. **Tickets:** solo se ven en pantalla, no se imprimen (ver pregunta 1).
 9. Los pedidos se **cobran al final** (en mesa) o al momento (en mostrador). Las dos formas se permiten sin forzar ningún orden.
 10. El camarero puede marcar un producto como **agotado** sin ser encargado, porque es algo que pasa en plena jornada.
-11. Umbrales: pedido "retrasado" a los **10 min** (configurable), cierre de sesión a los **15 min** de inactividad, bloqueo de **5 min tras 5 intentos fallidos**, histórico consultable de **90 días**. **[Cambio 2026-11-21]** Los 90 días son solo la **ventana de consulta** del resumen (HU-08): en el MVP no se borra ningún dato por antigüedad. Cuánto tiempo hay que conservarlos lo decide el humano (pregunta 10).
-12. Los tiempos de respuesta se miden en la **red local Wi-Fi del local**.
+11. Umbrales: pedido "retrasado" a los **10 min** (configurable), cierre de sesión a los **15 min** de inactividad, bloqueo de **5 min tras 5 intentos fallidos**, histórico consultable de **90 días**. **[Cambio 2026-11-21]** Los 90 días son solo la **ventana de consulta** del resumen (HU-08): en el MVP no se borra ningún dato por antigüedad. Cuánto tiempo hay que conservarlos lo decide el humano (pregunta 10). **[Cambio 2026-11-21, SEC-001, SEC-004]** El bloqueo "5 min tras 5 intentos" pasa a ser **progresivo**: 5 min, 15 min, 60 min y, a los 20 fallos consecutivos, bloqueo hasta que lo desbloquee un encargado; además, 10 fallos desde un mismo dispositivo en 10 min bloquean ese dispositivo 10 min (HU-01/CA-F06, CA-F11). Toda sesión, incluida la de barra, caduca como máximo a las **12 h** de iniciarla (HU-01/CA-N06).
+12. Los tiempos de respuesta se miden en la **red local Wi-Fi del local**. **[Cambio 2026-11-21, T-02]** Condiciones de medida de todos los criterios de rendimiento que citan este supuesto (HU-01/CA-N03, HU-02/CA-N01 y CA-F23, HU-03/CA-N01 y CA-F15, HU-04/CA-N04, HU-05/CA-F04, HU-06/CA-N02, HU-08/CA-N02, HU-09/CA-F02):
+    - **TESTING:** red emulada con RTT +40 ms, jitter 20 ms y 1 % de pérdida de paquetes; **10 dispositivos conectados a la vez** (cuando el criterio lo indica, las 10 acciones son simultáneas, p. ej. 10 inicios de sesión o 10 cobros de pedidos distintos); menú de **200 productos en 20 categorías** (supuesto 3); **al menos 200 muestras** por métrica; el resultado es el percentil 95 (p95) de esas muestras.
+    - **DEMO:** se confirman con los dispositivos y la Wi-Fi reales del local.
+    - Un criterio se da por cumplido solo si se cumple en los dos entornos.
 13. Productos sin variantes ni modificadores con precio (p. ej. "leche de avena +0,30 €"). Las peticiones especiales van en una nota de texto libre y no cambian el precio.
 14. **[Cambio 2026-11-21]** El pedido tiene **dos estados independientes**: preparación (Pendiente → En preparación → Listo) y cobro (Abierto → Cobrado / Cancelado). Cobrar no saca un pedido de la cola de barra: un pedido de mostrador cobrado al momento sigue en la cola hasta que barra lo marca "Listo". Ver [Estados del pedido](#estados-del-pedido).
 15. **[Cambio 2026-11-21]** **"Día"** = día natural en hora de España peninsular (`Europe/Madrid`), de 00:00:00 a 23:59:59. El número correlativo de pedido (HU-02) se reinicia a las 00:00 y el resumen de HU-08 usa el mismo criterio (un cobro después de medianoche cuenta en el día nuevo). Supone que el local está en la península o Baleares y **cierra antes de medianoche** (ver pregunta 14).
@@ -93,7 +123,9 @@ Un pedido tiene **dos estados independientes** (supuesto 14):
 19. **[Cambio 2026-11-21]** Todos los camareros/cajeros ven **todos los pedidos del local** en la pantalla "Pedidos", no solo los que han tomado ellos (local pequeño, el personal se reparte las mesas).
 20. **[Cambio 2026-11-21]** **Ajustes del local:** número de mesas entre 1 y 99 (por defecto 20) y umbral de retraso entre 1 y 60 min (por defecto 10). Se configuran en HU-09 si el humano la aprueba; si no, se fijan en la instalación con esos valores por defecto.
 21. **[Cambio 2026-11-21]** **Pantalla de barra de 24" FHD (1920x1080) o mayor.** Es lo que permite a la vez texto legible a 1,5 m (mayúsculas >= 7 mm, unos 16 minutos de arco) y 6 pedidos a la vez sin desplazar. Con una pantalla de 15" el texto tendría que medir unos 56 px y no cabrían 6 pedidos de 5 líneas. **Tiene coste para el cliente** (ligado a la pregunta 7): si el cliente ya tiene una pantalla más pequeña, hay que rebajar la distancia de lectura o el número de pedidos visibles.
-22. **[Cambio 2026-11-21]** **Autorización del encargado (HU-06):** se elige el encargado y se introduce su PIN, en el mismo dispositivo, para una sola acción. Si quien tiene la sesión abierta ya es encargado, no se le vuelve a pedir. La parte de seguridad (longitud del PIN, intentos, bloqueo, si se exige reautenticación) la decide Cybersecurity.
+22. **[Cambio 2026-11-21]** **Autorización del encargado (HU-06):** se elige el encargado y se introduce su PIN, en el mismo dispositivo, para una sola acción. Si quien tiene la sesión abierta ya es encargado, no se le vuelve a pedir. La parte de seguridad (longitud del PIN, intentos, bloqueo, si se exige reautenticación) la decide Cybersecurity. **[Cambio 2026-11-21, SEC-001, SEC-007]** Decidido por Cybersecurity (`docs/seguridad.md` §6.3): los fallos cuentan para el bloqueo del encargado elegido y para el del dispositivo; 5 autorizaciones fallidas en una sesión en 10 min bloquean las autorizaciones 10 min; un encargado bloqueado, desactivado o con PIN provisional no autoriza (HU-06/CA-F17..CA-F19). El encargado con sesión propia no reintroduce el PIN en HU-06, pero **sí** al anular un cobro (HU-04/CA-F23) y en las escrituras de Personal (HU-07/CA-N04).
+23. **[Cambio 2026-11-21, T-03, T-07]** **Dispositivo de referencia de sala:** la tablet de 10" que defina el cliente (pregunta 7). Mientras no exista, los criterios que dependen del dispositivo (HU-02/CA-U05) se miden en Chromium con la CPU ralentizada x4. Las vistas de tablet se verifican a **1280x800 CSS px** (horizontal) y **800x1280 CSS px** (vertical) (HU-02/CA-N05). Si la tablet real tiene otra resolución, se sustituyen esos valores por los suyos.
+24. **[Cambio 2026-11-21, T-04]** **Hora de entrada en la cola:** es la hora de envío del pedido o, si el pedido vuelve a la cola desde "Listo" o "Servido" porque se le añaden productos, la hora de ese añadido. La cola se ordena por esta hora, y los minutos de espera y el aviso de "retrasado" se cuentan desde ella; pasar de "Pendiente" a "En preparación" no reinicia la cuenta, y añadir o quitar productos a un pedido que sigue en la cola tampoco (HU-03/CA-F01, CA-F02, CA-F06, CA-F23, CA-F24; HU-06/CA-F08). La tarjeta conserva la hora de envío original y muestra "AÑADIDO hh:mm". Origen: propuesta T-04 de Testing y decisión técnica del Software Engineer (`docs/arquitectura.md` §4.2).
 
 ## Fuera del alcance del MVP
 
@@ -129,3 +161,17 @@ Un pedido tiene **dos estados independientes** (supuesto 14):
 12. ¿Necesitan **varios tipos de IVA** (p. ej. consumo en local frente a para llevar) o desglosar el IVA en el ticket?
 13. **[Cerrada de forma provisional 2026-11-21 con el supuesto 18: estado "Servido"; el humano tiene que confirmarlo]** Cuando un pedido ya cobrado (p. ej. de mostrador) pasa a "Listo", ¿cómo sabe el camarero que tiene que entregarlo y **hasta cuándo debe seguir viéndolo**? ¿Hace falta un estado "Entregado" o basta con que barra lo entregue directamente? Hoy las historias solo exigen que el camarero lo vea marcado "Listo" (HU-03); no definen cuándo deja de mostrarse.
 14. **[Nueva 2026-11-21]** ¿A qué hora **cierra el local**? ¿Alguna vez trabaja después de medianoche? Si es así, hace falta una "jornada" con hora de corte configurable en lugar del día natural (supuesto 15). ¿El local está en la península o Baleares (si está en Canarias, la hora es otra)?
+
+## Registro de cambios
+
+- **2026-11-21, ronda 1.1d [Cambio 2026-11-21]** (hallazgos SEC-001, SEC-004,
+  SEC-007, SEC-008 y T-01..T-09 de `docs/estado.md`):
+  - IDs estables `CA-F/CA-U/CA-N` en HU-01..HU-09 (sección
+    [Identificadores de los criterios](#identificadores-de-los-criterios-cambio-2026-11-21)).
+  - Supuestos modificados: 6 (PIN de 6 dígitos para encargado), 11 (bloqueo
+    progresivo, límite por dispositivo, caducidad de 12 h), 12 (condiciones de
+    medida) y 22 (decisiones de Cybersecurity sobre la autorización).
+  - Supuestos nuevos: 23 (dispositivo de referencia de sala) y 24 (hora de
+    entrada en la cola).
+  - El detalle de cada historia está en su nota final "Cambios 2026-11-21
+    (tarea 1.1d ...)".
