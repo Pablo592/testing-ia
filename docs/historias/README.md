@@ -226,6 +226,14 @@ Texto original de las preguntas:
 
 ## Registro de cambios
 
+- **2026-11-23, ronda 1.7d [Cambio 2026-11-23, 1.7d]** (interpretaciones de UX
+  sobre HU-08/CA-F13, `docs/ux/wireframes/09-resumen-dia.md`; criterio "menor
+  carga"): confirmadas las dos. HU-08/CA-F13 precisa que en las anulaciones de
+  cobro el autorizador es "No aplica (encargado)" y que, en un día cerrado, el
+  desglose usa las cifras del cierre guardado y las anulaciones posteriores van
+  en la sección aparte de CA-F05. Mismo ID; ninguno nuevo, retirado ni
+  renumerado.
+
 - **2026-11-23, ronda 1.1f [Cambio 2026-11-23, 1.1f]** (hallazgos T-14..T-17 e
   interpretaciones I-01..I-10 de Testing, `docs/testing.md` §4.5 y §14.2;
   criterio del humano "menor carga"):

@@ -20,7 +20,7 @@ para **cuadrar la caja y saber qué se vende más**.
 - **CA-F09** Dado un cobro anulado (HU-04), entonces no suma en el total cobrado, ni en el total en efectivo o tarjeta, ni en los productos vendidos de su día, y sí cuenta en "cobros anulados" (número e importe) del día en que se registró el cobro original.
 - **CA-F10** Dado un pedido cuyo cobro se anuló y que se ha vuelto a cobrar, entonces solo el cobro vigente suma en los totales, en el día en que se registró ese nuevo cobro.
 - **CA-F11** Dado un pedido cancelado, entonces cuenta en "pedidos cancelados" del día en que se canceló.
-- **CA-F13** **[Cambio 2026-11-21, SEC-008]** Dado el resumen del día, entonces muestra el número e importe de pedidos cancelados y de cobros anulados agrupados por usuario que los realizó (y, si lo hubo, encargado que autorizó): una fila por cada combinación de usuario que canceló o anuló y encargado que autorizó la cancelación ("sin autorización" si no la necesitó), con los nombres de los usuarios en texto.
+- **CA-F13** **[Cambio 2026-11-21, SEC-008]** Dado el resumen del día, entonces muestra el número e importe de pedidos cancelados y de cobros anulados agrupados por usuario que los realizó (y, si lo hubo, encargado que autorizó): una fila por cada combinación de usuario que canceló o anuló y encargado que autorizó la cancelación ("sin autorización" si no la necesitó), con los nombres de los usuarios en texto. **[Cambio 2026-11-23, 1.7d]** En las filas de cobros anulados, la columna del encargado que autorizó muestra "No aplica (encargado)", porque la anulación solo la hace un encargado y nadie más la autoriza (HU-04/CA-N03, CA-F23). En un día ya cerrado (CA-F05), el desglose incluye las mismas cancelaciones y anulaciones que las cifras del cierre guardado; los cobros anulados después del cierre van en la sección aparte de CA-F05, con el usuario que los anuló, y no suman en el desglose.
 - **CA-F14** **[Cambio 2026-11-21, SEC-008]** Dado el desglose por usuario de CA-F13, entonces la suma de sus filas coincide en número e importe con los totales de pedidos cancelados y de cobros anulados de CA-F01 para ese día.
 - **CA-F02** Dado el resumen, entonces ve la lista de productos vendidos (de los cobros vigentes del día) con unidades e importe, ordenada de mayor a menor importe.
 - **CA-F03** Dados pedidos con cobro "Abierto" al consultar el resumen, entonces se muestra el aviso "Hay N pedidos sin cobrar" con acceso a la lista.
@@ -52,3 +52,7 @@ consulta, no un borrado (supuestos 11, 15 y 16 del README, a validar)._
 _Cambios 2026-11-21 (tarea 1.1d: T-01, T-09, SEC-008): IDs estables;
 cancelaciones y anulaciones por usuario; percentil y punto de medida del
 rendimiento._
+
+_Cambios 2026-11-23 (tarea 1.7d, interpretaciones de UX): CA-F13 precisa
+"No aplica (encargado)" en las anulaciones y el desglose de un día cerrado.
+Mismo ID, sin IDs nuevos ni retirados._
