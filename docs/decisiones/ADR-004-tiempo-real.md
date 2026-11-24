@@ -41,7 +41,8 @@ acciones del usuario ya van por HTTP (REST). Una sola instancia de backend
   después del `COMMIT`. El hub mantiene las conexiones abiertas con su sesión y
   rol, y serializa cada evento según el rol (barra: sin importes).
 - Eventos: `hello`, `order.created`, `order.updated`, `product.updated`,
-  `menu.changed`, `settings.updated`, `session.updated`, `session.revoked`,
+  `menu.changed`, `settings.updated` (retirado en la revisión 2026-11-23),
+  `session.updated`, `session.revoked`,
   `ping` (cada 2 s, con `serverTime`). Detalle en `docs/arquitectura.md` §6.
 - El cliente tiene un vigilante: sin ningún mensaje en 5 s → "Sin conexión" y
   reconexión. Tras `hello`, pide el snapshot completo por REST y lo sustituye.
@@ -80,3 +81,12 @@ La decisión (SSE + snapshot) **no cambia**. Se amplía el contrato:
   propagación extremo a extremo en el cliente.
 - `hello` y `ping` llevan `businessDate`: el cliente recarga la lista de sala al
   cambiar el día (HU-03, cobrados sin servir), sin temporizador en servidor.
+
+## Revisión 2026-11-23 (tarea 1.3c)
+
+La decisión (SSE + snapshot) **no cambia**. Se **retira el evento
+`settings.updated`** (HU-09 fuera del MVP): mesas y umbral de retraso solo
+cambian con un reinicio de `app` por soporte técnico, y tras la reconexión el
+cliente vuelve a leer `GET /auth/me` (con `localConfig`) junto con su snapshot
+(`docs/arquitectura.md` §6). No hace falta un evento para un valor que no
+cambia con la aplicación en marcha.

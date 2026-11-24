@@ -52,7 +52,8 @@ modular de una sola instancia**.
 - Paquete `packages/shared` con esquemas zod, dinero, permisos y máquina de
   estados, compartido con el frontend.
 - Monolito modular (módulos `auth`, `menu`, `orders`, `payments`, `staff`,
-  `reports`, `settings`, `audit`) con DI manual por constructor.
+  `reports`, `settings` —retirado en la revisión 2026-11-23—, `audit`) con DI
+  manual por constructor.
 - Versiones exactas fijadas en el lockfile de pnpm; la imagen base, por digest
   (Infrastructure).
 
@@ -67,3 +68,34 @@ modular de una sola instancia**.
   (el paquete `argon2` es nativo y asíncrono), así que no bloquea el bucle.
 - Si en el futuro un componente necesitara CPU intensiva, se podría extraer en
   Rust sin cambiar el resto (arquitectura mixta permitida).
+
+## Revisión 2026-11-23 (tarea 1.3c)
+
+La decisión (TypeScript + Node.js LTS + Fastify, monolito modular) **no
+cambia**. Ajustes:
+
+- **Módulos:** se retira `settings` (HU-09 fuera del MVP). Mesas y umbral de
+  retraso son configuración de instalación de solo lectura en `config.ts`
+  (`docs/arquitectura.md` §4.1).
+- **UID de la imagen final (SEC-010, resto).**
+  - Contexto: la imagen distroless trae el usuario `nonroot` (UID 65532),
+    mientras que `docs/reglas-equipo.md` §3.4 fija `--user 1000:1000` y el
+    diseño de PROD monta los secretos con `uid=1000`. Con UID distintos, el
+    proceso no puede leer un secreto en modo 0400, y la salida fácil (0444)
+    lo haría legible para cualquier proceso.
+  - Opciones: (1) usar 65532 en imagen, ejecución y secretos; (2) **usar
+    1000:1000** en todo.
+  - Decisión: (2). La etapa final de la imagen de `app` (también `migrate`,
+    `create-initial-manager` y `unlock-user`, que son la misma imagen) hace
+    `COPY --chown=1000:1000` y declara `USER 1000:1000` numérico; se ejecuta
+    con `--user 1000:1000`; los secretos se montan con
+    `uid=1000,gid=1000,mode=0400`.
+  - Motivo: coincide con la regla §3.4, con el Containerfile de DEV y con el
+    diseño de secretos de Infrastructure; un único UID en todo el proyecto
+    evita el desajuste que originó el hallazgo. 65532 también cumple
+    "UID ≥ 1000", pero obligaría a una excepción a `--user 1000:1000`.
+  - Consecuencias: (−) la distroless no tiene entrada en `/etc/passwd` para el
+    UID 1000; Node no la necesita (la app no usa `os.userInfo()`; si una
+    librería necesita `HOME`, `ENV HOME=/tmp`). (+) En rootless el UID 1000 del
+    contenedor se mapea a un subuid del usuario de servicio, nunca a 0 en el
+    host. Infrastructure lo aplica en el Containerfile, compose y Quadlet.

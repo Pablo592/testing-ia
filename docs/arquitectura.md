@@ -1,8 +1,8 @@
 # Arquitectura — Toma de pedidos para cafetería (MVP)
 
-> Responsable: Software Engineer. Entradas: `docs/historias/` (HU-01 a HU-08,
-> HU-09 como **propuesta** y supuestos del README, incluidos los marcados
-> "[Cambio 2026-11-21]"), `docs/ux/`, `docs/testing.md`, `docs/logging.md` y
+> Responsable: Software Engineer. Entradas: `docs/historias/` (HU-01 a HU-08 y
+> supuestos del README; HU-09 **fuera del MVP**, decisión del humano
+> 2026-11-23), `docs/ux/`, `docs/testing.md`, `docs/logging.md` y
 > `docs/reglas-equipo.md` (sección 3). La arquitectura asume una **UI web
 > táctil** que funciona en navegador (tablets de 10", pantalla de barra de 24"
 > FHD o mayor —supuesto 21—, TPV u ordenador).
@@ -13,6 +13,12 @@
 > acción, ajustes del local (condicionado a HU-09), hallazgos T-10, T-11,
 > M-01..M-04 y decisiones de Cybersecurity SEC-001, 002, 004, 005, 006, 007 y
 > 012 (`docs/seguridad.md` §6). Registro de decisiones en la §14.
+>
+> Revisión 2026-11-23 (tarea 1.3c): `verifyPin` única para toda verificación de
+> PIN (SEC-016), redacción de logs por `/pin/i` (SEC-017), cookie `__Host-sid`
+> (SEC-021), cobros del día para el camarero (SEC-022), UID 1000 en la imagen
+> de `app` (SEC-010) y retirada de los ajustes editables (HU-09 fuera del MVP).
+> Registro en la §15.
 
 ## 1. Visión general
 
@@ -63,7 +69,7 @@ flowchart LR
     subgraph APP["app (Node.js + Fastify)"]
       R["Rutas HTTP /api/v1 :3000<br/>(validación zod)"]
       MW["Middleware: request_id, sesión,<br/>actividad, permisos (RBAC)"]
-      S["Servicios de dominio<br/>auth · menu · orders · payments · staff · reports · settings · telemetry"]
+      S["Servicios de dominio<br/>auth (verifyPin) · menu · orders · payments · staff · reports · telemetry"]
       CLK["Clock inyectable<br/>(instante + fecha de negocio)"]
       BUS["Bus de eventos en memoria"]
       SSE["Hub SSE /api/v1/events<br/>(filtrado y serializado por rol)"]
@@ -124,18 +130,17 @@ mi-app/
 │   │   └── src/
 │   │       ├── main.ts           # arranque: compone buildApp() con SystemClock (DI manual)
 │   │       ├── app.ts            # buildApp(deps): factoría usada por main y por los tests
-│   │       ├── config.ts         # lectura de variables/secretos (fallo si faltan)
+│   │       ├── config.ts         # lectura de variables/secretos (fallo si faltan); configuración de instalación (§4.1)
 │   │       ├── http/             # rutas por módulo + plugins (request_id, sesión, rbac, errores)
 │   │       ├── realtime/         # hub SSE, serializadores por rol, ping
 │   │       ├── metrics/          # registro prom-client y servidor interno :9464
 │   │       ├── modules/
-│   │       │   ├── auth/         # login, logout, sesiones, bloqueo, cambio de PIN, aprobación de encargado
+│   │       │   ├── auth/         # verifyPin (única que usa el hasher), login, logout, sesiones, bloqueo, cambio de PIN, aprobación y reconfirmación
 │   │       │   ├── staff/        # HU-07
 │   │       │   ├── menu/         # HU-05
 │   │       │   ├── orders/       # HU-02, HU-03, HU-06 (cola, lista de sala, servido)
 │   │       │   ├── payments/     # HU-04 (cobro, anulación, cobrados hoy)
 │   │       │   ├── reports/      # HU-08
-│   │       │   ├── settings/     # ajustes del local (HU-09 si se aprueba; si no, solo lectura)
 │   │       │   ├── telemetry/    # POST /telemetry → métricas (M-03)
 │   │       │   └── audit/
 │   │       ├── db/               # cliente Kysely, tipos de tablas, migraciones
@@ -143,7 +148,7 @@ mi-app/
 │   └── web/                      # SPA React + Vite
 │       └── src/
 │           ├── app/              # router, layout por rol, guardas de ruta
-│           ├── features/         # login, pedidos (sala), toma, cola, cobro, cobrados-hoy, menu, personal, resumen, ajustes
+│           ├── features/         # login, pedidos (sala), toma, cola, cobro, cobrados-hoy, menu, personal, resumen
 │           ├── realtime/         # cliente SSE, vigilante "Sin conexión", resync, cambio de día
 │           ├── telemetry/        # cola de métricas del cliente, envío por lotes
 │           ├── api/              # cliente HTTP tipado
@@ -190,7 +195,6 @@ erDiagram
   users ||--o{ audit_log : "actor / autoriza"
   daily_counters ||--o{ orders : "numera"
   cash_closings }o--|| users : "cierra"
-  settings }o--o| users : "último cambio"
 ```
 
 ### 4.1 Tablas
@@ -205,9 +209,9 @@ erDiagram
 | pin_digits | smallint `CHECK (pin_digits BETWEEN 4 AND 6)` | longitud del PIN; al promocionar a encargado con < 6 → `must_change_pin` (SEC-001) |
 | must_change_pin | boolean | true tras alta, restablecimiento o promoción a encargado con PIN corto |
 | active | boolean | |
-| failed_attempts | smallint | fallos **consecutivos acumulados** (login, aprobaciones y reconfirmaciones); no se reinicia al expirar un bloqueo (SEC-001) |
+| failed_attempts | smallint | fallos **consecutivos acumulados** de cualquier verificación del PIN de este usuario (login, `managerApproval`, `confirmPin`, `currentPin`; `verifyPin`, §7); no se reinicia al expirar un bloqueo (SEC-001, SEC-016) |
 | locked_until | timestamptz null | bloqueo temporal: 5 / 15 / 60 min al llegar a 5 / 10 / 15 fallos |
-| locked_manual | boolean | true al llegar a 20 fallos: bloqueo indefinido hasta desbloqueo por encargado o `unlock-user` |
+| locked_manual | boolean | true al llegar a 20 fallos: bloqueo indefinido hasta desbloqueo por encargado o `unlock-user`; al ponerse a true se revocan **todas** las sesiones del usuario (SEC-016) |
 | created_at, updated_at | timestamptz | |
 
 **sessions** (ADR-005)
@@ -219,28 +223,30 @@ erDiagram
 | created_at | timestamptz | |
 | last_activity_at | timestamptz | para inactividad de 15 min |
 | expires_at | timestamptz | caducidad absoluta **12 h** para todos los roles, configurable solo a la baja (SEC-004) |
-| revoked_at | timestamptz null | logout, desactivación, restablecimiento de PIN |
+| revoked_at | timestamptz null | logout, desactivación, restablecimiento de PIN, cambio de PIN propio (las demás), bloqueo indefinido (todas) |
 | user_agent | varchar(200) | solo diagnóstico |
 
-**settings** — ajustes del local, **una sola fila** (`id smallint PK CHECK (id = 1)`).
-| Columna | Tipo | Notas |
-|---|---|---|
-| table_count | smallint `CHECK (table_count BETWEEN 1 AND 99)` | N mesas, por defecto 20 (supuestos 1 y 20) |
-| delay_threshold_minutes | smallint `CHECK (delay_threshold_minutes BETWEEN 1 AND 60)` | umbral "retrasado", por defecto 10 (supuesto 11) |
-| version | integer | control optimista del formulario de HU-09 |
-| updated_at | timestamptz | |
-| updated_by | uuid FK users null | null = valor de instalación |
+**Configuración de instalación (sin tabla; HU-09 fuera del MVP, supuesto 20).**
+Número de mesas y umbral de retraso son valores **de solo lectura** para la
+aplicación: no hay tabla `settings`, ni ruta de escritura, ni evento, ni
+auditoría de ajustes (YAGNI). `config.ts` los lee al arrancar de variables de
+entorno no secretas y **no arranca** si están fuera de rango:
 
-- La fila la crea `migrate` en la instalación con los valores de las variables
-  `TABLE_COUNT` y `DELAY_THRESHOLD_MINUTES` (por defecto 20 y 10) **solo si no
-  existe**; reinstalar o actualizar no la sobrescribe.
-- **Condicionado a HU-09:** si el humano la aprueba, el encargado la cambia con
-  `PATCH /settings` y cada cambio se audita en `audit_log` (`settings.changed`,
-  `details = {field, old, new}` por campo, actor, hora). No hay tabla de
-  historial propia: `audit_log` ya cumple "usuario, fecha/hora, valor anterior y
-  nuevo" (DRY). **Si no se aprueba**, la ruta `PATCH /settings` no se implementa
-  y los valores solo cambian por soporte técnico (supuesto 20). El tiempo de
-  "Deshacer" (30 s) **no** es un ajuste: es una constante de `packages/shared`.
+| Variable | Rango | Valor por defecto | Uso |
+|---|---|---|---|
+| `TABLE_COUNT` | 1–99 | 20 (supuestos 1 y 20) | rejilla de mesas (HU-02/CA-F01); `POST /orders` rechaza mesas > N con `422 TABLE_OUT_OF_RANGE` |
+| `DELAY_THRESHOLD_MINUTES` | 1–60 | 10 (supuesto 24) | "RETRASADO" en la cola (HU-03/CA-F06) |
+
+- Solo los cambia soporte técnico (variable del despliegue + reinicio de
+  `app`). Tras el reinicio, los clientes reconectan y vuelven a leer
+  `GET /auth/me` (§6), así que reciben el valor nuevo sin evento propio.
+- Bajar `TABLE_COUNT` no toca los pedidos ya abiertos en mesas mayores: siguen
+  visibles y se pueden cobrar; solo se impide crear pedidos nuevos en ellas.
+- El tiempo de "Deshacer" (30 s) tampoco es configurable: es una constante de
+  `packages/shared`.
+- Si HU-09 entra más adelante, se añadirá una tabla de una fila y su ruta en un
+  ADR nuevo; los contratos de lectura (`localConfig`, `delayThresholdMinutes`
+  de la cola) no cambian.
 
 **categories**: `id`, `name varchar(30)`, `position int`, `archived_at null`.
 Único `lower(name)` entre no archivadas (índice parcial). "Borrar" = archivar,
@@ -265,7 +271,7 @@ concurrencia; los cancelados conservan su número). `$businessDate` viene del
 | business_date | date | del envío; **no cambia** aunque se modifique o cobre otro día |
 | daily_number | int | `UNIQUE (business_date, daily_number)` |
 | type | enum `table` \| `counter` | Mesa / Mostrador-Para llevar |
-| table_number | smallint null | `CHECK` coherente con `type`; ≤ `settings.table_count` al crear (validado en servicio, §9) |
+| table_number | smallint null | `CHECK` coherente con `type` y `BETWEEN 1 AND 99`; ≤ `TABLE_COUNT` al crear (validado en servicio) |
 | customer_ref | varchar(30) null | |
 | status | enum `open` \| `paid` \| `cancelled` | **dimensión de cobro** (Abierto / Cobrado / Cancelado) |
 | prep_status | enum `pending` \| `in_progress` \| `ready` \| `served` | **dimensión de preparación** (Pendiente / En preparación / Listo / Servido) |
@@ -285,7 +291,7 @@ concurrencia; los cancelados conservan su número). `$businessDate` viene del
 Índices: `(status) WHERE status = 'open'` (por cobrar y lista de sala),
 `(queued_at) WHERE prep_status IN ('pending','in_progress')` (cola),
 `(business_date, status)` (lista de sala del día y HU-08),
-`(table_number) WHERE status = 'open'` (aviso de mesa ocupada y HU-09).
+`(table_number) WHERE status = 'open'` (aviso de mesa ocupada).
 
 **order_lines**
 | Columna | Tipo | Notas |
@@ -329,10 +335,10 @@ las filas del cobro a la vez (no existe operación para anular una sola).
 después se detectan con `payments.voided_at > cash_closings.closed_at` y se
 muestran aparte, sin tocar el cierre.
 
-**audit_log** (HU-04, HU-05, HU-06, HU-07, HU-09): `id bigserial`, `at`,
+**audit_log** (HU-04, HU-05, HU-06, HU-07): `id bigserial`, `at`,
 `actor_id`, `authorized_by null` (encargado que autorizó), `action` (p. ej.
 `price.changed`, `order.line_removed`, `order.cancelled`, `payment.voided`,
-`user.role_changed`, `user.unlocked`, `settings.changed`), `entity_type`, `entity_id`,
+`user.role_changed`, `user.unlocked`), `entity_type`, `entity_id`,
 `details jsonb` (p. ej. valor anterior y nuevo). `actor_id` nulo = actor
 `system` (comandos `create-initial-manager` y `unlock-user`). **Nunca contiene
 PIN ni hashes.** Inmutable a dos niveles: el rol de BD de la aplicación solo tiene
@@ -472,7 +478,7 @@ Errores con formato único:
 { "error": { "code": "ORDER_VERSION_CONFLICT", "message": "El pedido ha cambiado", "requestId": "6f1c2b0e-…", "details": { } } }
 ```
 Códigos HTTP: `400` validación (con campo y regla, para los mensajes de
-HU-05/HU-07/HU-09), `401` sin sesión o caducada, `403` sin permiso, `404`,
+HU-05/HU-07), `401` sin sesión o caducada, `403` sin permiso, `404`,
 `409` conflicto de estado/versión (incluye el recurso actual), `422` regla de
 negocio sobre datos válidos, `423` usuario bloqueado (con `retryAfterSeconds`),
 `429` límite de peticiones.
@@ -495,16 +501,31 @@ requieren aceptan en el cuerpo
   activo, para no revelar nada; también si el encargado está bloqueado,
   desactivado o con PIN provisional), `429` (5 fallos por sesión en 10 min, o
   límite por IP). El cambio pendiente no se aplica y el cliente lo conserva.
-- Los fallos cuentan en el contador de bloqueo del encargado elegido (misma
-  escala que el login, `docs/seguridad.md` §6.1). PIN de encargado: 6 dígitos.
+- Se verifica con `verifyPin` (§7): los fallos cuentan en el contador de
+  bloqueo del encargado elegido (misma escala que el login,
+  `docs/seguridad.md` §6.1), en el límite por IP y en el de la sesión del
+  camarero. PIN de encargado: 6 dígitos.
 
 **Reconfirmación del encargado (SEC-007).** Anular un cobro, crear un usuario,
 cambiar su rol, activarlo/desactivarlo, restablecer su PIN o desbloquearlo
 exigen en el cuerpo `"confirmPin": "123456"` (PIN del propio encargado de la
-sesión), aunque la sesión ya sea de encargado. Mismo mecanismo y mismo contador
-que `managerApproval`, sin estado en servidor. Errores:
-`403 PIN_CONFIRMATION_REQUIRED`, `403 PIN_CONFIRMATION_INVALID`, `423`, `429`.
+sesión), aunque la sesión ya sea de encargado. Se verifica con `verifyPin`
+(§7) sobre el usuario de la sesión, sin estado en servidor. Errores:
+`403 PIN_CONFIRMATION_REQUIRED`, `403 PIN_CONFIRMATION_INVALID`,
+`423 LOCKED {retryAfterSeconds}` / `423 ACCOUNT_LOCKED_MANUAL` (en este caso la
+sesión ya está revocada), `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}`.
 Cambiar solo el nombre de un usuario no la exige.
+
+Durante un **bloqueo temporal** de la cuenta del encargado (HU-01/CA-F12), la
+reconfirmación se rechaza **sin comprobar el PIN** con
+`423 LOCKED {retryAfterSeconds}` (la UI muestra "Cuenta bloqueada. Espera X
+min") y ese rechazo **no cuenta como fallo** (paso 3 de `verifyPin`, §7).
+
+**Cambio obligatorio del PIN provisional (SEC-016).** `POST /auth/pin` solo
+existe para el PIN provisional (`mustChangePin = true`, HU-07/CA-F04, CA-F09);
+no hay cambio voluntario del PIN en el MVP. Su `currentPin` es una
+verificación de PIN más: pasa por `verifyPin` (§7) sobre el usuario de la
+sesión, con los mismos contadores y límites que `confirmPin`.
 
 ### 5.1 Endpoints
 
@@ -516,8 +537,8 @@ Permisos: **W** = camarero/cajero, **K** = barra/cocina, **M** = encargado
 | `GET /auth/login-options` | público | HU-01 | rejilla de P-01 (SEC-005): solo `[{name, role}]` de usuarios **activos**, sin `id`, bloqueo ni `mustChangePin`; `Cache-Control: no-store`; mismo límite por IP que el login |
 | `POST /auth/login` | público | HU-01 | `{name, pin}` → `200 {user:{id,name,role,mustChangePin}}` + cookie; `401 INVALID_CREDENTIALS`; `423 LOCKED {retryAfterSeconds}`; `423 ACCOUNT_LOCKED_MANUAL`; `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}` (por IP, antes del hash); `403 USER_DISABLED` (solo si el PIN es correcto) |
 | `POST /auth/logout` | sesión | HU-01 | revoca la sesión |
-| `GET /auth/me` | sesión | HU-01 | usuario, rol, permisos efectivos, `serverTime`, `businessDate`, `localConfig` filtrado por rol: W `{tableCount}`, K `{delayThresholdMinutes}`, M ambos |
-| `POST /auth/pin` | sesión | HU-07 | `{currentPin, newPin}`; única ruta (con `/auth/me` y logout) permitida con `mustChangePin` |
+| `GET /auth/me` | sesión | HU-01 | usuario, rol, permisos efectivos, `serverTime`, `businessDate`, `localConfig` (configuración de instalación, §4.1) filtrado por rol: W `{tableCount}`, K `{delayThresholdMinutes}`, M ambos |
+| `POST /auth/pin` | sesión **con `mustChangePin = true`** | HU-07/CA-F04, CA-F09 | **Solo el cambio obligatorio del PIN provisional** (ronda 1.1f: ninguna historia pide el cambio voluntario; un PIN que se sospecha visto lo restablece el encargado con `reset-pin`). Con `mustChangePin = false` → `403 FORBIDDEN` sin verificar nada (no suma a ningún contador). `{currentPin, newPin}` → `204`; pone `must_change_pin = false`; revoca las demás sesiones del usuario; única ruta (con `/auth/me` y logout) permitida con `mustChangePin`. `currentPin` pasa por `verifyPin` (SEC-016): `403 PIN_INVALID` (incorrecto; no `401`, la sesión sigue válida); `423 LOCKED {retryAfterSeconds}`; `423 ACCOUNT_LOCKED_MANUAL` (al llegar a 20 fallos: todas las sesiones del usuario, incluida esta, quedan revocadas); `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}` (por IP o por sesión, antes del hash); `400` si `newPin` incumple las reglas de PIN |
 | `POST /session/activity` | sesión | HU-01 | latido de interacción (como mucho 1/min si hay toques sin otras peticiones) |
 | `GET /events` | sesión | HU-02..HU-06 | flujo SSE (§6) |
 | `GET /menu` | W, K, M | HU-02, HU-05 | categorías y productos activos ordenados, con `available` (K sin precio) |
@@ -539,15 +560,13 @@ Permisos: **W** = camarero/cajero, **K** = barra/cocina, **M** = encargado
 | `GET /staff/managers` | W, M (`approval:request`) | HU-06 | `[{id, name}]` de encargados activos, para el diálogo de autorización |
 | `POST /payments` | W, M | HU-04 | `{id, orderIds:[…], method, tenderedCents?, expectedTotalCents}` → `201 {payment, changeCents}`; `409 TOTAL_CHANGED`; `409 ALREADY_PAID`; `409 ORDER_CANCELLED`; `422 INSUFFICIENT_CASH {missingCents}`; `422 PAYMENT_AMOUNT_TOO_HIGH` (ADR-006); `tenderedCents` ≤ 10 000 000; reintento con el mismo `id` → `200` |
 | `GET /payments/today` | W, M | HU-04 | "Cobrados hoy": `{serverTime, businessDate, payments:[{id, paidAt, method, amountCents, orders:[{id, dailyNumber, tableNumber?, customerRef?}], voided, voidedAt?}]}` |
-| `GET /payments/:id` | W, M | HU-04 | detalle del cobro y pedidos que cubre (para el diálogo de anulación) |
-| `GET /payments/:id/ticket` | W, M | HU-04 | resumen en pantalla |
+| `GET /payments/:id` | W (solo hoy), M | HU-04 | detalle del cobro y pedidos que cubre (para el diálogo de anulación). **W (SEC-022):** solo si `payments.business_date = businessDate(clock.now())`; si no, `404 NOT_FOUND`, la misma respuesta que un id inexistente. M: cualquier día |
+| `GET /payments/:id/ticket` | W (solo hoy), M | HU-04 | resumen en pantalla; misma regla de fecha que `GET /payments/:id` para W (SEC-022) |
 | `POST /payments/:id/void` | M + `confirmPin` | HU-04 | `{reason, confirmPin}` (motivo ≥ 5 caracteres) → anula el **cobro completo**; `200 {payment, reopenedOrders:[…]}`; `409 PAYMENT_ALREADY_VOIDED`. No existe anulación por pedido |
 | `GET /staff` | M (`staff:read`) | HU-07 | nunca devuelve `pin_hash`, `failed_attempts` ni sesiones; sí `locked` (temporal/indefinido) para mostrar "Desbloquear" |
 | `POST /staff` · `PATCH /staff/:id` | M (`staff:manage`) + `confirmPin` | HU-07 | alta `{name, role, pin, confirmPin}` (PIN de encargado: 6 dígitos); `PATCH` cambia nombre/rol/activo (`confirmPin` obligatorio salvo si solo cambia el nombre); promoción a encargado con PIN < 6 → `must_change_pin`; `409 LAST_MANAGER` |
 | `POST /staff/:id/reset-pin` | M (`staff:manage`) + `confirmPin` | HU-07 | `{pin, confirmPin}` provisional; reinicia el contador y el bloqueo; revoca sesiones del usuario |
 | `POST /staff/:id/unlock` | M (`staff:unlock`) + `confirmPin` | HU-07 | `{confirmPin}`; `failed_attempts = 0`, quita `locked_until` y `locked_manual`; auditado (SEC-001) |
-| `GET /settings` | M | HU-09 | `{tableCount, delayThresholdMinutes, version, updatedAt, updatedBy}` (pantalla "Ajustes"); el resto de roles recibe sus valores en `/auth/me` |
-| `PATCH /settings` | M (`settings:manage`) | HU-09 **(solo si se aprueba)** | `{expectedVersion, tableCount?, delayThresholdMinutes?}`; `400` con el mensaje y rango de cada campo; `409 TABLES_HAVE_OPEN_ORDERS {tableNumbers}` si se reduce N con pedidos `open` en mesas > N; `409 SETTINGS_VERSION_CONFLICT` |
 | `GET /reports/daily?date=YYYY-MM-DD` | M | HU-08 | fecha en `[today − 90, today]`; totales (sin anulados), productos, cancelados (por día de cancelación), anulados (por día del cobro original), abiertos, cierre guardado y anulados posteriores al cierre |
 | `POST /reports/daily/:date/closing` | M (`reports:close`) | HU-08 | `{countedCashCents}`; `409` si ya está cerrado |
 | `POST /telemetry` | sesión (`telemetry:write`) | M-03 | lote de métricas del cliente (§11); `204`; `413` si supera el tamaño, `429` si supera la frecuencia |
@@ -558,6 +577,14 @@ Permisos: **W** = camarero/cajero, **K** = barra/cocina, **M** = encargado
 `/healthz` y `/readyz` no requieren sesión, no generan `http.request` y Caddy
 responde `404` a ambos (no se enrutan). El puerto 9464 no se publica ni lo
 enruta Caddy.
+
+**Sin rutas de ajustes en el MVP** (HU-09 fuera): no existen `GET /settings` ni
+`PATCH /settings` (`404`). Los clientes conocen la configuración de instalación
+por `localConfig` de `GET /auth/me` (W: mesas; K: umbral; M: ambos) y barra,
+además, por `delayThresholdMinutes` de `GET /kitchen/queue`. Se mantiene
+`localConfig` porque la rejilla de mesas (HU-02/CA-F01) y el "RETRASADO"
+(HU-03/CA-F06) necesitan el valor en el cliente y `/auth/me` ya se lee al
+iniciar sesión y al reconectar: no hace falta una ruta más.
 
 **Serialización por rol:** cada recurso de pedido tiene dos serializadores,
 `toStaffDto` (con importes, cobro e historial completo) y `toKitchenDto` (sin
@@ -593,7 +620,6 @@ AÑADIDO/ELIMINADO). La ruta y el hub SSE eligen por el rol de la sesión. Así
 | `payment.created` · `payment.voided` | fila de "Cobrados hoy" | ✓ | — | ✓ | HU-04 |
 | `product.updated` | disponibilidad/precio/activo | ✓ | ✓ (sin precio) | ✓ | HU-05 |
 | `menu.changed` | estructura/orden → recarga `GET /menu` | ✓ | ✓ | ✓ | HU-05 |
-| `settings.updated` | W `{tableCount}`, K `{delayThresholdMinutes}`, M ambos | ✓ | ✓ | ✓ | HU-09 (solo si se aprueba) |
 | `session.revoked` (y se cierra el flujo) | — | sesión afectada | sesión afectada | sesión afectada | HU-01, HU-07 |
 | `session.updated` (cambio de rol → recarga `/auth/me` y reconecta) | — | sesión afectada | sesión afectada | sesión afectada | HU-07 |
 | `ping` cada 2 s | `serverTime`, `businessDate` | ✓ | ✓ | ✓ | latido |
@@ -606,7 +632,8 @@ AÑADIDO/ELIMINADO). La ruta y el hub SSE eligen por el rol de la sesión. Así
   recibe nada (ni `ping`) en 5 s muestra el aviso y fuerza reconexión.
 - **Resincronización sin pérdidas:** al (re)conectar, el servidor envía primero
   `hello`; el cliente entonces pide el snapshot de su rol (K: `GET /kitchen/queue`;
-  W/M: `GET /orders/floor` + `GET /payments/today`; todos: `GET /menu`) y lo
+  W/M: `GET /orders/floor` + `GET /payments/today`; todos: `GET /menu` y
+  `GET /auth/me`, que trae `localConfig` tras un reinicio de `app`) y lo
   **reemplaza** por completo. Los eventos que lleguen durante la carga se
   aplican si su `version` es mayor que la del snapshot. No se usa
   `Last-Event-ID`: el estado completo es pequeño (≤ decenas de pedidos).
@@ -616,7 +643,7 @@ AÑADIDO/ELIMINADO). La ruta y el hub SSE eligen por el rol de la sesión. Así
   más un `payment.*`.
 - **Capacidad:** ~10 conexiones SSE abiertas; trivial para Node. Con HTTP/2
   (Caddy) no aplica el límite de 6 conexiones por origen de HTTP/1.1.
-- **Presupuesto de latencia** (HU-02/HU-03/HU-06 ≤ 2 s p95, HU-05 y HU-09 ≤ 5 s,
+- **Presupuesto de latencia** (HU-02/HU-03/HU-06 ≤ 2 s p95, HU-05 ≤ 5 s,
   umbral de retraso ≤ 60 s): transacción (< 50 ms) + publicación en memoria +
   entrega SSE en LAN (< 100 ms). Margen amplio.
 
@@ -634,9 +661,14 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
 - **Red (SEC-002, condición de despliegue):** el login y la API solo son
   alcanzables desde la red del personal; nunca desde internet ni la Wi-Fi de
   clientes (ADR-007, `docs/infraestructura.md`).
-- **Sesión:** token aleatorio de 256 bits en cookie `HttpOnly; Secure;
-  SameSite=Strict; Path=/`; en BD solo su SHA-256. Se resuelve en **cada**
-  petición junto con el usuario → un cambio de rol o una desactivación surte
+- **Sesión:** token aleatorio de 256 bits en la cookie **`__Host-sid`** con
+  `HttpOnly; Secure; SameSite=Strict; Path=/`, **sin** `Domain` ni
+  `Max-Age`/`Expires` (cookie de sesión del navegador; la caducidad la decide
+  el servidor) (SEC-021, RS-10). El prefijo `__Host-` hace que el navegador
+  rechace cualquier cookie con ese nombre que no cumpla esas condiciones, así
+  que otro servicio de la red no puede fijarla ni pisarla. En DEV
+  (`http://localhost`) Chromium y Firefox la aceptan. En BD solo su SHA-256.
+  Se resuelve en **cada** petición junto con el usuario → un cambio de rol o una desactivación surte
   efecto en la siguiente petición (HU-07), y la desactivación además revoca
   sesiones y cierra el flujo SSE al instante.
 - **Inactividad 15 min (HU-01):** cuenta como actividad cualquier petición REST
@@ -647,22 +679,63 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
   inactividad (un encargado con la cola abierta no hereda la exención).
   **Caducidad absoluta 12 h** para todos los roles (SEC-004); `config.ts` no
   arranca con un valor mayor (solo se puede bajar).
-- **Bloqueo progresivo (SEC-001):** `failed_attempts` cuenta fallos
-  consecutivos acumulados y no se reinicia al expirar un bloqueo: 5 → 5 min,
-  10 → 15 min, 15 → 60 min, 20 → indefinido (`locked_manual`,
-  `423 ACCOUNT_LOCKED_MANUAL`). Durante un bloqueo no se verifica el PIN ni
-  cuenta el intento. Lo reinician un acceso correcto, "Desbloquear"
-  (`POST /staff/:id/unlock`), el restablecimiento de PIN y el comando
-  `unlock-user <nombre>` (operador del host, sin root, actor `system`). Se
-  verifica el PIN incluso si el usuario no existe (hash ficticio).
-- **Límite por origen (SEC-001):** 10 fallos (login + aprobaciones +
-  reconfirmaciones) en 10 min desde una IP → `429` durante 10 min para
-  cualquier usuario, comprobado **antes** del hash; en memoria (una instancia).
-  `GET /auth/login-options` comparte el límite. Requiere la IP real del
-  dispositivo (`trustProxy` solo para `proxy`; red rootless que conserva la IP,
-  SEC-003).
-- **Aprobaciones y reconfirmaciones** (`managerApproval`, `confirmPin`, §5):
-  mismo contador del encargado; 5 fallos por sesión en 10 min → `429`.
+- **Una sola verificación de PIN: `verifyPin` (SEC-016).** Toda comprobación
+  de un PIN contra su hash —login (`pin`), autorización de encargado
+  (`managerApproval.pin`), reconfirmación (`confirmPin`) y cambio del PIN
+  propio (`currentPin` de `POST /auth/pin`)— pasa por una única función del
+  módulo `auth`:
+
+  ```ts
+  verifyPin(target: User | null, pin: string,
+            ctx: { ip: string; sessionId?: string; purpose: 'login' | 'approval' | 'confirm' | 'change' })
+    → Promise<{ ok: true } | { ok: false; reason: 'invalid' | 'locked' | 'locked_manual' | 'rate_limited'; retryAfterSeconds?: number }>
+  ```
+
+  Es el **único** componente que recibe el hasher argon2id por constructor
+  (ningún otro servicio ni ruta puede llamarlo; una ruta nueva no puede
+  saltarse los límites). Cada ruta traduce `reason` a su error público
+  (`401 INVALID_CREDENTIALS`, `403 MANAGER_APPROVAL_INVALID`,
+  `403 PIN_CONFIRMATION_INVALID`, `403 PIN_INVALID`, `423`, `429`). Orden:
+  1. **Límite por IP**: si la IP de `ctx.ip` tiene 10 fallos en los últimos
+     10 min → `rate_limited` (`429` durante 10 min, para cualquier usuario y
+     cualquier ruta de PIN). **Antes** del hash.
+  2. **Límite por sesión** (solo si hay `ctx.sessionId`, es decir, aprobación,
+     reconfirmación y cambio de PIN): 5 fallos de la sesión en 10 min, sumando
+     los tres usos → `rate_limited` (`429`). **Antes** del hash.
+  3. **Bloqueo de la cuenta** (`locked_until > now` o `locked_manual`) →
+     `locked` / `locked_manual` sin calcular el hash ni contar el intento
+     (tampoco en IP ni sesión). Vale para todos los usos: en `confirmPin` y
+     `currentPin` la respuesta es `423 LOCKED {retryAfterSeconds}`
+     ("Cuenta bloqueada. Espera X min", HU-01/CA-F12); en `managerApproval`,
+     el error genérico `403 MANAGER_APPROVAL_INVALID`.
+  4. **Hash** argon2id(pin + pepper); si `target` es `null` (usuario
+     inexistente o, en aprobaciones, id que no es un encargado activo), contra
+     un hash ficticio, en tiempo constante.
+  5. **Fallo**: en una transacción, `failed_attempts += 1` del usuario cuyo PIN
+     se verificaba (el encargado elegido en una aprobación; el de la sesión en
+     `confirmPin` y `currentPin`) y se aplica la escala 5/10/15/20 → 5 min /
+     15 min / 60 min / `locked_manual`; además suman el contador de la IP y,
+     si hay, el de la sesión. **Al llegar a `locked_manual` se revocan todas
+     las sesiones de esa cuenta** en la misma transacción (y, tras el
+     `COMMIT`, `session.revoked` y cierre de sus flujos SSE): sea por login,
+     por aprobaciones o desde una sesión propia (HU-01/CA-F13), a los 20 fallos alguien está
+     probando PIN y ninguna sesión de esa cuenta debe seguir viva. Si la
+     petición venía de una de esas sesiones, responde
+     `423 ACCOUNT_LOCKED_MANUAL` y la siguiente petición recibe `401`.
+  6. **Acierto**: `failed_attempts = 0` (y limpia `locked_until`). En
+     aprobaciones, las reglas de "no aprueba" (desactivado, PIN provisional)
+     se comprueban después y devuelven el mismo error genérico.
+- **Escala y reinicio (SEC-001):** `failed_attempts` cuenta fallos
+  consecutivos acumulados y no se reinicia al expirar un bloqueo. Durante un
+  bloqueo no se verifica el PIN ni cuenta el intento. Lo reinician un acierto
+  en `verifyPin`, "Desbloquear" (`POST /staff/:id/unlock`), el
+  restablecimiento de PIN y el comando `unlock-user <nombre>` (operador del
+  host, sin root, actor `system`).
+- **Contadores por IP y por sesión:** en memoria (una sola instancia; un
+  reinicio de `app` los vacía, aceptado). `GET /auth/login-options` no
+  verifica PIN, pero se rechaza con `429` mientras la IP está limitada. Requiere
+  la IP real del dispositivo (`trustProxy` solo para `proxy`; red rootless que
+  conserva la IP, SEC-003).
 - **Borrador local (SEC-012):** clave `draft:<userId>` en `localStorage`, solo
   se ofrece al mismo usuario, se descarta a las 12 h, sin importes ni PIN.
 - **CSRF:** `SameSite=Strict` + mismo origen + comprobación de `Origin` en
@@ -681,20 +754,18 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
 | `order:create`, `order:read` (lista de sala, detalle), `order:modify`, `order:cancel` | ✓ (quitar/cancelar fuera de Pendiente: **A**) | | ✓ |
 | `order:serve` (Servido y su deshacer) **[nuevo]** | ✓ | | ✓ |
 | `kitchen:read`, `kitchen:transition` (Empezar, Listo, Deshacer, confirmar etiqueta) | | ✓ | ✓ |
-| `payment:create`, `payment:read` (incluye "Cobrados hoy") | ✓ | | ✓ |
+| `payment:create`, `payment:read` (incluye "Cobrados hoy") | ✓ (lectura solo del día actual, SEC-022) | | ✓ |
 | `payment:void` | | | ✓ **P** |
 | `approval:request` (listar encargados, `GET /staff/managers`) **[nuevo]** | ✓ | | ✓ |
 | `approval:grant` (ser el encargado que autoriza) | | | ✓ |
 | `staff:read` | | | ✓ |
 | `staff:manage`, `staff:unlock` | | | ✓ **P** |
 | `reports:read`, `reports:close` | | | ✓ |
-| `settings:read` (pantalla "Ajustes"), `settings:manage` (HU-09) | | | ✓ |
 
   **A** = con `managerApproval`; **P** = con `confirmPin` (SEC-007). La versión
-  formal la mantienen Cybersecurity y Developer en `docs/permisos.md`; las
-  diferencias que introduce esta revisión (rutas nuevas, `order:serve`,
-  `approval:request`, `GET /settings` solo M) están reportadas a Cybersecurity
-  en `docs/estado.md`.
+  formal la mantienen Cybersecurity y Developer en `docs/permisos.md`. En el
+  MVP no existen `settings:read` ni `settings:manage` (HU-09 fuera; la
+  configuración de instalación llega por `localConfig`, sin permiso propio).
 - **Encargado inicial (HU-01):** comando `create-initial-manager` (en la imagen
   de `app`) que lee nombre y PIN provisional (6 dígitos) de un `podman secret`,
   solo si no existe ningún encargado; queda con `must_change_pin = true`.
@@ -739,10 +810,6 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
 - **Anulación:** una transacción: `FOR UPDATE` del cobro (si `voided_at` no es
   nulo → `409`) y de sus pedidos; marca el cobro y **todas** sus filas de
   `payment_orders`; pone los pedidos en `open` y sube su `version`.
-- **Ajustes (HU-09):** `PATCH /settings` bloquea la fila (`FOR UPDATE`) y
-  comprueba que no hay pedidos `open` en mesas > N nuevo; `POST /orders` de tipo
-  mesa lee `table_count` con `FOR SHARE` en su transacción. Así no puede
-  colarse un pedido en la mesa 15 mientras se reduce a 10.
 
 ## 10. Despliegue con contenedores rootless
 
@@ -751,8 +818,8 @@ la arquitectura exige:
 
 | Servicio | Imagen base | Usuario | Puertos (contenedor) | Persistencia | Notas |
 |---|---|---|---|---|---|
-| `app` | multi-stage: `node:<LTS>-alpine` para compilar → **distroless nodejs** (`nonroot`) | UID ≥ 1000 | 3000 (API, red interna hacia Caddy) y 9464 (`/metrics`, red interna hacia Prometheus) | ninguna (`--read-only`, `/tmp` tmpfs) | `HEALTHCHECK` en forma exec con `node dist/healthcheck.js` → `GET 127.0.0.1:3000/healthz` (liveness, sin BD). Construir con formato docker para que Podman guarde el `HEALTHCHECK` |
-| `migrate` | misma imagen que `app` | igual | — | — | efímero, usa el rol de BD propietario; crea la fila de `settings` si no existe |
+| `app` | multi-stage: `node:<LTS>-alpine` para compilar → **distroless nodejs** (por digest) | **`USER 1000:1000`** numérico (no el `nonroot` 65532 de distroless; ver abajo) | 3000 (API, red interna hacia Caddy) y 9464 (`/metrics`, red interna hacia Prometheus) | ninguna (`--read-only`, `/tmp` tmpfs) | `HEALTHCHECK` en forma exec con `node dist/healthcheck.js` → `GET 127.0.0.1:3000/healthz` (liveness, sin BD). Construir con formato docker para que Podman guarde el `HEALTHCHECK` |
+| `migrate` | misma imagen que `app` | igual (1000:1000) | — | — | efímero, usa el rol de BD propietario |
 | `db` | `postgres:<versión>-alpine` | UID ≥ 1000 (`--user`), datos en volumen con ese dueño | 5432 (solo red interna) | volumen `pgdata` | `--read-only` con tmpfs en `/var/run/postgresql` y `/tmp` |
 | `proxy` | `caddy:<versión>-alpine` | UID ≥ 1000 | 8080 (redirección) y 8443 (TLS) | volumen para `/data` (certificados) | único servicio publicado al host; genera `X-Request-Id`; `404` a `/healthz` y `/readyz` |
 
@@ -760,12 +827,28 @@ la arquitectura exige:
   alcanzables desde la red del personal (Wi-Fi separada + cortafuegos del host;
   o VM con lista blanca de IP fija / WireGuard). Ver ADR-007 y
   `docs/infraestructura.md`. La red rootless conserva la IP de origen (SEC-003).
+- **UID de la imagen de `app` (SEC-010, decisión 2026-11-23): 1000:1000.** La
+  etapa final hace `COPY --chown=1000:1000` de `dist/` y `node_modules` de
+  producción y declara `USER 1000:1000`; en ejecución, `--user 1000:1000`
+  (`User=1000`/`Group=1000` en Quadlet). Motivos: es el valor que fija
+  `docs/reglas-equipo.md` §3.4 (`--user 1000:1000`), el mismo que el
+  Containerfile de DEV y que el `uid=1000` ya diseñado para los secretos de
+  PROD; usar 65532 dejaría imagen, ejecución y secretos con UID distintos (el
+  origen del hallazgo). La distroless no tiene entrada en `/etc/passwd` para
+  1000: no afecta a Node (la app no usa `os.userInfo()` ni `HOME`; si alguna
+  librería necesita `HOME`, `ENV HOME=/tmp`). **Secretos** de `app` y
+  `migrate`: `type=mount,uid=1000,gid=1000,mode=0400`; nunca `0444`. Los
+  comandos `create-initial-manager` y `unlock-user` se ejecutan con ese mismo
+  usuario (`podman exec` sin `-u`). En rootless, el UID 1000 del contenedor
+  se mapea a un subuid del usuario de servicio, nunca a 0 en el host.
 - Todos con `cap-drop: ALL`, `no-new-privileges`, límites de memoria/CPU,
   red interna propia (sin `network=host`). Ninguno necesita capacidades extra
   (todos los puertos son > 1024). El puerto 9464 **no** se publica al host.
 - **Secretos** (`podman secret`, nunca en imagen ni en `docs/`): contraseña del
   rol de BD de la app, contraseña del rol propietario (solo `migrate`), *pepper*
-  de PIN, datos del encargado inicial.
+  de PIN, datos del encargado inicial. `TABLE_COUNT` y
+  `DELAY_THRESHOLD_MINUTES` (§4.1) **no** son secretos: variables de entorno
+  normales del servicio `app`.
 - **Dos roles de BD:** `app_owner` (DDL, migraciones) y `app_rw` (DML sin
   `DELETE` en tablas de auditoría y cobros). Monitoring/Infrastructure añaden un
   rol de solo monitorización (`pg_monitor`) para `postgres_exporter`.
@@ -786,8 +869,29 @@ El estándar lo define Monitoring (`docs/logging.md`). La arquitectura aporta:
 - **Logs** JSON de Fastify (pino) a stdout con campos en `snake_case`
   (`request_id`, `user_id`, `role`, `session_id`…, M-04);
   `requestIdHeader: 'x-request-id'`, `requestIdLogLabel: 'request_id'`.
-  **Redacción obligatoria** de `pin`, `currentPin`, `newPin`,
-  `managerApproval.pin`, cookies y cabecera `Authorization`.
+  **Redacción obligatoria (SEC-017), regla común con `docs/logging.md`:**
+  el detalle (rutas, profundidad, tests) es el de `docs/logging.md` §4.3, que
+  manda si hay diferencia.
+  1. Se sustituye por `"[REDACTED]"` el valor de **cualquier clave, a
+     cualquier profundidad (objetos y *arrays*), cuyo nombre case con
+     `/pin/i`**: cubre `pin`, `currentPin`, `newPin`, `confirmPin`,
+     `managerApproval.pin`, `pin_hash` y cualquier campo futuro. Sin lista de
+     excepciones: si un campo de log que sí se quiere ver casa con la regla,
+     se **renombra el campo**, no se cambia la regla. Por eso el evento
+     `auth.login.succeeded` registra `provisional_credential` (antes
+     `must_change_pin`), según `docs/logging.md`. Ningún campo del catálogo de
+     logs lleva `pin` en el nombre. La regla no afecta a la API: `mustChangePin`
+     sigue siendo el nombre del campo en las respuestas de `/auth/login` y
+     `/auth/me`; solo se redactaría si alguien registrara ese objeto.
+  2. Además, siempre: cabeceras `cookie`, `set-cookie` y `authorization` (la
+     cookie de sesión es `__Host-sid`), y la lista de rutas fijas de
+     `docs/logging.md` §4.3 (a).
+  3. Como pino `redact` no admite expresiones regulares, la regla 1 la aplica
+     una función recursiva (con protección frente a ciclos y límite de 10
+     niveles) en `formatters.log`, en los *bindings* de los loggers hijos y al
+     final del serializador `err`. La prueba es la de `docs/logging.md` §4.5
+     (PIN centinela también como `confirmPin`; RS-29).
+  4. La primera barrera sigue siendo no registrar cuerpos de petición.
 - **Salud:** `/healthz` (liveness) y `/readyz` (BD + migraciones), §5.1 (M-01).
 - **Métricas:** `prom-client` en un servidor HTTP aparte dentro del mismo
   proceso, escuchando en 9464 (`/metrics`), sin rutas de la API (M-02). Lista
@@ -827,6 +931,8 @@ El estándar lo define Monitoring (`docs/logging.md`). La arquitectura aporta:
 |---|---|---|
 | PIN corto de camarero/barra (4 dígitos) | Adivinación por fuerza bruta | Decidido por Cybersecurity (SEC-001): bloqueo progresivo hasta indefinido a los 20 fallos, límite por IP antes del hash, encargado con 6 dígitos, lista de PIN prohibidos, alertas; red restringida (SEC-002) |
 | La autorización de encargado se teclea en el dispositivo del camarero | PIN de encargado observado o probado contra el encargado | Aprobación sin estado ni reutilización; mismo contador de bloqueo; 5 fallos por sesión → `429` |
+| Sesión desatendida usada para probar PIN (`currentPin`, `confirmPin`) y quedarse con la cuenta | Robo de la cuenta (de encargado: control total) | `verifyPin` única: mismo contador, límite por IP y por sesión antes del hash; a los 20 fallos se revocan todas las sesiones de la cuenta (SEC-016) |
+| Una ruta nueva que verifique PIN sin límites | Reabre la fuerza bruta | Solo `verifyPin` recibe el hasher por constructor; revisión de Cybersecurity en Etapa 2 |
 | Sesión de encargado abierta en una tablet compartida | Alta de encargados, restablecer PIN o anular cobros por otra persona | `confirmPin` en esas acciones (SEC-007) |
 | Bloqueo indefinido del único encargado | Nadie puede desbloquear desde la app | Comando `unlock-user` en el host (actor `system`) |
 | TLS en red local: la CA interna de Caddy requiere instalar la CA raíz en cada tablet | Avisos del navegador; sin HTTPS no hay cookies `Secure`, Wake Lock ni sonido fiable | ADR-007; si PROD es una VM en internet, ACME con dominio real |
@@ -858,3 +964,18 @@ El estándar lo define Monitoring (`docs/logging.md`). La arquitectura aporta:
 | SEC-006 | **Aceptado y ampliado.** `quantity` 1–99, ≤ 100 líneas; además tope de importe de un cobro de varios pedidos y de `tenderedCents` | §4.1, §5.1, ADR-006 |
 | SEC-007 | **Aceptado.** `confirmPin` en anular cobro y escrituras de Personal (salvo cambio solo de nombre) | §5, §5.1, §7, ADR-005 |
 | SEC-012 | **Aceptado.** Borrador por `userId`, caduca a las 12 h, sin importes ni PIN | §7, §9, ADR-002 |
+
+Nota (2026-11-23): la fila "PO ronda 2" queda sustituida en lo que toca a los
+ajustes por la §15 (HU-09 fuera del MVP).
+
+## 15. Registro de decisiones de la revisión 1.3c (2026-11-23)
+
+| Origen | Decisión | Dónde |
+|---|---|---|
+| SEC-016 (alta) | **Aceptado.** Función única `verifyPin` (único usuario del hasher) para login, `managerApproval`, `confirmPin` y `currentPin`: límite por IP (10/10 min) y por sesión (5/10 min) antes del hash, bloqueo sin hash, contador del usuario cuyo PIN se verifica con la escala 5/10/15/20; al llegar a `locked_manual` se revocan **todas** las sesiones de la cuenta (por cualquier vía, no solo desde sesión propia). `POST /auth/pin` con `403 PIN_INVALID`, `423`, `429` | §4.1, §5, §5.1, §7, §13, ADR-005 |
+| PO ronda 1.1f | `POST /auth/pin` **solo** para el cambio obligatorio del PIN provisional (`mustChangePin = true`; si no, `403` sin verificar); sin cambio voluntario en el MVP. Bloqueo indefinido revoca todas las sesiones (HU-01/CA-F13). Durante un bloqueo temporal, `confirmPin`/`currentPin` → `423` sin comprobar y sin contar (HU-01/CA-F12) | §5, §5.1, §7, ADR-005 |
+| SEC-017 | **Aceptado.** Redacción de cualquier clave cuyo nombre contenga "pin" sin distinguir mayúsculas (`/pin/i`), a cualquier profundidad, `confirmPin` incluido; misma regla que `docs/logging.md` §4.3 (que manda en el detalle). Campo de log `must_change_pin` → `provisional_credential` | §11 |
+| SEC-021 | **Aceptado.** Cookie `__Host-sid`, `HttpOnly; Secure; SameSite=Strict; Path=/`, sin `Domain` ni `Max-Age`/`Expires` | §7, ADR-005 |
+| SEC-022 | **Aceptado.** W solo lee `GET /payments/:id` y `/ticket` de cobros con `business_date` de hoy; si no, `404` igual que inexistente. M sin restricción | §5.1, §7 |
+| SEC-010 (resto) | **Decidido:** imagen de `app`/`migrate` con `USER 1000:1000` numérico y `COPY --chown=1000:1000` (no 65532); ejecución `--user 1000:1000`; secretos `uid=1000,gid=1000,mode=0400` | §10, ADR-001 |
+| HU-09 fuera del MVP | Sin tabla `settings`, sin `GET/PATCH /settings`, sin `settings.updated`, sin auditoría de ajustes ni permisos `settings:*`. Mesas (20) y umbral (10 min) son configuración de instalación de solo lectura (`TABLE_COUNT`, `DELAY_THRESHOLD_MINUTES` en `config.ts`, con rangos). Se **mantiene** `localConfig` en `GET /auth/me` (y `delayThresholdMinutes` en `/kitchen/queue`): el cliente necesita los valores y no hace falta una ruta más | §3, §4.1, §5, §5.1, §6, §7, §9, §10, ADR-001, ADR-003, ADR-004, ADR-008 |

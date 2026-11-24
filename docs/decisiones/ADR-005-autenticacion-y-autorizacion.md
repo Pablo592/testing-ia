@@ -2,7 +2,7 @@
 
 - **Estado:** Propuesto (pendiente de la puerta de la Etapa 1 y de la revisión
   de Cybersecurity)
-- **Fecha:** 2026-11-21
+- **Fecha:** 2026-11-21 (revisiones 2026-11-21 y 2026-11-23)
 - **Autor:** Software Engineer
 
 ## Contexto
@@ -55,8 +55,9 @@
      Si no, crea la sesión.
   5. Además, límite de intentos por IP de origen (en memoria) para frenar el
      rociado de un mismo PIN contra todos los usuarios.
-- **Sesión:** token de 256 bits (CSPRNG) en cookie `sid` con `HttpOnly; Secure;
-  SameSite=Strict; Path=/`. En BD (`sessions`) solo `SHA-256(token)`. Cada
+- **Sesión:** token de 256 bits (CSPRNG) en cookie `__Host-sid` con `HttpOnly;
+  Secure; SameSite=Strict; Path=/`, sin `Domain` ni `Max-Age`/`Expires`
+  *(antes `sid`; cambiado por SEC-021, ver revisión (c))*. En BD (`sessions`) solo `SHA-256(token)`. Cada
   petición resuelve sesión + usuario con una consulta (índice único): rol y
   estado siempre actuales.
 - **Inactividad:** 15 min desde `last_activity_at`. Actualiza la actividad
@@ -116,7 +117,8 @@ La decisión (sesión opaca + argon2id + RBAC) **no cambia**. Ajustes:
   MANAGER_APPROVAL_INVALID` con la misma respuesta para id inexistente, no
   encargado o PIN incorrecto. Límites y bloqueo: Cybersecurity.
 - **Nuevos permisos:** `order:serve` (W, M; barra recibe `403`),
-  `approval:request` (W, M), `settings:read`/`settings:manage` (M, HU-09),
+  `approval:request` (W, M), `settings:read`/`settings:manage` (M, HU-09;
+  **retirados** en la revisión (c): HU-09 fuera del MVP),
   `telemetry:write` (todos), además de los que separa `docs/permisos.md`
   (`staff:read`, `staff:unlock`, `reports:close`, `session:self`,
   `events:subscribe`). Matriz en `docs/arquitectura.md` §7.
@@ -167,3 +169,64 @@ Estas reglas **sustituyen** a las equivalentes de la sección "Decisión":
 - Consecuencia: el riesgo residual de la sección anterior (~1 440 intentos/día)
   queda acotado a **20 intentos** por cuenta antes de exigir intervención
   humana, con alertas (Monitoring).
+
+## Revisión 2026-11-23 (c): SEC-016, SEC-021 y HU-09 (tarea 1.3c)
+
+La decisión (sesión opaca + argon2id con pepper + RBAC) **no cambia**. Estas
+reglas sustituyen a las equivalentes de las secciones anteriores:
+
+- **Contexto (SEC-016, alta):** `POST /auth/pin` verificaba `currentPin` sin
+  contar fallos: con una sesión desatendida se podía probar PIN sin límite y,
+  al acertar, cambiarlo y quedarse con la cuenta. Es la fuerza bruta que
+  SEC-001 cerró en el login, por otra puerta.
+- **Opciones evaluadas:** (1) añadir los límites en `POST /auth/pin` como en
+  las demás rutas; (2) **una función única `verifyPin`** por la que pasa toda
+  verificación de PIN. Se elige (2): con (1) cada ruta nueva tendría que
+  acordarse de los límites (es exactamente el fallo que se ha producido).
+- **Decisión:** `verifyPin(target, pin, {ip, sessionId?, purpose})` en el
+  módulo `auth` es el **único** componente que recibe el hasher argon2id
+  (DI por constructor). La usan el login (`pin`), `managerApproval.pin`,
+  `confirmPin` y `currentPin`. Orden:
+  1. límite por IP: 10 fallos de cualquier verificación de PIN en 10 min →
+     `429` durante 10 min, **antes** del hash;
+  2. límite por sesión (aprobación, reconfirmación y cambio de PIN, sumados):
+     5 fallos en 10 min → `429`, **antes** del hash;
+  3. cuenta bloqueada → `423` sin hash ni contar el intento;
+  4. hash (ficticio si el usuario no existe o no es un encargado activo);
+  5. fallo → suma al contador del usuario cuyo PIN se verifica (escala
+     5/10/15/20 → 5 min / 15 min / 60 min / `locked_manual`), al de la IP y al
+     de la sesión. **Al llegar a `locked_manual` se revocan todas las sesiones
+     de esa cuenta** (en la misma transacción; `session.revoked` tras el
+     `COMMIT`), sea cual sea la ruta que lo provocó;
+  6. acierto → contador a 0.
+  Detalle en `docs/arquitectura.md` §7.
+- **Alcance de `POST /auth/pin` (PO ronda 1.1f, criterio de menor carga):**
+  solo sirve para el cambio obligatorio del PIN provisional
+  (`must_change_pin = true`, HU-07/CA-F04, CA-F09). Con `must_change_pin =
+  false` responde `403 FORBIDDEN` sin verificar el PIN. No hay cambio
+  voluntario en el MVP: si se sospecha que un PIN se ha visto, el encargado lo
+  restablece (`reset-pin`). SEC-016 aplica igual a su `currentPin`.
+- **Bloqueo temporal (HU-01/CA-F12):** `confirmPin` y `currentPin` sobre una
+  cuenta bloqueada → `423 LOCKED {retryAfterSeconds}` sin comprobar el PIN y
+  sin contar como fallo. Bloqueo indefinido → se revocan todas las sesiones
+  (HU-01/CA-F13).
+- **`POST /auth/pin`:** errores `403 PIN_INVALID` (no `401`: la sesión sigue
+  siendo válida), `423 LOCKED {retryAfterSeconds}`, `423 ACCOUNT_LOCKED_MANUAL`
+  (la sesión queda revocada) y `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}`.
+- **Cookie (SEC-021, RS-10):** `__Host-sid` con `HttpOnly; Secure;
+  SameSite=Strict; Path=/`, sin `Domain` ni `Max-Age`/`Expires`. El prefijo
+  impide que otro servicio de la red o un subdominio fije o pise la cookie. En
+  DEV (`http://localhost`) Chromium y Firefox la aceptan.
+- **HU-09 fuera del MVP:** no existen `settings:read` ni `settings:manage`. La
+  configuración de instalación (mesas, umbral de retraso) llega al cliente en
+  `localConfig` de `GET /auth/me`, filtrada por rol, sin permiso propio.
+- **Consecuencias:**
+  - (+) Ninguna ruta puede verificar un PIN sin los límites; un solo punto que
+    probar (RS-16b) y revisar.
+  - (+) A los 20 fallos no queda ninguna sesión viva de la cuenta atacada.
+  - (−) Un compañero puede bloquear a propósito la cuenta de otro también desde
+    las rutas con sesión (mismo DoS leve ya aceptado en el login); como mucho
+    5 fallos por sesión cada 10 min y 10 por IP.
+  - (−) Los contadores por IP y por sesión viven en memoria: un reinicio de
+    `app` los vacía (aceptado; el contador de la cuenta está en BD y no se
+    pierde).

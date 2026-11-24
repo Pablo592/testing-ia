@@ -73,3 +73,15 @@ cambios del PO, que refuerzan la necesidad de ACID:
 - Tabla `settings` de una fila con `CHECK` de rangos (1–99 mesas, 1–60 min);
   sus cambios se auditan en `audit_log` (HU-09, solo si el humano la aprueba).
 - Fecha de negocio desde el `Clock` (T-10), ver `docs/arquitectura.md` §4.
+
+## Revisión 2026-11-23 (tarea 1.3c)
+
+La elección (PostgreSQL + Kysely) **no cambia**. HU-09 queda fuera del MVP
+(decisión del humano): **se retira la tabla `settings`** de la revisión
+anterior, con su auditoría (`settings.changed`) y el bloqueo `FOR SHARE` al
+crear pedidos de mesa. Número de mesas (20) y umbral de retraso (10 min) son
+configuración de instalación de solo lectura, leída por `config.ts` de
+variables de entorno con rangos 1–99 y 1–60 (supuesto 20,
+`docs/arquitectura.md` §4.1). Mantener una tabla de una fila sin ninguna ruta
+que la escriba sería YAGNI. `orders.table_number` conserva un `CHECK` de 1–99;
+el límite real (≤ `TABLE_COUNT`) lo valida el servicio.

@@ -68,3 +68,11 @@ La decisión **no cambia**; se extiende a los estados nuevos:
   todos sus pedidos; segunda anulación → `409 PAYMENT_ALREADY_VOIDED`.
 - **Ajustes (HU-09):** `PATCH /settings` con `expectedVersion` y `FOR UPDATE`;
   la creación de pedidos de mesa lee `table_count` con `FOR SHARE`.
+  *(Retirado en la revisión 2026-11-23.)*
+
+## Revisión 2026-11-23 (tarea 1.3c)
+
+La decisión **no cambia**. Con HU-09 fuera del MVP desaparecen `PATCH
+/settings`, su control optimista y el `FOR SHARE` de `table_count`: el número
+de mesas es una constante de configuración leída al arrancar, así que no hay
+concurrencia que controlar entre crear un pedido y cambiar el número de mesas.
