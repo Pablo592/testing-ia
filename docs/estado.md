@@ -25,8 +25,9 @@ historias las propone el Product Owner sin entrevista al cliente real).
 | 1.3c | software-engineer | SEC-016 (alta), SEC-017 (parte de arquitectura), SEC-021, SEC-022, SEC-010 (uid del secreto vs. imagen distroless) y restos de HU-09 | En curso |
 | 1.5b | infrastructure | SEC-018, SEC-019, SEC-020, SEC-010 (uid en PROD) y M-06 B (unificar §10/§11.1, condiciones de Cybersecurity §6.3) | En curso |
 | 1.6c | monitoring | M-07 (correo, horario 07:00–21:00, retención 30/90 días, aviso a empleados), M-06 B y SEC-017 (redactar `confirmPin` / claves `/pin/i`) en `docs/logging.md` | En curso |
-| 1.4c | cybersecurity | Verificar SEC-016..SEC-022 tras 1.3c, 1.5b y 1.6c + T-14 (su parte) y T-18 | En cola |
-| 1.1f | product-owner | T-14..T-17 e interpretaciones I-01..I-10 de Testing | En curso |
+| 1.4c | cybersecurity | Verificar SEC-016..SEC-022 tras 1.3c, 1.5b y 1.6c + T-14 (su parte), T-18 y los puntos de HU-01/CA-F13 | En cola |
+| 1.6d | testing | Cubrir la ronda 1.1f en `docs/testing.md` | En cola |
+| 1.1f | product-owner | T-14..T-17 e interpretaciones I-01..I-10 de Testing | Hecho (HU-01/CA-F12 bloqueo temporal y CA-F13 bloqueo indefinido; T-15, T-16 (solo valor mínimo) y T-17 (lista cerrada) aceptados; I-01..I-10 confirmadas salvo I-06, corregida) |
 | 1.2b | ux-designer | Actualizar wireframes con los cambios del PO (ronda 1.1c) + SEC-007 y mensajes de bloqueo | Hecho (reconfirmación de PIN en cobro y Personal, desbloqueo, estados de bloqueo en login, "Activar sonido"/Wake Lock y 409 en la cola, "AÑADIDO hh:mm"; P-12 Ajustes condicionada a HU-09) |
 
 ## Decisiones del humano
@@ -108,12 +109,16 @@ Orquestador lo aplica así (el humano puede corregir cualquier punto):
 | 2026-11-23 | cybersecurity | software-engineer | **SEC-021 (baja)** La cookie se llama `sid` (ADR-005:58); RS-10 exige `__Host-sid` | Abierto |
 | 2026-11-23 | cybersecurity | software-engineer | **SEC-022 (baja)** Con `GET /payments/:id` y `/ticket` el camarero lee cobros de cualquier día (`docs/arquitectura.md:542-543`). Propuesta: para el camarero, solo cobros del día actual; si no, `404` | Abierto |
 | 2026-11-23 | cybersecurity | software-engineer, infrastructure | **SEC-010 (resto)** El `uid` del secreto en PROD (1000) no coincide con el de la imagen distroless (65532); alinearlo sin dejar el secreto en 0444 | Abierto |
-| 2026-11-23 | testing | product-owner, cybersecurity | **T-14 (media)** HU-01/CA-F06, HU-04/CA-F23, HU-07/CA-N04: no se define qué pasa con la sesión abierta de un usuario cuya cuenta se bloquea, ni qué ve al reconfirmar su PIN estando bloqueado. Propuesta HU-01 **CA-F12**: "la sesión sigue abierta, pero mientras dure el bloqueo toda acción que pida reconfirmar su PIN se rechaza sin comprobarlo con 'Cuenta bloqueada. Espera X min'". Relacionado con SEC-016 (revocar sesiones en el bloqueo indefinido) | Abierto |
-| 2026-11-23 | testing | product-owner | **T-15 (baja)** HU-03/CA-F14 "en cuanto se detecta" → "en ≤ 1 s"; HU-03/CA-F09: la preferencia de sonido se conserva al recargar y al volver a iniciar sesión | Abierto |
-| 2026-11-23 | testing | product-owner | **T-16 (baja)** HU-03/CA-N05: indicar con qué ajuste de apagado de pantalla se verifica (el configurado en el local y su mínimo) | Abierto |
-| 2026-11-23 | testing | product-owner | **T-17 (baja)** HU-05/CA-N03: aclarar si la lista es cerrada o son ejemplos (Testing aplica la lectura amplia) | Abierto |
-| 2026-11-23 | testing | product-owner | **Interpretaciones I-01..I-10** de `docs/testing.md` §4.5 (p. ej. "retrasado" con ≥ N min, minutos redondeados hacia arriba, dispositivo = IP de origen): confirmar o corregir | Abierto |
+| 2026-11-23 | testing | product-owner, cybersecurity | **T-14 (media)** HU-01/CA-F06, HU-04/CA-F23, HU-07/CA-N04: no se define qué pasa con la sesión abierta de un usuario cuya cuenta se bloquea, ni qué ve al reconfirmar su PIN estando bloqueado. Propuesta HU-01 **CA-F12**: "la sesión sigue abierta, pero mientras dure el bloqueo toda acción que pida reconfirmar su PIN se rechaza sin comprobarlo con 'Cuenta bloqueada. Espera X min'". Relacionado con SEC-016 (revocar sesiones en el bloqueo indefinido) | Resuelto (PO 1.1f). Pendiente de verificación de Testing |
+| 2026-11-23 | testing | product-owner | **T-15 (baja)** HU-03/CA-F14 "en cuanto se detecta" → "en ≤ 1 s"; HU-03/CA-F09: la preferencia de sonido se conserva al recargar y al volver a iniciar sesión | Resuelto (PO 1.1f). Pendiente de verificación de Testing |
+| 2026-11-23 | testing | product-owner | **T-16 (baja)** HU-03/CA-N05: indicar con qué ajuste de apagado de pantalla se verifica (el configurado en el local y su mínimo) | Resuelto (PO 1.1f). Pendiente de verificación de Testing |
+| 2026-11-23 | testing | product-owner | **T-17 (baja)** HU-05/CA-N03: aclarar si la lista es cerrada o son ejemplos (Testing aplica la lectura amplia) | Resuelto (PO 1.1f). Pendiente de verificación de Testing |
+| 2026-11-23 | testing | product-owner | **Interpretaciones I-01..I-10** de `docs/testing.md` §4.5 (p. ej. "retrasado" con ≥ N min, minutos redondeados hacia arriba, dispositivo = IP de origen): confirmar o corregir | Resuelto (PO 1.1f). Pendiente de verificación de Testing |
 | 2026-11-23 | testing | cybersecurity | **T-18 (baja)** RS-18 genera la tabla esperada desde `permissions.ts`, el mismo código que prueba. Propuesta: tabla esperada escrita a mano desde `docs/permisos.md` §3 y un test que compare `permissions.ts` con ella | Abierto |
+| 2026-11-23 | product-owner | cybersecurity | **HU-01/CA-F13, a confirmar**: (1) revocar las sesiones también si el bloqueo indefinido llega por inicios de sesión fallidos desde otro dispositivo; (2) que una pantalla sin interacción (cola de barra) vuelva al login en ≤ 1 s (RS-14); (3) aceptar que el titular de la sesión vea "Cuenta bloqueada. Espera X min" en lugar del "PIN incorrecto" genérico (CA-F12) | Abierto |
+| 2026-11-23 | product-owner | software-engineer, cybersecurity | **Cambio voluntario del PIN propio**: ninguna historia lo pide; solo existe el cambio obligatorio del PIN provisional (HU-07/CA-F04, CA-F09). Por "menor carga", fuera del MVP salvo motivo de seguridad | Abierto |
+| 2026-11-23 | product-owner | ux-designer | Diseñar "Cuenta bloqueada. Espera X min" junto al campo de reconfirmación (anular cobro, Personal) y la vuelta al login al revocar las sesiones (HU-01/CA-F12, CA-F13) | Abierto |
+| 2026-11-23 | product-owner | testing | Tras la ronda 1.1f: actualizar §4.5 y §14.2 y cubrir HU-01/CA-F12, CA-F13, HU-03/CA-N05 (solo el valor mínimo) y HU-03/CA-F09 (preferencia de sonido) | Abierto |
 
 ## Ciclos de retroceso (máximo 3 por funcionalidad)
 | Funcionalidad | Ciclos | Motivo del último |

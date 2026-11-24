@@ -41,7 +41,7 @@ para **cerrar el pedido, saber cuánto cambio devolver y que la caja del día cu
 - **CA-F15** Dado un cobro anulado, entonces el cobro no se borra: se conserva con su importe, método, fecha/hora, el encargado que lo anuló, la fecha/hora de la anulación y el motivo, y figura en "cobros anulados" del resumen del día del cobro original (HU-08).
 - **CA-F16** Dado un pedido que ha vuelto a "Abierto" por una anulación, entonces se puede modificar o cancelar según las reglas de HU-06 y cobrar de nuevo con un cobro nuevo (que cuenta en el día en que se registra).
 - **CA-F17** Dado un cobro ya anulado, entonces no se puede anular otra vez.
-- **CA-F23** **[Cambio 2026-11-21, SEC-007]** Dado un encargado que confirma una anulación, entonces debe introducir su PIN, aunque ya tenga la sesión iniciada; si es incorrecto no se anula, se muestra "PIN incorrecto" junto al campo, el motivo escrito no se pierde y el fallo cuenta para su bloqueo (HU-01/CA-F06).
+- **CA-F23** **[Cambio 2026-11-21, SEC-007]** Dado un encargado que confirma una anulación, entonces debe introducir su PIN, aunque ya tenga la sesión iniciada; si es incorrecto no se anula, se muestra "PIN incorrecto" junto al campo, el motivo escrito no se pierde y el fallo cuenta para su bloqueo (HU-01/CA-F06). **[Cambio 2026-11-23, T-14]** Si su cuenta está en bloqueo temporal, se aplica HU-01/CA-F12 ("Cuenta bloqueada. Espera X min", sin comprobar el PIN); si llega al bloqueo indefinido, HU-01/CA-F13.
 
 ### UX (medibles)
 - **CA-U01** Cobro en tarjeta en <= 3 toques desde el pedido (Cobrar, Tarjeta, Confirmar).
@@ -75,3 +75,7 @@ _Cambios 2026-11-21 (tarea 1.1d: T-01, T-02, T-08, SEC-007): IDs estables
 la sección general; habían quedado por error bajo "Cobrados hoy"); PIN del
 encargado al anular; "claramente" sustituido por una condición medible;
 condiciones de medida (supuesto 12)._
+
+_Cambios 2026-11-23 (tarea 1.1f: T-14): CA-F23 remite a HU-01/CA-F12 y CA-F13
+para la reconfirmación con la cuenta bloqueada. Interpretaciones I-05 (vistas
+1280x800, 800x1280 y TPV 1024x768 para CA-U04) e I-10 confirmadas (README)._

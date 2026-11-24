@@ -96,6 +96,26 @@ Testing), para poder trazarlo a sus tests:
 - Si un criterio cambia de significado, se modifica con una marca
   `[Cambio AAAA-MM-DD, origen]` y conserva su ID; Testing revisa sus tests.
 
+## Interpretaciones de Testing confirmadas por el PO [Cambio 2026-11-23, 1.1f]
+
+Testing aplica estas lecturas en sus tests (`docs/testing.md` §4.5). El PO las
+confirma o corrige con el criterio del humano "menor carga" que siga siendo
+verificable. Forman parte de los criterios citados: si alguna cambia, se marca
+aquí y en el criterio.
+
+| ID | Criterio | Resultado | Lectura vigente |
+|---|---|---|---|
+| I-01 | HU-01/CA-F06 | **Confirmada** | El 5.º fallo consecutivo activa el bloqueo; durante el bloqueo los intentos se rechazan sin verificar el PIN (también con PIN correcto) y no cuentan. Al expirar, el contador no se reinicia: 10 acumulados → 15 min, 15 → 60 min, 20 → indefinido. Igual para la reconfirmación (HU-01/CA-F12) |
+| I-02 | HU-01/CA-F11, HU-06/CA-F17 | **Confirmada** | "Dispositivo" = IP de origen que ve el servidor; ventana móvil de 10 min; el rechazo dura 10 min desde el 10.º fallo y se aplica antes de verificar el PIN. En la topología B (VM) equivale a todo el local: lo decide Cybersecurity/Infrastructure (SEC-019), no cambia el criterio |
+| I-03 | HU-01/CA-F06, CA-F11, CA-F12; HU-06/CA-F19 | **Confirmada** | "X min" = minutos restantes redondeados hacia arriba (4 min 1 s → "5 min"); nunca "0 min" |
+| I-04 | HU-03/CA-F06 | **Confirmada** | Retrasado con espera >= N min (el criterio ya dice "N minutos o más"); a N − 1 s no se resalta; a N + 60 s está resaltado |
+| I-05 | HU-04/CA-U04 | **Confirmada** | "Sin desplazar" en 1280x800, 800x1280 (supuesto 23) y en el TPV de mostrador a 1024x768 (persona camarero/cajero y design system) |
+| I-06 | HU-05/CA-N03 | **Corregida** | Ya no aplica la lectura amplia: CA-N03 es una **lista cerrada** (HU-02/CA-N01, CA-U05, CA-F23, CA-N05 y HU-05/CA-F04), resuelto en T-17 |
+| I-07 | HU-02/CA-U05 y cualquier p95 que no cite el supuesto 12 | **Confirmada** | Al menos 200 muestras por métrica, como en el supuesto 12 |
+| I-08 | Supuesto 12 y criterios de dispositivo real | **Confirmada** | Rendimiento del supuesto 12: vinculante en TESTING; DEMO solo observa. Los criterios con hardware real (HU-03/CA-U01, HU-03/CA-N05) y HU-02/CA-U05 (dispositivo de referencia) se verifican en ese hardware y su resultado es vinculante |
+| I-09 | HU-03/CA-F14 | **Confirmada e incorporada** | "En cuanto se detecta" pasa a "<= 1 s desde que se abre la cola o desde que falla un aviso" en el propio criterio (T-15) |
+| I-10 | HU-04/CA-F23, HU-07/CA-N04 | **Confirmada** | Un PIN de reconfirmación incorrecto cuenta como 1 fallo del encargado de la sesión (HU-01/CA-F06) y 1 fallo del dispositivo (HU-01/CA-F11), igual que una autorización de HU-06. El límite adicional por sesión es una decisión de Cybersecurity (`docs/seguridad.md` §6.1.4) y no añade mensaje propio en las historias |
+
 ## Supuestos (validados por el humano el 2026-11-23)
 
 > **[Cambio 2026-11-23, 1.1e]** **Los supuestos 1–24 están validados por el
@@ -205,6 +225,30 @@ Texto original de las preguntas:
 14. **[Nueva 2026-11-21]** ¿A qué hora **cierra el local**? ¿Alguna vez trabaja después de medianoche? Si es así, hace falta una "jornada" con hora de corte configurable en lugar del día natural (supuesto 15). ¿El local está en la península o Baleares (si está en Canarias, la hora es otra)?
 
 ## Registro de cambios
+
+- **2026-11-23, ronda 1.1f [Cambio 2026-11-23, 1.1f]** (hallazgos T-14..T-17 e
+  interpretaciones I-01..I-10 de Testing, `docs/testing.md` §4.5 y §14.2;
+  criterio del humano "menor carga"):
+  - **T-14 aceptado:** HU-01/CA-F12 nuevo (bloqueo temporal: la sesión sigue
+    abierta y la reconfirmación del propio PIN se rechaza sin comprobarlo con
+    "Cuenta bloqueada. Espera X min", sin perder los datos) y HU-01/CA-F13 nuevo
+    (bloqueo indefinido alcanzado desde una sesión propia: se revocan todas sus
+    sesiones, según SEC-016). A confirmar por Cybersecurity: aplicar también la
+    revocación cuando el bloqueo indefinido llega por inicios de sesión desde
+    otro dispositivo, y el plazo de <= 1 s para pantallas sin interacción.
+    HU-04/CA-F23 y HU-07/CA-N04 remiten a ellos (sin cambio de significado).
+  - **T-15 aceptado:** HU-03/CA-F14 "<= 1 s"; HU-03/CA-F09 conserva la
+    preferencia de sonido en el dispositivo (recarga y nuevo inicio de sesión).
+  - **T-16 aceptado con cambio:** HU-03/CA-N05 se verifica solo con el apagado
+    automático en su valor mínimo distinto de "nunca" (no también con el valor
+    del local: el mínimo es el caso más exigente y basta una configuración).
+  - **T-17 aceptado (lista cerrada):** HU-05/CA-N03 enumera sus criterios y
+    añade HU-02/CA-N05, el único de HU-02 sin rendimiento en el que 20
+    categorías pueden fallar (vista de tablet). Se descarta la lectura amplia.
+  - **I-01..I-10:** confirmadas I-01..I-05, I-07, I-08, I-10; I-09 confirmada e
+    incorporada a HU-03/CA-F14; I-06 corregida por T-17. Tabla en
+    [Interpretaciones de Testing](#interpretaciones-de-testing-confirmadas-por-el-po-cambio-2026-11-23-11f).
+  - IDs nuevos: HU-01/CA-F12, CA-F13. Ninguno retirado ni renumerado.
 
 - **2026-11-23, ronda 1.1e [Cambio 2026-11-23, 1.1e]** (decisiones del humano
   del 2026-11-23 en `docs/estado.md`, criterio "menor carga"):

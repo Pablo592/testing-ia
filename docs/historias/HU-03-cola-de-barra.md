@@ -31,8 +31,8 @@ para **preparar los pedidos en el orden correcto y avisar a sala cuando están l
 - **CA-F07** Dado un pedido modificado o cancelado (HU-06) mientras está en la cola, entonces la tarjeta se actualiza y muestra la etiqueta "MODIFICADO" o "CANCELADO" hasta que barra la confirme con un toque; un pedido cancelado sale de la cola al confirmar la etiqueta.
 - **CA-F13** Dado un pedido con preparación "Listo" o "Servido" al que se añaden productos (HU-06), entonces vuelve a la cola con preparación "Pendiente" y las líneas nuevas marcadas "AÑADIDO".
 - **CA-F08** Dada la pantalla de barra abierta, entonces los pedidos nuevos aparecen sin que nadie tenga que recargar la página.
-- **CA-F09** Dado un pedido nuevo que llega, entonces suena un aviso sonoro (que se puede desactivar).
-- **CA-F14** **[Cambio 2026-11-21, T-05]** Dada la cola abierta con el sonido activado, cuando el navegador impide reproducir el aviso (p. ej. tras recargar la página sin tocarla), entonces la cola muestra, en texto y sin tapar ningún pedido, "Sonido bloqueado" con un botón "Activar sonido" de al menos 60x60 px; el aviso se muestra en cuanto se detecta el bloqueo (al abrir la cola o al fallar un aviso) y sigue visible hasta que se reactiva. Un toque en "Activar sonido" lo quita y el siguiente pedido nuevo suena. Si barra ha desactivado el sonido a propósito, este aviso no se muestra.
+- **CA-F09** Dado un pedido nuevo que llega, entonces suena un aviso sonoro (que se puede desactivar). **[Cambio 2026-11-23, T-15]** La preferencia de sonido (activado o desactivado) se guarda en ese dispositivo y se conserva al recargar la página y al volver a iniciar sesión, con el mismo usuario o con otro; la primera vez que se abre la cola en un dispositivo, el sonido está activado.
+- **CA-F14** **[Cambio 2026-11-21, T-05]** Dada la cola abierta con el sonido activado, cuando el navegador impide reproducir el aviso (p. ej. tras recargar la página sin tocarla), entonces la cola muestra, en texto y sin tapar ningún pedido, "Sonido bloqueado" con un botón "Activar sonido" de al menos 60x60 px; el aviso se muestra en <= 1 s desde que se abre la cola o desde que falla un aviso **[Cambio 2026-11-23, T-15]** y sigue visible hasta que se reactiva. Un toque en "Activar sonido" lo quita y el siguiente pedido nuevo suena. Si barra ha desactivado el sonido a propósito, este aviso no se muestra.
 
 #### Aviso y entrega en sala (camarero/cajero y encargado) [Cambio 2026-11-21, supuesto 18]
 - **CA-F15** Dado un pedido que barra marca "Listo" (con cobro "Abierto" o "Cobrado"), entonces aparece en la sección "Listos para servir" de la pantalla "Pedidos" (HU-02), por delante de los demás pedidos, y los dispositivos de sala muestran el aviso "Pedido N (mesa X o cliente) está listo" sin recargar, en <= 2 s (p95, condiciones del supuesto 12).
@@ -56,7 +56,7 @@ para **preparar los pedidos en el orden correcto y avisar a sala cuando están l
 - **CA-N02** Fiabilidad: si la pantalla pierde la conexión, muestra un aviso visible "Sin conexión" en <= 5 s y, al recuperarla, se resincroniza sin intervención y sin perder pedidos.
 - **CA-N03** Seguridad: el rol barra no puede ver importes ni cobrar.
 - **CA-N04** Accesibilidad: cumple WCAG 2.2 nivel AA (criterio común del README), incluido contraste >= 4,5:1.
-- **CA-N05** **[Cambio 2026-11-21, T-05]** Pantalla encendida: con la cola abierta y visible, la pantalla de barra no se apaga ni se bloquea por inactividad del dispositivo durante al menos 30 minutos seguidos sin tocarla. Se verifica en el dispositivo de barra instalado (Etapa 3 con el hardware de referencia y Etapa 4).
+- **CA-N05** **[Cambio 2026-11-21, T-05]** Pantalla encendida: con la cola abierta y visible, la pantalla de barra no se apaga ni se bloquea por inactividad del dispositivo durante al menos 30 minutos seguidos sin tocarla. Se verifica en el dispositivo de barra instalado (Etapa 3 con el hardware de referencia y Etapa 4). **[Cambio 2026-11-23, T-16]** Se verifica con el apagado o bloqueo automático de pantalla del dispositivo configurado en su **valor mínimo distinto de "nunca"** (si el dispositivo no tiene ese ajuste, con el que traiga de fábrica, anotándolo en el resultado). Basta esa configuración: no se repite con el valor que quede configurado en el local.
 
 Prioridad: alta (Must)
 
@@ -84,3 +84,8 @@ _Cambios 2026-11-23 (tarea 1.1e, decisión del humano): HU-09 queda fuera del
 MVP; en CA-F06 el umbral N = 10 min es fijo en la instalación (supuesto 20).
 Supuesto 18 ("Servido") confirmado por el humano. Las condiciones de medida del
 supuesto 12 son vinculantes solo en TESTING._
+
+_Cambios 2026-11-23 (tarea 1.1f: T-15, T-16): CA-F14 con límite de <= 1 s
+(antes "en cuanto se detecta"); CA-F09 conserva la preferencia de sonido en el
+dispositivo; CA-N05 se verifica con el apagado automático en su valor mínimo.
+Interpretaciones I-04, I-08 e I-09 de Testing confirmadas (README)._

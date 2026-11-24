@@ -29,7 +29,7 @@ para **controlar quién puede usar el sistema y con qué permisos, también cuan
 - **CA-N01** Seguridad: solo el encargado accede a esta función (validado en servidor). El PIN nunca se muestra después de guardarlo ni aparece en logs.
 - **CA-N02** Auditoría: altas, cambios de rol, desactivaciones, activaciones, restablecimientos de PIN y desbloqueos [Cambio 2026-11-21] quedan registrados con quién y cuándo.
 - **CA-N03** Accesibilidad: cumple WCAG 2.2 nivel AA (criterio común del README) [Cambio 2026-11-21]; formularios con etiquetas asociadas, navegables con teclado.
-- **CA-N04** **[Cambio 2026-11-21, SEC-007]** Seguridad: crear un usuario, cambiar su rol, desactivarlo o activarlo, restablecer su PIN o desbloquearlo exige que el encargado introduzca su PIN en ese momento, aunque ya tenga la sesión iniciada. Si el PIN es incorrecto, la acción no se hace, los datos del formulario no se pierden y el fallo cuenta para su bloqueo (HU-01/CA-F06). Cambiar solo el nombre visible no lo exige.
+- **CA-N04** **[Cambio 2026-11-21, SEC-007]** Seguridad: crear un usuario, cambiar su rol, desactivarlo o activarlo, restablecer su PIN o desbloquearlo exige que el encargado introduzca su PIN en ese momento, aunque ya tenga la sesión iniciada. Si el PIN es incorrecto, la acción no se hace, los datos del formulario no se pierden y el fallo cuenta para su bloqueo (HU-01/CA-F06). Cambiar solo el nombre visible no lo exige. **[Cambio 2026-11-23, T-14]** Si su cuenta está en bloqueo temporal, se aplica HU-01/CA-F12 ("Cuenta bloqueada. Espera X min", sin comprobar el PIN); si llega al bloqueo indefinido, HU-01/CA-F13.
 
 Prioridad: media (Should)
 
@@ -39,3 +39,7 @@ _Cambios 2026-11-21 (tarea 1.1d: T-01, SEC-001, SEC-007): IDs estables; regla
 de PIN por rol y lista de PIN comunes; desbloqueo y estado "Bloqueado";
 promoción a encargado con PIN corto; el restablecimiento pone a cero el
 contador; reconfirmación del PIN del encargado en las escrituras de Personal._
+
+_Cambios 2026-11-23 (tarea 1.1f: T-14): CA-N04 remite a HU-01/CA-F12 y CA-F13
+para la reconfirmación con la cuenta bloqueada. Interpretación I-10 confirmada
+(README)._
