@@ -12,7 +12,10 @@
 # Secretos: se leen de ficheros en /run/secrets dentro de psql (\set ... `cat`),
 # nunca por variables de entorno ni línea de comandos. SEC-015: cada sesión
 # desactiva el registro de sentencias, incluido el de sentencias con error, para
-# que una contraseña nunca llegue al log del servidor.
+# que una contraseña nunca llegue al log del servidor. SEC-020: cada sesión
+# desactiva también el seguimiento de sentencias de utilidad en
+# pg_stat_statements (CREATE ROLE ... PASSWORD no queda guardado ni es visible
+# para el rol monitoring/pg_monitor) y al final se vacían las estadísticas.
 set -eu
 
 : "${APP_DB_NAME:?Falta APP_DB_NAME}"
@@ -31,6 +34,7 @@ psql -v ON_ERROR_STOP=1 -v dbname="$APP_DB_NAME" -v attrs="$ATTRS" \
 SET log_statement = 'none';
 SET log_min_error_statement = 'panic';
 SET log_min_duration_statement = -1;
+SET pg_stat_statements.track_utility = off;
 \set owner_pw `cat /run/secrets/db_owner_password`
 \set app_pw `cat /run/secrets/db_app_password`
 \set backup_pw `cat /run/secrets/db_backup_password`
@@ -62,6 +66,7 @@ if [ -s /run/secrets/db_monitor_password ]; then
 SET log_statement = 'none';
 SET log_min_error_statement = 'panic';
 SET log_min_duration_statement = -1;
+SET pg_stat_statements.track_utility = off;
 \set mon_pw `cat /run/secrets/db_monitor_password`
 CREATE ROLE monitoring :attrs CONNECTION LIMIT 2 PASSWORD :'mon_pw';
 \unset mon_pw
@@ -70,5 +75,10 @@ GRANT CONNECT ON DATABASE :"dbname" TO monitoring;
 SQL
   echo "10-roles.sh: rol monitoring (pg_monitor) creado"
 fi
+
+# SEC-020: defensa adicional. Vacía pg_stat_statements (memoria y fichero que se
+# conserva entre reinicios) para que no quede nada de la inicialización.
+psql -v ON_ERROR_STOP=1 -q --username "$POSTGRES_USER" --dbname "$APP_DB_NAME" \
+     -c 'SELECT pg_stat_statements_reset();' >/dev/null
 
 echo "10-roles.sh: roles app_owner/app_rw/app_backup y BD ${APP_DB_NAME} creados"

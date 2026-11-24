@@ -38,6 +38,33 @@ x-hardening: &hardening
     options:
       max-size: 10mb
 
+# --- SEC-018: lo que ningún contenedor que monta el proyecto debe ver/escribir ---
+# Se montan encima de "./:/workspace" (Podman ordena los montajes por profundidad).
+# 1) .secrets/ queda tapado por un tmpfs vacío, de solo lectura y modo 0000: los
+#    secretos llegan SOLO por /run/secrets, con el reparto de §5 (SEC-010).
+#    "notmpcopyup" es OBLIGATORIO: sin él Podman copia al tmpfs lo que hay
+#    debajo (es decir, los secretos). Por eso va en "tmpfs:" (cadena para
+#    --tmpfs) y no en la sintaxis larga de volumes, que en podman-compose 1.5
+#    no admite esa opción. Sustituye a la lista tmpfs de x-hardening.
+#    Requiere que .secrets/ exista en el host (lo crea generar-secretos.sh).
+x-workspace-tmpfs: &workspace-tmpfs
+  - /tmp:rw,nosuid,nodev,noexec,size=256m
+  - /workspace/.secrets:ro,nosuid,nodev,noexec,size=4k,mode=0000,notmpcopyup
+# 2) En los servicios con el árbol en escritura (web, deps), todo lo que se
+#    ejecuta o se lee como instrucciones en el HOST queda en solo lectura:
+#    hooks y config de git, hooks y agentes de Claude, scripts de deploy/,
+#    los compose, .gitignore (evita que entren secretos en un commit),
+#    CLAUDE.md, docs/ y tools/. Todos son ficheros versionados (existen siempre).
+x-ro-git: &ro-git ./.git:/workspace/.git:ro
+x-ro-claude: &ro-claude ./.claude:/workspace/.claude:ro
+x-ro-claude-md: &ro-claude-md ./CLAUDE.md:/workspace/CLAUDE.md:ro
+x-ro-deploy: &ro-deploy ./deploy:/workspace/deploy:ro
+x-ro-docs: &ro-docs ./docs:/workspace/docs:ro
+x-ro-tools: &ro-tools ./tools:/workspace/tools:ro
+x-ro-gitignore: &ro-gitignore ./.gitignore:/workspace/.gitignore:ro
+x-ro-compose-dev: &ro-compose-dev ./compose.dev.yaml:/workspace/compose.dev.yaml:ro
+x-ro-compose-test: &ro-compose-test ./compose.test.yaml:/workspace/compose.test.yaml:ro
+
 x-node-image: &node-image
   image: localhost/mi-app-dev-tools:node26.13.1-pnpm12.21.0
   pull_policy: never
@@ -125,11 +152,15 @@ services:
 
   api:
     <<: [*hardening, *node-image]
+    tmpfs: *workspace-tmpfs
     command: ["pnpm", "--dir", "apps/api", "run", "dev"]
     environment:
       <<: *api-env
       HOST: 0.0.0.0
       PORT: "3000"
+      # Configuración de instalación (no secreta, arquitectura §4.1).
+      TABLE_COUNT: "20"
+      DELAY_THRESHOLD_MINUTES: "10"
       DATABASE_USER: app_rw
       DATABASE_PASSWORD_FILE: /run/secrets/db_app_password
       PIN_PEPPER_FILE: /run/secrets/pin_pepper
@@ -162,6 +193,7 @@ services:
 
   web:
     <<: [*hardening, *node-image]
+    tmpfs: *workspace-tmpfs
     command: ["pnpm", "--dir", "apps/web", "run", "dev", "--host", "0.0.0.0", "--port", "5173", "--strictPort"]
     environment:
       NODE_ENV: development
@@ -173,6 +205,15 @@ services:
       # Lectura/escritura: Vite escribe su caché en node_modules/.vite y
       # ficheros temporales junto a vite.config (docs/infraestructura.md §7).
       - ./:/workspace:rw
+      - *ro-git
+      - *ro-claude
+      - *ro-claude-md
+      - *ro-deploy
+      - *ro-docs
+      - *ro-tools
+      - *ro-gitignore
+      - *ro-compose-dev
+      - *ro-compose-test
     networks: [frontend]
     ports:
       - "127.0.0.1:5173:5173"
@@ -191,6 +232,7 @@ services:
 
   deps:
     <<: [*hardening, *node-image]
+    tmpfs: *workspace-tmpfs
     profiles: [setup]
     build:
       context: ./deploy/dev
@@ -204,6 +246,15 @@ services:
       CI: "true"
     volumes:
       - ./:/workspace:rw
+      - *ro-git
+      - *ro-claude
+      - *ro-claude-md
+      - *ro-deploy
+      - *ro-docs
+      - *ro-tools
+      - *ro-gitignore
+      - *ro-compose-dev
+      - *ro-compose-test
       - pnpm-store:/pnpm-store
     networks: [deps]
     healthcheck:
@@ -215,6 +266,7 @@ services:
 
   migrate:
     <<: [*hardening, *node-image]
+    tmpfs: *workspace-tmpfs
     profiles: [setup]
     command: ["pnpm", "--dir", "apps/api", "run", "db:migrate"]
     environment:
@@ -237,6 +289,7 @@ services:
 
   init-manager:
     <<: [*hardening, *node-image]
+    tmpfs: *workspace-tmpfs
     profiles: [setup]
     # Crea el encargado inicial solo si no existe ninguno (HU-01, arquitectura §7).
     command: ["pnpm", "--dir", "apps/api", "run", "create-initial-manager"]

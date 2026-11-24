@@ -2,8 +2,8 @@
 
 > Responsable: Infrastructure. Entradas: `docs/reglas-equipo.md` §3,
 > `docs/arquitectura.md` §3 y §10, ADR-001/002/003/007, `docs/seguridad.md`
-> (§6.2, §8, SEC-002/003/009/010/011/013/014/015), `docs/permisos.md` §6–7,
-> `docs/logging.md` (§5, §6.5, §6.6, §8.2) y `docs/testing.md` §7.
+> (§6.2, §6.3, §8, SEC-002/003/009/010/011/013/014/015/018/019/020), `docs/permisos.md` §6–7,
+> `docs/logging.md` (§5, §6.5, §6.6, §7.0, §8.2) y `docs/testing.md` §7.
 > Estado: **DEV listo y validado con un workspace de prueba** (todavía no hay
 > código de la app). **TESTING en borrador** (`compose.test.yaml`). DEMO y PROD
 > pendientes (Etapas 4 y 5), con las decisiones que ya condicionan su diseño en §10–§12.
@@ -18,7 +18,7 @@
 7. Cumplimiento de la política §3.4 y excepciones
 8. Imágenes y digests
 9. TESTING (`compose.test.yaml`, T-12)
-10. Logs y PostgreSQL (M-05)
+10. Logs y PostgreSQL (M-05, M-06, SEC-015, SEC-020)
 11. Observabilidad en DEMO/PROD (M-06, M-08)
 12. Red, TLS e IP de origen (SEC-002, SEC-003, ADR-007)
 13. Copias de seguridad (SEC-011)
@@ -63,7 +63,8 @@ mi-app/
     ├── proxy/Caddyfile           # TESTING, DEMO y PROD
     ├── app/Containerfile         # (pendiente) imagen final multi-stage → distroless
     ├── quadlet/                  # (pendiente, Etapa 5) unidades de PROD
-    └── monitoring/               # (pendiente) configuración del stack de observabilidad
+    ├── host/                     # (pendiente, Etapa 5) script y unidades del temporizador de métricas (§11.1)
+    └── monitoring/               # (pendiente) stack de observabilidad; incluye alertmanager.yml.tmpl (§11.1)
 ```
 
 `docs/arquitectura.md` §3 situaba los `compose.*.yaml` en `deploy/`; se dejan
@@ -115,6 +116,8 @@ Según ADR-007 y la arquitectura §10, DEV **no tiene Caddy**: el navegador usa
 | `mi-app-dev_pgdata` (volumen) | `db:/var/lib/postgresql` | datos de PostgreSQL 19 (`PGDATA=/var/lib/postgresql/19/docker`) | `down -v` |
 | `mi-app-dev_pnpm-store` (volumen) | `deps:/pnpm-store` | caché de paquetes de pnpm | `down -v` (con `--profile setup`) |
 | `./` → `/workspace` | `api`, `migrate`, `init-manager`: **ro**; `web`, `deps`: rw | código fuente | — |
+| tmpfs vacío → `/workspace/.secrets` (SEC-018) | los 5 servicios que montan `./` | nada: `ro`, modo 0000, 4 KiB, `notmpcopyup` | — |
+| `.git`, `.claude`, `CLAUDE.md`, `deploy`, `docs`, `tools`, `.gitignore`, `compose.dev.yaml`, `compose.test.yaml` → mismo sitio en **ro** (SEC-018) | `web`, `deps` | lo que se ejecuta o se lee como instrucciones en el host | — |
 | `./deploy/db/initdb` → `/docker-entrypoint-initdb.d` | `db`, ro | script de inicialización | — |
 | `.secrets/dev/<nombre>` → `/run/secrets/<nombre>` | por servicio, ro | secretos (§5) | — |
 
@@ -186,7 +189,34 @@ dependen de `db` *healthy*. Esto afecta también a TESTING (§9).
   ficheros fuera del repositorio versionado montados por `podman-compose`;
   dentro del contenedor tienen modo 0600, propietario UID 1000 (el usuario del
   contenedor gracias a `keep-id`) y montaje `ro`. En PROD (Quadlet) se usará
-  `Secret=<nombre>,type=mount,mode=0400,uid=1000,gid=1000` con `podman secret`.
+  `Secret=<nombre>,type=mount,uid=1000,gid=1000,mode=0400` con `podman secret`.
+- **SEC-010 (resto), UID del secreto en PROD: 1000:1000.** El
+  software-engineer fijó el 2026-11-23 (`docs/arquitectura.md` §10, ADR-001)
+  que la imagen final de `app` usa **`USER 1000:1000`** (no el `nonroot`
+  65532 de distroless). Por tanto: (1) `deploy/app/Containerfile` (aún no
+  existe; lo crea el Developer en la Etapa 2 con revisión de Infrastructure)
+  hace `COPY --chown=1000:1000` de `dist/` y de los `node_modules` de
+  producción y declara `USER 1000:1000`; (2) las unidades Quadlet de `app` y
+  `migrate` llevan `User=1000` y `Group=1000`, y compose `user: "1000:1000"`
+  (ya está así en `compose.test.yaml`); (3) cada `Secret=` lleva
+  `uid=1000,gid=1000,mode=0400`. `db` y `proxy` también corren como 1000, con
+  el mismo `uid`/`gid`. Si algún día cambia el UID de una imagen, se cambian a
+  la vez el `USER`, el `User=` y el `uid` del secreto. **Nunca** se resuelve
+  un desajuste con `mode=0444` ni con otro modo legible por otros. Lo
+  comprueba RS-38 en TESTING (el proceso lee su secreto; otro UID no).
+- `TABLE_COUNT` (20) y `DELAY_THRESHOLD_MINUTES` (10) **no son secretos**: van
+  como variables de entorno normales de `api` (DEV) y `app` (TESTING, DEMO,
+  PROD) (§6). Ya no hay tabla `settings`: `migrate` no crea ninguna fila de
+  ajustes.
+- **SEC-018: los secretos solo llegan por `/run/secrets`.** Con `keep-id` el
+  UID del contenedor es el usuario del host, dueño de `.secrets/dev/`; por eso
+  todos los servicios que montan el proyecto llevan un tmpfs vacío (`ro`, modo
+  0000) encima de `/workspace/.secrets` (§7). Importante: el tmpfs lleva
+  `notmpcopyup`; sin esa opción Podman **copia** al tmpfs lo que había debajo,
+  es decir, los secretos (comprobado: falló por falta de espacio al intentar
+  copiarlos). Por eso se declara en la lista `tmpfs:` del servicio y no en la
+  sintaxis larga de `volumes`, que en `podman-compose` 1.5 no admite esa
+  opción. Requiere que `.secrets/` exista (lo crea `generar-secretos.sh`).
 - Reparto por contenedor (`docs/permisos.md` §7):
 
 | Secreto (`.secrets/dev/`) | `db` | `migrate` | `init-manager` | `api` |
@@ -216,6 +246,7 @@ cambian en `compose.dev.yaml` (pídelo a Infrastructure; no se edita en solitari
 |---|---|---|---|---|
 | `NODE_ENV` | ✓ | ✓ | ✓ | `development` |
 | `HOST`, `PORT` | ✓ | | | `0.0.0.0`, `3000` |
+| `TABLE_COUNT`, `DELAY_THRESHOLD_MINUTES` | ✓ | | | `20`, `10` (no secretas; arquitectura §4.1; `config.ts` no arranca fuera de 1–99 / 1–60). Igual en `app` de TESTING/DEMO/PROD |
 | `TZ` | ✓ | ✓ | ✓ | `UTC` (la fecha de negocio no depende de la zona del contenedor) |
 | `BUSINESS_TIMEZONE` | ✓ | ✓ | ✓ | `Europe/Madrid` |
 | `LOG_LEVEL` | ✓ | ✓ | ✓ | `debug` |
@@ -275,6 +306,22 @@ No da ningún privilegio: el usuario del contenedor ya es el del host.
    ficheros temporales junto a `vite.config`. `api`, `migrate` e
    `init-manager` lo montan en solo lectura. Si el Developer mueve la caché de
    Vite a `/tmp` (`cacheDir`), `web` podría pasar a `ro`.
+   **Límites de la excepción (SEC-018):** en `web` y `deps`, todo lo que se
+   ejecuta o se lee como instrucciones **en el host** se vuelve a montar en
+   `ro` encima del árbol: `.git` (hooks, `config` con `core.hooksPath` o
+   `core.fsmonitor`), `.claude` (hooks y agentes), `CLAUDE.md`, `deploy/`
+   (scripts que se ejecutan en el host), `docs/`, `tools/`, `.gitignore` (para
+   que no se pueda dejar de ignorar `.secrets/`) y los `compose.*.yaml`. Así
+   el código de terceros que ejecuta `deps` (scripts de instalación permitidos)
+   o `web` (plugins de Vite) no puede salir del contenedor hacia la cuenta del
+   usuario al hacer `git commit` o abrir una sesión del agente. Todos son
+   ficheros versionados, así que siempre existen (`podman-compose` crearía un
+   directorio vacío si faltara un origen). Al añadir `compose.demo.yaml`, se
+   añade a la lista. Riesgo residual aceptado: el código fuente (`apps/`,
+   `packages/`, `tests/`) sigue siendo escribible por `web`/`deps`; un cambio
+   así no se ejecuta solo en el host y se ve en `git status`/`git diff` antes
+   de cada commit. Además, los 5 servicios que montan el proyecto llevan
+   `.secrets/` tapado (§5).
 3. **`deps` tiene salida a internet** (registro npm) en su red `deps`; es el
    único servicio con ella y no tiene secretos.
 
@@ -347,8 +394,16 @@ Notas y cambios que se piden a Testing (respuesta a T-12):
    provisionales: los fija Testing.
 6. Sandbox de Chromium (§7.2): sin cambios de Infrastructure; la decisión
    `chromiumSandbox: false` sigue siendo de Cybersecurity.
+7. **SEC-018 en los ejecutores:** el repositorio ya se monta en `ro` (no
+   pueden escribir `.git` ni `.claude`), y `x-runner` tapa `.secrets/` con un
+   tmpfs vacío (`ro`, 0000, `notmpcopyup`), porque en una máquina de
+   desarrollo `.secrets/dev/` está dentro del checkout. **Petición a Testing:**
+   `tests/run.sh` debe hacer `mkdir -p -m 0700 .secrets` antes del `up`: si el
+   directorio no existe (p. ej. en CI) el punto de montaje no se puede crear
+   dentro de un montaje `ro` y el contenedor no arranca. Los secretos de la
+   ejecución solo llegan por `/run/secrets` desde `TEST_SECRETS_DIR`.
 
-## 10. Logs y PostgreSQL (M-05)
+## 10. Logs y PostgreSQL (M-05, M-06, SEC-015, SEC-020)
 
 Aplicado en `compose.dev.yaml` y `compose.test.yaml` (servirá igual para DEMO/PROD):
 
@@ -366,44 +421,183 @@ Aplicado en `compose.dev.yaml` y `compose.test.yaml` (servirá igual para DEMO/P
   Prueba: se forzó el error `role "app_owner" already exists` ejecutando el
   script dos veces y se buscaron las contraseñas de `.secrets/dev/` en los
   logs de `db`: **0 coincidencias** (sin la línea `STATEMENT`).
+- **SEC-020:** cada bloque `psql` de `10-roles.sh` hace además
+  `SET pg_stat_statements.track_utility = off` (las sentencias de utilidad,
+  como `CREATE ROLE … PASSWORD`, no se guardan en `pg_stat_statements`, que el
+  rol `monitoring` puede leer con `pg_read_all_stats`), y al final del script
+  se ejecuta `SELECT pg_stat_statements_reset()` en la BD de la app (vacía la
+  memoria y el fichero que se conserva entre reinicios). Prueba real
+  (2026-11-23, RS-44) sobre una BD **efímera** (proyecto `sec020probe`,
+  volumen nuevo destruido al terminar; `mi-app-dev_pgdata` no se tocó), con el
+  rol `monitoring` activado y contraseñas comparadas con `grep -F -f` sin
+  imprimirlas:
+
+  | | Script anterior | Script con SEC-020 |
+  |---|---|---|
+  | Contraseñas en `pg_stat_statements` tras inicializar | **4** (las 4 de `CREATE ROLE`) | 0 |
+  | Sentencias `CREATE ROLE` guardadas | 4 | 0 |
+  | Contraseñas en ficheros `pg_stat*` del volumen | 1 | 0 |
+  | Contraseñas en los logs de `db` | 0 | 0 |
+  | Lo mismo tras parar y arrancar `db` | — | 0 / 0 / 0 / 0 |
+
+- **Volumen de DEV existente:** `mi-app-dev_pgdata` se inicializó con el
+  script anterior y conserva **3** sentencias `CREATE ROLE` con contraseña en
+  `pg_stat_statements` (solo las ve `postgres`; en DEV no hay rol
+  `monitoring`). No se ha tocado. Para limpiarlo sin reinicializar la BD:
+  `podman-compose -f compose.dev.yaml exec db psql -U postgres -d cafeteria -c 'SELECT pg_stat_statements_reset()'`
+  (lo decide el Orquestador/humano). Alternativa: regenerar los secretos de DEV
+  y recrear el volumen.
 - Nota para Monitoring: con `log_connections=on`, el healthcheck por TCP
   (`pg_isready` cada 10 s) deja una línea `connection received` cada 10 s.
   Si molesta, se puede pasar el healthcheck al socket local en DEMO/PROD.
-- DEV/TESTING: log driver `k8s-file` con `max-size` 10 MB / 20 MB.
-- **PROD** (para el aprovisionamiento, Etapa 5): journald persistente con
-  `/etc/systemd/journald.conf.d/mi-app.conf` (`Storage=persistent`,
-  `SystemMaxUse=1G`, `MaxRetentionSec=30day`), `loginctl enable-linger
-  <usuario>` y `LogDriver=journald` en las unidades Quadlet (por defecto).
-  Lectura sin root: `journalctl --user -u app.service -o cat`. Lo aplica
-  cloud-init al crear el host; es configuración del sistema, no de un contenedor.
+
+**Log driver por entorno (unificado con §11.1, M-06 opción B, decisión del
+humano 2026-11-23; igual que `docs/logging.md` §5.2):**
+
+| Entorno | Log driver de los contenedores | Tamaño | Lectura |
+|---|---|---|---|
+| DEV | `k8s-file` (fichero de Podman por defecto) | `max-size` 10 MB | `podman logs` |
+| TESTING | `k8s-file` | 20 MB; los logs se guardan como artefacto | `podman logs` |
+| DEMO | `k8s-file` con `path` en el directorio dedicado de logs (§11.1) | 100 MB | `podman logs`, Loki 7 días |
+| PROD | `k8s-file` con `path` en el directorio dedicado de logs (§11.1): Quadlet `LogDriver=k8s-file`, `LogOpt=path=%h/mi-app/logs/<servicio>.log`, `LogOpt=max-size=100mb` | 100 MB | `podman logs`, Loki 30 días (90 `security`) |
+
+En **ningún** entorno los contenedores escriben en journald (se retira el
+`LogDriver=journald` que figuraba antes para PROD). journald del host solo
+guarda los mensajes de las **unidades** systemd del usuario (arranque/parada
+de los servicios Quadlet, temporizador de métricas, copias), que no contienen
+datos de la aplicación. Configuración del host (cloud-init, Etapa 5; es
+configuración del sistema, no de un contenedor):
+
+- `/etc/systemd/journald.conf.d/mi-app.conf`: `Storage=persistent`,
+  `SystemMaxUse=1G`, `MaxRetentionSec=30day` (retención de M-07; los logs de
+  aplicación tienen su retención en Loki).
+- `loginctl enable-linger <usuario-de-servicio>`.
+- Lectura de los mensajes de las unidades, sin root:
+  `journalctl --user -u app.service` (muestra arranques, paradas y fallos de
+  la unidad, **no** las líneas de la app; esas, con `podman logs app` o Loki).
+- El usuario de servicio **no** pertenece a `systemd-journal`, `adm` ni
+  `wheel`.
 
 ## 11. Observabilidad en DEMO/PROD (M-06, M-08)
 
-Solo diseño; **no se despliega nada** en esta etapa.
+Solo diseño; **no se despliega nada** en esta etapa. Implementación en la
+Etapa 5 (DEMO en la Etapa 4), con revisión de Cybersecurity del script, las
+unidades y los Quadlet de Alloy y `node_exporter`.
 
-### 11.1 M-06: leer logs y métricas sin violar §3.4
+### 11.1 M-06 opción B (decidida): logs y métricas sin excepción a §3.4
 
-No se aplica ninguna excepción. Alternativas, de preferida a menos preferida:
+**Decisión del humano (2026-11-23): opción B.** No se monta
+`/var/log/journal`, ni `/proc`, `/sys`, ni el almacenamiento de Podman
+(`~/.local/share/containers`), ni el socket de Podman en ningún contenedor.
+Se descartan la opción A (excepción a §3.4) y la C (Alloy fuera de
+contenedor). Aplica las 7 condiciones de Cybersecurity (`docs/seguridad.md`
+§6.3) y lo que fija Monitoring en `docs/logging.md` §5.2, §5.3, §5.5, §6.5 y §7.0.
 
-| Opción | Logs | Métricas de contenedores | ¿Excepción a §3.4? |
+**Directorios del usuario de servicio** (los crea el aprovisionamiento como
+ese usuario, nunca como root):
+
+| Ruta | Modo | Contenido | Quién lo monta |
 |---|---|---|---|
-| **B (propuesta)** | `k8s-file` en PROD con `log_opt path=` a un **directorio dedicado** del usuario de servicio (p. ej. `~/mi-app/logs/<servicio>.log`) y `max-size`; Alloy monta **solo ese directorio** en `ro` | temporizador systemd **del usuario** (en el host, fuera de contenedores; usa `podman stats --no-stream`, `systemctl --user show -p NRestarts,Result`, `df`) que escribe un `.prom` en un directorio dedicado; `node_exporter` con **solo** el colector `textfile` lo monta en `ro` | **No** |
-| A | journald; Alloy monta `/var/log/journal` en `ro` | igual que B | **Sí** (directorio del sistema) |
-| C | Alloy como servicio systemd del usuario (sin contenedor) leyendo `journalctl --user` | igual que B | No viola §3.4, pero rompe "contenedores en todo el ciclo de vida" |
+| `~/mi-app/logs/` | 0750 | un fichero `k8s-file` por servicio (`<servicio>.log`) | Alloy, **solo** este directorio, `ro` (condición 6) |
+| `~/mi-app/metrics/` | 0750, ficheros 0640 | `.prom` del temporizador y de las copias (`backup_last_success_timestamp_seconds`, §13) | `node_exporter`, **solo** este directorio, `ro` (condición 4) |
+| `~/mi-app/state/` | 0700, ficheros 0600 | fichero de estado del temporizador (acumulado de OOM) | nadie (solo el script) |
+| `~/.local/libexec/mi-app/metricas-host.sh` | 0750, del usuario de servicio | script versionado en `deploy/host/metricas-host.sh` | — |
+| `~/.config/systemd/user/mi-app-metricas.{service,timer}` | 0640 | unidades versionadas en `deploy/host/` | — |
 
-- Propuesta de Infrastructure, coincide con Cybersecurity: **opción B**.
-  Mejora sobre la (b) original de Monitoring: con `log_opt path` no hace
-  falta montar el almacenamiento de Podman (`~/.local/share/containers`), que
-  expondría la configuración de todos los contenedores.
-- Coste de B: los logs de los contenedores no están en journald
-  (`journalctl --user` no los muestra; se leen con `podman logs` o en
-  Loki), y si Loki está caído cuando el fichero rota se pueden perder líneas.
-  Mitigación: `max-size` amplio (100 MB) y alerta de Alloy sin enviar.
-- Cybersecurity debe validar que el temporizador del host (que ejecuta
-  `podman` como el usuario de servicio) es aceptable: necesita `podman` y no
-  puede ir en un contenedor sin el socket.
-- **Decisión final: humano** (puerta de la Etapa 1). Si eligiera A, sería una
-  excepción a §3.4 que se registra en un ADR con Cybersecurity.
+Ninguno es escribible por otro usuario (condición 1).
+
+**Logs (condición 6, `docs/logging.md` §5.5).**
+- Todos los Quadlet: `LogDriver=k8s-file`, `LogOpt=path=%h/mi-app/logs/<servicio>.log`,
+  `LogOpt=max-size=100mb`. Rotación: Podman **trunca** el fichero al llegar a
+  `max-size` (no hay ficheros numerados); Alloy detecta el truncado y sigue.
+  Con ~10 MB/día de `app`, 100 MB dan 7–10 días de margen si Loki cae; las
+  alertas `LogShippingFailing`/`LogIngestionStopped` avisan antes.
+- Alloy en contenedor con todo §3.4 (UID 1000, `cap-drop=ALL`,
+  `no-new-privileges`, `ReadOnly=true`, `/tmp` tmpfs, límites, red interna),
+  monta `~/mi-app/logs` en `ro` y nada más del host; sus posiciones van a un
+  volumen propio. `stage.cri` + `stage.json`, etiquetas `service`, `env`,
+  `level`, `category`. La redacción de `docs/logging.md` §4 sigue aplicando
+  (SEC-017).
+
+**Temporizador de métricas del host (condiciones 1, 2, 3 y 5;
+`docs/logging.md` §6.5).**
+- Unidad **de usuario** (`systemctl --user`), nunca de sistema, root ni
+  `sudo`. `mi-app-metricas.timer`: `OnBootSec=30s`, `OnUnitActiveSec=15s`,
+  `AccuracySec=1s`. `mi-app-metricas.service`: `Type=oneshot`,
+  `NoNewPrivileges=yes`, `UMask=0027`, `TimeoutStartSec=30`,
+  `RestrictAddressFamilies=AF_UNIX` (sin red: no necesita IP; `AF_UNIX` lo usa
+  `podman`), `Environment=TZ=UTC`.
+- El script **solo lee**; lista cerrada de comandos: `podman stats --no-stream
+  --format`, `podman ps --format`, `podman inspect --format` con
+  `{{.State.Health.Status}}`, `{{.State.OOMKilled}}` y `{{.RestartCount}}`
+  (nunca el `inspect` completo), `systemctl --user show <unidad> -p
+  NRestarts,Result,ActiveState`, `df -P` sobre rutas fijas (`containers_storage`,
+  `pgdata`, `logs`, `metrics`) y `TZ=Europe/Madrid date +%H%M` para el horario.
+  Prohibidos `podman exec/run/rm/kill`, `podman healthcheck run`,
+  `podman events`, `podman secret inspect --showsecret` y `sudo`.
+  Pendientes de aprobación de Cybersecurity (los pide Monitoring):
+  `date` (horario), `/proc/loadavg` + `/proc/meminfo` y `timedatectl show`;
+  si no se aprueban, se quitan sus métricas.
+- Salida: lista cerrada de métricas de `docs/logging.md` §6.5 con etiquetas
+  `name`/`unit`/`mount`/`status` (nunca imagen, comando, variables ni
+  montajes), incluidas **`business_hours_open`** (1 de 07:00 a 21:00
+  `Europe/Madrid`) y **`business_minutes_since_open`** (minutos desde las
+  07:00, 0 fuera de horario), que se calculan en el host porque Prometheus no
+  conoce zonas horarias. Escritura atómica: fichero temporal en
+  `~/mi-app/metrics/` + `mv` a `host.prom` (0640).
+- **Fichero de estado** `~/mi-app/state/metricas.state` (0600): acumula
+  `container_oom_kills_total` por contenedor (`Result=oom-kill` de la unidad y
+  `OOMKilled`), porque con Quadlet el contenedor se recrea y Podman pone sus
+  contadores a 0. Se escribe también de forma atómica; si se corrompe, el
+  script lo reinicia a 0 (el contador de Prometheus lo trata como reinicio).
+- Sus mensajes van al diario del usuario (30 días, §10) y no contienen
+  secretos. Si deja de escribir, salta `HostMetricsStale` (§7.1 de logging).
+- Nota técnica para Cybersecurity: con `NoNewPrivileges=yes`, `podman` no
+  puede ejecutar `newuidmap`/`newgidmap` (setuid) para **crear** el espacio de
+  usuarios rootless; solo se une al que ya existe (proceso de pausa creado por
+  los servicios Quadlet). Si ese espacio no existe, el script falla de forma
+  segura (no escribe métricas) y avisa `HostMetricsStale`. Se acepta: no se
+  relaja `NoNewPrivileges`. Se comprueba en DEMO.
+
+**`node_exporter` (condición 4).** Contenedor con todo §3.4, argumentos
+`--collector.disable-defaults --collector.textfile
+--collector.textfile.directory=/textfile`, monta **solo** `~/mi-app/metrics`
+en `/textfile:ro` (sin `/proc`, `/sys` ni `/`), sin puertos publicados, solo
+en la red interna de Prometheus.
+
+**Redes del stack de monitorización.**
+- `monitoring` (`Internal=true`): Prometheus, Loki, Alloy, Grafana,
+  `node_exporter`, `postgres_exporter`, Alertmanager; `app` y `db` se unen solo
+  para que Prometheus/exportadores los lean (`app:9464`, `db:5432` con el rol
+  `monitoring`).
+- `alert-egress` (no interna): **solo Alertmanager** (`docs/logging.md` §7.0).
+  Es el único contenedor del stack con salida, y solo a **SMTP submission
+  587 con TLS** (`smtp_require_tls: true`). Como las redes rootless no filtran
+  por puerto, el filtro se aplica en el host: nftables (cloud-init) en la
+  cadena `output`, para el UID del usuario de servicio
+  (`meta skuid <usuario>`): permitido `tcp dport 587` hacia el servidor SMTP,
+  DNS al resolvedor configurado y conexiones ya establecidas; el resto,
+  denegado. La salida 443 del usuario de servicio solo se abre durante un
+  despliegue (`podman pull` por digest) y, si PROD es VM con ACME, para
+  Caddy (topología B). En la VM, el grupo de seguridad de Terraform aplica la
+  misma salida. Cybersecurity lo valida; se prueba en DEMO (un `curl` a un
+  puerto distinto de 587 desde Alertmanager debe fallar).
+- **Configuración de Alertmanager:** el fichero final se **genera en el
+  despliegue** a partir de la plantilla versionada
+  `deploy/monitoring/alertmanager.yml.tmpl` (la crea Monitoring con
+  Infrastructure en la Etapa 2/5), sustituyendo los marcadores `${SMTP_HOST}`,
+  `${ALERT_FROM}`, `${SMTP_USER}`, `${ALERT_TO_*}` con valores que no se
+  versionan ni se escriben en `docs/` (las direcciones son datos personales).
+  El fichero generado queda fuera del repositorio, en el `$HOME` del usuario
+  de servicio (0640), montado en `ro` en el contenedor. La contraseña SMTP es
+  un `podman secret` (`alertmanager_smtp_password`,
+  `type=mount,uid=1000,gid=1000,mode=0400`), leída con
+  `smtp_auth_password_file`.
+
+**Coste aceptado de B:** los logs de los contenedores no están en journald
+(`journalctl --user` no los muestra; se leen con `podman logs` o en Loki) y,
+si Loki está caído tanto tiempo que el fichero llega a `max-size`, se pierden
+líneas (mitigado con 100 MB y alertas).
 
 ### 11.2 M-08: recursos y acceso a Grafana
 
@@ -435,7 +629,7 @@ se aplica en cada entorno.
 | DEV | solo `localhost` | ninguno (contexto seguro) | `127.0.0.1:5173`, `127.0.0.1:3000` |
 | TESTING | solo red interna de la ejecución | `tls internal`, CA por ejecución | ninguno |
 | DEMO | red del personal del local | `tls internal` (CA de DEMO, distinta de la de PROD) | 8080/8443 tal cual (ADR-007 opción a) |
-| PROD | red del personal (o VM con lista blanca/WireGuard) | `tls internal` en el local, ACME si es VM con dominio | 80/443 (§12.3) |
+| PROD | red del personal (o VM con WireGuard por dispositivo, §12.1 B1) | `tls internal` en el local, ACME si es VM con dominio | 80/443 (§12.3) |
 
 ### 12.1 Requisito previo de PROD (SEC-002, bloqueante)
 El login **nunca** debe ser alcanzable desde internet ni desde la Wi-Fi de
@@ -450,10 +644,37 @@ topologías:
   Cortafuegos del host (nftables, aplicado por el aprovisionamiento): 80/443
   solo desde la subred del personal; SSH solo con clave, sin `root`, desde la
   subred de administración; todo lo demás cerrado.
-- **B. VM en la nube.** Grupo de seguridad de Terraform con 80/443 **solo**
-  desde la IP pública fija del local, o túnel WireGuard local↔VM con 80/443
-  cerrados a internet. SSH igual que en A. Sin IP fija ni VPN, Cybersecurity no
-  aprueba PROD en VM.
+- **B. VM en la nube.** 80/443 cerrados a internet; SSH igual que en A. Sin
+  IP fija ni VPN, Cybersecurity no aprueba PROD en VM. Problema (SEC-019): el
+  límite de fallos de login va **por IP** (`docs/seguridad.md` §6.1.5) y, si
+  todos los dispositivos llegan a la VM con la misma IP, ese límite es de
+  **todo el local**: 10 fallos sumados en 10 min (o un empleado que los
+  provoque a propósito) dejan a todo el personal 10 min sin iniciar sesión ni
+  autorizar, y HU-01/CA-F11 ("desde este dispositivo") no se cumple.
+  Variantes, de preferida a menos preferida:
+  - **B1 (la única que se propone para PROD en VM): WireGuard con un *peer*
+    por dispositivo.** Cada tablet, móvil o PC de barra tiene su propia clave
+    y su IP de túnel fija (p. ej. `10.66.0.0/24`, una `/32` por
+    dispositivo, `AllowedIPs` de cada *peer* limitado a esa `/32`). La VM
+    solo abre UDP del puerto de WireGuard a internet (grupo de seguridad de
+    Terraform); 80/443 solo se aceptan desde la interfaz `wg0`. Caddy recibe
+    la conexión con la IP de túnel del dispositivo (activación por socket,
+    §12.5) y `app` la usa para el límite por IP: "dispositivo" = IP de túnel,
+    como en la topología A. El servidor WireGuard es configuración del host
+    (cloud-init, kernel), no un contenedor. Alta/baja de un dispositivo =
+    añadir/quitar su *peer* (un dispositivo perdido se revoca quitando su
+    clave). Requiere instalar el cliente WireGuard en cada dispositivo.
+    Verificación (RS-06): dos dispositivos aparecen con IP distinta en los
+    logs de `app`, y 10 fallos desde uno no bloquean al otro.
+  - **B2: lista blanca de la IP pública fija del local** (o WireGuard de
+    sitio a sitio desde el router, que también hace NAT). Todos los
+    dispositivos comparten IP: el límite por IP pasa a ser de todo el local.
+    **Solo se puede usar con la aprobación expresa del humano en la Etapa 5**,
+    que acepta ese riesgo de bloqueo colectivo; queda registrado en
+    `docs/estado.md` y sigue la alerta de `429` (`LoginIpRateLimited`,
+    `docs/seguridad.md` §6.1.7). Sin esa aprobación, la topología B se
+    despliega solo como B1.
+  - Si PROD usa la topología A, SEC-019 no aplica.
 - Verificación (RS-41): `nmap`/`curl` desde internet y desde la Wi-Fi de
   clientes sin respuesta en 80/443/8080/8443; desde la red del personal, sí.
 
@@ -563,6 +784,24 @@ El escaneo de imágenes (Trivy/Grype) se integra con la imagen final de la app
 
 ## 15. Qué se validó realmente y qué no
 
+Validado en esta máquina el **2026-11-23 (tarea 1.5b)**, sin `sudo` y sin coste:
+- **SEC-018**, con los compose reales y `podman-compose ... run --rm --no-deps`
+  sobre `api`, `web`, `deps`, `migrate`, `init-manager` (DEV) y `runner-unit`
+  (TESTING, con la imagen de herramientas en lugar de la de Testing): en todos,
+  listar, leer o crear en `/workspace/.secrets` → denegado; escribir en
+  `.git/`, `.git/hooks/`, `.claude/`, `.claude/hooks/`, `deploy/`, `docs/`,
+  `tools/` y abrir en escritura `.claude/settings.json`, `.git/config`,
+  `CLAUDE.md`, `.gitignore`, `compose.dev.yaml` → denegado; `web` y `deps`
+  siguen escribiendo en el resto del árbol; cada servicio ve en
+  `/run/secrets` solo los suyos (§5). Control: el mismo contenedor sin estos
+  montajes lee los secretos y escribe en `.git/hooks`. Montaje comprobado en
+  `/proc/mounts`: `tmpfs /workspace/.secrets ro,…,size=4k,mode=000`. Sin
+  `notmpcopyup`, Podman intentó copiar los secretos al tmpfs.
+- **SEC-020** (§10): RS-44 sobre BD efímera, antes 4 contraseñas en
+  `pg_stat_statements`, después 0 (también tras reiniciar `db`) y 0 en logs.
+- `podman-compose config` de `compose.dev.yaml` (perfil `setup`) y de
+  `compose.test.yaml` (todos los perfiles): correctos.
+
 Validado en esta máquina (2026-11-21), sin `sudo` y sin coste:
 - `podman info`: `rootless: true`, cgroups v2 con `cpu memory pids`.
 - `podman-compose -f compose.dev.yaml config` y `compose.test.yaml config`
@@ -592,8 +831,17 @@ No validado:
   Playwright sin root, Toxiproxy.
 - Conservación de la IP de origen desde otro dispositivo de la LAN (SEC-003).
 - DEMO, PROD, Quadlet, Terraform, cortafuegos, copias: solo diseño.
+- M-06 B (§11.1): temporizador, `node_exporter`, Alloy, red `alert-egress`
+  con nftables por `skuid`, `RestrictAddressFamilies` en unidad de usuario y
+  `NoNewPrivileges` con `podman` rootless: solo diseño, se prueba en DEMO.
+- SEC-019 (WireGuard por dispositivo): solo diseño.
+- SEC-018 con el código real (Vite escribiendo su caché, `pnpm install`
+  real) y con las imágenes reales de Playwright/k6/ZAP.
 - Escaneo de vulnerabilidades de imágenes.
 
-Estado al terminar: la pila DEV de esta máquina está **detenida**. Queda el
-volumen `mi-app-dev_pgdata` ya inicializado con los secretos actuales de
-`.secrets/dev/` (si se regeneran con `--force`, destruir con `down -v`).
+Estado al terminar (2026-11-23): la pila DEV de esta máquina está
+**detenida**. Queda el volumen `mi-app-dev_pgdata` ya inicializado con los
+secretos actuales de `.secrets/dev/` (si se regeneran con `--force`, destruir
+con `down -v`); conserva 3 sentencias con contraseña en `pg_stat_statements`
+(ver §10 para limpiarlo). Queda también `mi-app-dev_pnpm-store`, vacío (lo
+crearon las pruebas de `deps`; es el volumen de caché previsto).

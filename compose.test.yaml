@@ -52,6 +52,16 @@ x-app-env: &app-env
 
 x-runner: &runner
   <<: *hardening
+  # SEC-018: .secrets/ del repositorio tapado por un tmpfs vacío, ro y 0000.
+  # "notmpcopyup" es OBLIGATORIO (sin él Podman copiaría los secretos de debajo
+  # al tmpfs); por eso va aquí y no en la sintaxis larga de volumes.
+  # Requiere que exista .secrets/ en el checkout: tests/run.sh hace antes
+  # `mkdir -p -m 0700 .secrets` (en CI no existe; si falta, el contenedor no arranca).
+  # Los secretos de la ejecución llegan solo por /run/secrets (TEST_SECRETS_DIR).
+  # .git y .claude ya son de solo lectura: todo el repositorio se monta en ro.
+  tmpfs:
+    - /tmp:rw,nosuid,nodev,noexec,size=256m
+    - /workspace/.secrets:ro,nosuid,nodev,noexec,size=4k,mode=0000,notmpcopyup
   # Código del repositorio en solo lectura; solo los directorios de salida
   # se montan en escritura.
   volumes:
@@ -158,6 +168,9 @@ services:
       <<: *app-env
       HOST: 0.0.0.0
       PORT: "3000"
+      # Configuración de instalación (no secreta, arquitectura §4.1).
+      TABLE_COUNT: "20"
+      DELAY_THRESHOLD_MINUTES: "10"
       DATABASE_USER: app_rw
       DATABASE_PASSWORD_FILE: /run/secrets/db_app_password
       PIN_PEPPER_FILE: /run/secrets/pin_pepper
