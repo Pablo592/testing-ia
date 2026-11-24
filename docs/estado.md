@@ -21,12 +21,12 @@ historias las propone el Product Owner sin entrevista al cliente real).
 | 1.4b | cybersecurity | Verificar SEC-001 (PO + SE), actualizar `docs/permisos.md` con las rutas nuevas del SE, verificar la parte de infrastructure de SEC-002/003/009..015, temporizador de M-06 y PIN en HU-09 | Hecho: SEC-001 verificado, SEC-002 corregido (ya no bloquea), permisos.md §3.4 con los 5 puntos del SE aceptados (2 con condición), M-06 B aprobada con condiciones (`docs/seguridad.md` §6.3). **Nuevo hallazgo alto SEC-016 bloquea la puerta**; SEC-017..022 nuevos |
 | 1.6b | testing | Pasar `docs/testing.md` a los IDs estables y verificar T-01..T-09 | Hecho (matriz §10 con 204 criterios del MVP trazados a `HU-xx/CA-xnn`; T-01..T-09 verificados; estrategia ampliada para SEC-001/SEC-007, sonido, Wake Lock y valores fijos; interpretaciones I-01..I-10 a confirmar por el PO; T-14..T-18 nuevos) |
 | 1.1e | product-owner | Aplicar las decisiones del humano del 2026-11-23 (preguntas cerradas, supuesto 12, HU-09 fuera del MVP) | Hecho (14 preguntas cerradas, supuestos validados, supuesto 12 sin la regla doble, HU-09 fuera del MVP; HU-02/CA-F01 y HU-03/CA-F06 apuntan al supuesto 20) |
-| 1.2c | ux-designer | Alinear wireframes con la ronda 1.1d (SEC-008 en P-11, IDs CA-) + flujos de telemetría (M-03) + P-12 y la opción "Ajustes" del menú del encargado fuera del MVP | En cola |
+| 1.2c | ux-designer | Alinear wireframes con la ronda 1.1d (SEC-008 en P-11, IDs CA-) + flujos de telemetría (M-03) + P-12 y la opción "Ajustes" del menú del encargado fuera del MVP | En curso |
 | 1.3c | software-engineer | SEC-016 (alta), SEC-017 (parte de arquitectura), SEC-021, SEC-022, SEC-010 (uid del secreto vs. imagen distroless) y restos de HU-09 | En curso |
 | 1.5b | infrastructure | SEC-018, SEC-019, SEC-020, SEC-010 (uid en PROD) y M-06 B (unificar §10/§11.1, condiciones de Cybersecurity §6.3) | En curso |
 | 1.6c | monitoring | M-07 (correo, horario 07:00–21:00, retención 30/90 días, aviso a empleados), M-06 B y SEC-017 (redactar `confirmPin` / claves `/pin/i`) en `docs/logging.md` | En curso |
 | 1.4c | cybersecurity | Verificar SEC-016..SEC-022 tras 1.3c, 1.5b y 1.6c + T-14 (su parte) y T-18 | En cola |
-| 1.1f | product-owner | T-14..T-17 e interpretaciones I-01..I-10 de Testing | En cola |
+| 1.1f | product-owner | T-14..T-17 e interpretaciones I-01..I-10 de Testing | En curso |
 | 1.2b | ux-designer | Actualizar wireframes con los cambios del PO (ronda 1.1c) + SEC-007 y mensajes de bloqueo | Hecho (reconfirmación de PIN en cobro y Personal, desbloqueo, estados de bloqueo en login, "Activar sonido"/Wake Lock y 409 en la cola, "AÑADIDO hh:mm"; P-12 Ajustes condicionada a HU-09) |
 
 ## Decisiones del humano
