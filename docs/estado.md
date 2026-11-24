@@ -20,14 +20,22 @@ historias las propone el Product Owner sin entrevista al cliente real).
 | 1.3b | software-engineer | Actualizar arquitectura con los cambios del PO (rondas 1.1b y 1.1c) + T-10, T-11, M-01..M-04 + SEC-001/002/004/005/006/007/012 | Hecho (sin cambios de decisión principal; revisiones en ADRs y §14) |
 | 1.4b | cybersecurity | Verificar SEC-001 (PO + SE), actualizar `docs/permisos.md` con las rutas nuevas del SE, verificar la parte de infrastructure de SEC-002/003/009..015, temporizador de M-06 y PIN en HU-09 | En curso |
 | 1.6b | testing | Pasar `docs/testing.md` a los IDs estables y verificar T-01..T-09 | En curso |
-| 1.2c | ux-designer | Alinear wireframes con la ronda 1.1d (SEC-008 en P-11, IDs CA-) + flujos de telemetría (M-03) | En cola |
+| 1.1e | product-owner | Aplicar las decisiones del humano del 2026-11-23 (preguntas cerradas, supuesto 12, HU-09 fuera del MVP) | En curso |
+| 1.2c | ux-designer | Alinear wireframes con la ronda 1.1d (SEC-008 en P-11, IDs CA-) + flujos de telemetría (M-03) + P-12 fuera del MVP | En cola |
+| 1.6c | monitoring / infrastructure | Aplicar M-06 B (unificar §10/§11.1 de `docs/infraestructura.md`) y M-07 (correo, horario, retención) en `docs/logging.md` | En cola |
 | 1.2b | ux-designer | Actualizar wireframes con los cambios del PO (ronda 1.1c) + SEC-007 y mensajes de bloqueo | Hecho (reconfirmación de PIN en cobro y Personal, desbloqueo, estados de bloqueo en login, "Activar sonido"/Wake Lock y 409 en la cola, "AÑADIDO hh:mm"; P-12 Ajustes condicionada a HU-09) |
 
+## Decisiones del humano
+**2026-11-23. Criterio: "los supuestos que supongan una menor carga".** El
+Orquestador lo aplica así (el humano puede corregir cualquier punto):
+- **Preguntas abiertas 1–14:** se cierran con el supuesto actual del PO, que ya es el de menor alcance: sin ticket fiscal (el local usa otra caja fiscal), sin impresión, una sola estación de preparación, sin variantes con precio, sin dividir la cuenta, PIN, cancelación con autorización del encargado según HU-06, un solo tipo de IVA sin desglose, sin modo sin conexión (solo aviso + borrador), local que cierra antes de medianoche en `Europe/Madrid`, conservación de datos sin borrado en el MVP. Pregunta 13: se confirma el estado "Servido" (supuesto 18), porque quitarlo obligaría a rehacer historias, wireframes y arquitectura.
+- **Supuestos 1–24:** aceptados, salvo el **12**: se elimina "un criterio se da por cumplido solo si se cumple en los dos entornos". Los criterios de rendimiento se **verifican** en TESTING (vinculante) y en DEMO solo se **observan**; una desviación en DEMO se registra como hallazgo y no bloquea por sí sola.
+- **HU-09 (Ajustes del local): no entra en el MVP.** Valores fijos en la instalación (20 mesas, 10 min), supuesto 20. P-12 y la pregunta de PIN en HU-09 quedan sin efecto.
+- **M-06:** opción **B** (sin excepción a §3.4).
+- **M-07:** alertas por **correo**; horario de alertas 07:00–21:00; retención de logs 30 días (90 los de seguridad); se informa a los empleados del registro de actividad (texto breve en la documentación, sin desarrollo).
+
 ## Bloqueos
-- Decisiones para el humano en la puerta de la Etapa 1: preguntas abiertas del PO, supuestos marcados "[Cambio 2026-11-21]", aprobar HU-09, M-06 (posible excepción a §3.4) y M-07 (canal de alertas, horario, retención, RGPD).
-_Ninguno._ Las 14 preguntas abiertas del PO (`docs/historias/README.md`) se
-llevan a la puerta de la Etapa 1; mientras tanto se trabaja con los supuestos
-del PO. La de mayor impacto: ticket fiscal (VeriFactu/TicketBAI).
+- Puerta de la Etapa 1: falta que Cybersecurity cierre SEC-001 (1.4b), aplicar las decisiones del humano en las historias (1.1e) y la aprobación final del humano.
 
 ## Hallazgos reportados a otros agentes
 | Fecha | Reporta | Responsable | Descripción | Estado |
