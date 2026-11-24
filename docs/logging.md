@@ -30,6 +30,19 @@
 >   límite por sesión, `423` sin contar, escala 5/10/15/20 con bloqueo
 >   indefinido que revoca todas las sesiones (`auth.sessions.revoked`) y
 >   `POST /auth/pin` solo con PIN provisional (§3.2, §6.3, §7.4).
+>
+> **Revisión 1.7b (2026-11-24)**, ronda de cierre de la Etapa 1:
+> - SEC-024: `target_role` en `auth.account.locked` y `auth_lockouts_total`,
+>   alerta `ManagerLocked`, `LockoutSpray` en 1 h, series de los contadores
+>   de alertas a 0 desde el arranque, `new_role` en
+>   `staff_privilege_changes_total` y `SessionPinProbing` solo `approval`
+>   (T-20) (§3.2, §6.3, §7.0, §7.4).
+> - Telemetría `pre_session` de `login` y `pin_change` con las condiciones de
+>   Cybersecurity (§3.5, §6.4.1).
+> - `screen` P-01..P-11 y flujos, pasos, formularios y códigos de
+>   `docs/ux/flujos.md` §10 como fuente única (§3.5, §6.4).
+> - T-22: Loki en DEMO 24 h, comprobación `TX-MON-01` no antes de T0 + 30 h y
+>   solo configuración en PROD (`docs/infraestructura.md` §11.3) (§5.2, §6.6).
 
 ---
 
@@ -187,10 +200,10 @@ que `ctx.purpose`). Reglas comunes:
 | `auth.login.succeeded` | `info` | `user_id`, `role`, `session_id`, `provisional_credential` (bool: entra con PIN provisional; el nombre evita la subcadena `pin`, que se redacta siempre, §4.3) |
 | `auth.login.failed` | `warn` | `reason`: `bad_pin` \| `unknown_user`; `target_user_id` (solo si el usuario existe), `failed_attempts` (contador tras este fallo). **Nunca** el nombre tecleado ni el PIN (§4.1) |
 | `auth.verify.locked` (intento con la cuenta ya bloqueada: `423 LOCKED` / `423 ACCOUNT_LOCKED_MANUAL`, o `403 MANAGER_APPROVAL_INVALID` en `approval`; **sin hash y sin contar**) | `warn` | `purpose`, `target_user_id`, `lock_kind`: `temporary` \| `manual`, `retry_after_s` (solo `temporary`) |
-| `auth.account.locked` (un fallo alcanza la escala 5/10/15/20 y se activa el bloqueo) | `warn`; `error` si `lock_kind = manual` | `purpose` (uso en el que se produjo el fallo que bloquea), `target_user_id`, `lock_kind`: `temporary` \| `manual`, `failed_attempts` (5, 10, 15 o 20), `locked_until` (solo `temporary`), `lockouts_24h` (bloqueos de ese usuario en 24 h), `sessions_revoked` (solo `manual`) |
+| `auth.account.locked` (un fallo alcanza la escala 5/10/15/20 y se activa el bloqueo) | `warn`; `error` si `lock_kind = manual` | `purpose` (uso en el que se produjo el fallo que bloquea), `target_user_id`, `target_role`: `waiter` \| `kitchen` \| `manager` (rol de la cuenta bloqueada, SEC-024; alimenta `ManagerLocked`), `lock_kind`: `temporary` \| `manual`, `failed_attempts` (5, 10, 15 o 20), `locked_until` (solo `temporary`), `lockouts_24h` (bloqueos de ese usuario en 24 h), `sessions_revoked` (solo `manual`) |
 | `auth.sessions.revoked` (revocación de **todas** las sesiones de una cuenta por el bloqueo indefinido, en la misma transacción, HU-01/CA-F13) | `warn` | `target_user_id`, `reason`: `account_locked_manual`, `purpose`, `sessions_revoked` (número), `sse_closed` (flujos SSE cerrados tras el `COMMIT`), `from_own_session` (bool: la petición venía de una sesión de esa cuenta y respondió `423 ACCOUNT_LOCKED_MANUAL`). Sustituye a las líneas `auth.session.revoked` individuales de ese caso |
 | `auth.login.disabled_user` (`403 USER_DISABLED`) | `warn` | `target_user_id` |
-| `auth.verify.rate_limited` (`429 TOO_MANY_ATTEMPTS`, antes del hash; también `GET /auth/login-options` con la IP limitada) | `warn` | `purpose` (o `login_options`), `scope`: `ip` \| `session`, `retry_after_s`, `session_id` (solo `scope = session`). Un `scope = session` es una sesión abierta probando PIN (aprobaciones, reconfirmación o cambio) |
+| `auth.verify.rate_limited` (`429 TOO_MANY_ATTEMPTS`, antes del hash; también `GET /auth/login-options` con la IP limitada) | `warn` | `purpose` (o `login_options`), `scope`: `ip` \| `session`, `retry_after_s`, `session_id` (solo `scope = session`). Un `scope = session` es una sesión abierta probando el PIN de un encargado en aprobaciones: tras T-20 el límite por sesión solo cuenta `purpose = approval` |
 | `auth.logout` | `info` | `user_id`, `session_id` |
 | `auth.session.expired` | `info` | `user_id`, `session_id`, `reason`: `idle` \| `absolute` |
 | `auth.session.revoked` | `info` | `user_id` (afectado), `session_id`, `reason`: `logout` \| `user_disabled` \| `pin_reset` \| `pin_changed` (las **demás** sesiones del usuario al cambiar el PIN provisional), `by_user_id`. El bloqueo indefinido usa `auth.sessions.revoked` |
@@ -254,12 +267,15 @@ inestable o problemas de UX.
 
 ### 3.5 Cliente (`category: client`)
 
-Solo si se aprueba el endpoint de telemetría (§10, cambio 3). El servidor los
+Llegan por `POST /api/v1/telemetry` (§10, cambio 3; RS-43). El servidor los
 escribe con `service: "app"`, `category: "client"` y los campos de la sesión.
+`screen` es siempre uno de `P-01`..`P-11` (`docs/ux/flujos.md` §10.2; **P-12
+no existe** en el MVP y el esquema lo rechaza). Los pasos `pre_session`
+(§6.4.1) no generan ninguna línea de log: solo suman a contadores agregados.
 
 | Evento | Nivel | Campos específicos |
 |---|---|---|
-| `client.js_error` | `error` | `screen` (P-01..P-12), `error_type`, `message` truncado a 200 caracteres y filtrado (§4.4), `app_version` |
+| `client.js_error` | `error` | `screen` (P-01..P-11), `error_type`, `message` truncado a 200 caracteres y filtrado (§4.4), `app_version` |
 | `client.offline` (el aviso "Sin conexión" se mostró) | `warn` | `screen`, `offline_ms` (al recuperar la conexión) |
 | `client.propagation` (agregado, no por evento) | `debug` | `p50_ms`, `p95_ms`, `samples` |
 
@@ -453,7 +469,7 @@ de log dentro del contenedor. En todos los entornos el *log driver* es
 |---|---|---|---|---|---|
 | DEV | `k8s-file` (por defecto en compose) con `log_size_max = 10 MB` en `containers.conf` del usuario o `log_opt: max-size` en `compose.dev.yaml` | lo que dure el contenedor (se pierde al recrearlo) | `debug` | no (opcional: perfil `monitoring` para probar dashboards) | lectura con `podman logs -f app \| jq` o `pino-pretty`. El logger **siempre** emite JSON; el formato bonito se aplica solo al leer, nunca en el proceso |
 | TESTING | `k8s-file`, 20 MB | efímero; al final de cada ejecución se guardan `podman logs` de cada servicio como **artefacto** de la ejecución (14 días) | `info` (`debug` si se reproduce un fallo) | no | los tests de §4.5 se ejecutan sobre estos artefactos |
-| DEMO | `k8s-file` con `log_opt path=` al directorio dedicado de logs (§5.3) y `max-size` 100 MB | búfer local: el fichero se trunca al llegar a `max-size`; no es la copia de referencia | `info` | sí (Loki 7 días) | igual que PROD para probar la recogida; los datos de la demo son ficticios; los participantes de la prueba de usabilidad usan usuarios de prueba, nunca su nombre |
+| DEMO | `k8s-file` con `log_opt path=` al directorio dedicado de logs (§5.3) y `max-size` 100 MB | búfer local: el fichero se trunca al llegar a `max-size`; no es la copia de referencia | `info` | sí: Loki **24 h** (T-22, §6.6; métricas en Prometheus 7 días) | igual que PROD para probar la recogida; DEMO dura 3–5 días laborables (`docs/infraestructura.md` §11.3) y las líneas de log que UX necesite de una sesión de usabilidad se exportan desde Grafana/Loki el mismo día, sin datos personales (§4); los datos de la demo son ficticios; los participantes de la prueba de usabilidad usan usuarios de prueba, nunca su nombre |
 | PROD | `k8s-file` con `log_opt path=` al directorio dedicado de logs (§5.3) y `max-size` 100 MB (Quadlet: `LogDriver=k8s-file`, `LogOpt=path=...`, `LogOpt=max-size=100mb`) | búfer local de ~7–10 días de `app` (≈ 10 MB/día); la retención la da Loki | `info` | sí: Loki **30 días** general y **90 días** para `category="security"` (decisión del humano, M-07) | ver §5.3 y §5.5 |
 
 Tamaño estimado en PROD: ~10 MB/día de `app` + ~5 MB/día de `proxy` → menos de
@@ -601,7 +617,7 @@ Percentiles p50/p95/p99 con `histogram_quantile` sobre las ventanas de §7.
 |---|---|---|
 | `auth_login_attempts_total` | counter | `result` = `success` \| `bad_pin` \| `unknown_user` \| `locked` \| `disabled` \| `ip_rate_limited` (solo `POST /auth/login`; `locked` no es un fallo contado) |
 | `auth_verifications_total` | counter | `purpose` = `login` \| `approval` \| `confirm` \| `change`; `result` = `success` \| `invalid` \| `locked` \| `rate_limited_ip` \| `rate_limited_session`. Una muestra por llamada a `verifyPin`; `locked` y `rate_limited_*` no calculan el hash ni cuentan |
-| `auth_lockouts_total` | counter | `kind` = `temporary` \| `manual`, `purpose` |
+| `auth_lockouts_total` | counter | `kind` = `temporary` \| `manual`, `purpose`, `target_role` = `waiter` \| `kitchen` \| `manager` (rol de la cuenta bloqueada, SEC-024 a) |
 | `auth_users_locked` | gauge | `kind` = `temporary` \| `manual` |
 | `auth_sessions_revoked_on_lock_total` | counter | — (sesiones revocadas por bloqueo indefinido) |
 | `auth_sessions_active` | gauge | `role` |
@@ -611,36 +627,106 @@ Percentiles p50/p95/p99 con `histogram_quantile` sobre las ventanas de §7.
 | `authz_denied_total` | counter | `permission` |
 | `csrf_rejected_total` | counter | — |
 | `manager_approvals_total` | counter | `action`, `result` = `granted` \| `failed` |
-| `staff_privilege_changes_total` | counter | `kind` = `role_changed` \| `deactivated` \| `pin_reset` \| `initial_manager` |
+| `staff_privilege_changes_total` | counter | `kind` = `role_changed` \| `deactivated` \| `pin_reset` \| `initial_manager`; `new_role` = `waiter` \| `kitchen` \| `manager` (solo `role_changed`; `manager` en `initial_manager`; `none` en `deactivated` y `pin_reset`). La usa `PrivilegeChange` (§7.4) |
 | `http_requests_total{status="429"}` y tasa total de peticiones por IP | — | picos anómalos: la tasa por IP se calcula **en Loki** sobre `client_ip` (no como etiqueta de Prometheus) |
+
+**Series a 0 desde el arranque (SEC-024 c, RS-47).** `increase()` no ve el
+paso de "la serie no existe" a 1, así que la primera alerta tras un reinicio
+de `app` no saltaría. Regla: todo contador usado en una alerta de §7 se crea
+con valor 0 al arrancar `app` para **cada combinación** de sus etiquetas de
+enum (las listas cerradas de esta sección), como mínimo:
+`auth_lockouts_total` (`kind` × `purpose` × `target_role`),
+`auth_verifications_total` (`purpose` × `result`), `auth_login_attempts_total`
+(`result`), `csrf_rejected_total`, `authz_denied_total` (`permission`),
+`staff_privilege_changes_total` (`kind` × `new_role`, solo las combinaciones
+válidas), `auth_pin_change_rejected_total` (`reason`) y
+`payments_voided_total`. Lo hace el Developer en la Etapa 2 (`counter.inc(labels, 0)`
+o `labels(...).inc(0)` en `prom-client`); Testing lo comprueba leyendo
+`/metrics` tras arrancar (p. ej. `auth_lockouts_total{kind="manual",…} 0`
+presente).
 
 ### 6.4 UX
 
-Necesitan el endpoint de telemetría (§10, cambio 3), salvo las marcadas
-"servidor". Etiquetas solo de listas cerradas definidas por UX
-(`docs/ux/flujos.md`: pantallas P-01..P-12).
+Necesitan el endpoint de telemetría (§10, cambio 3; RS-43), salvo las marcadas
+"servidor". Etiquetas solo de las listas cerradas de `docs/ux/flujos.md` §10,
+que es la **fuente única** de `screen`, `flow`, `step`, `form`, `field` y
+`code`: si un valor no está allí, el esquema zod `.strict()` lo rechaza y aquí
+no se repite la lista.
+
+- `screen` = `P-01` .. `P-11` (`docs/ux/flujos.md` §10.2). **P-12 no existe**
+  en el MVP (HU-09 descartada). Los diálogos cuentan como la pantalla que los
+  abre y el cambio obligatorio del PIN cuenta como `P-01`.
+- `flow` y `step`: tabla de `docs/ux/flujos.md` §10.3 (`login`, `pin_change`,
+  `take_order`, `mark_sold_out`, `queue`, `serve`, `payment`, `void_payment`,
+  `modify_order`, `cancel_order`, `edit_product`, `staff_write`,
+  `daily_close`, `session`), con sus pasos, paso final de éxito y definición
+  de abandono. Sustituye a la tabla inicial de esta sección (1.6).
+- `form`, `field`, `code`: `docs/ux/flujos.md` §10.5 (para el PIN solo
+  `pin_rule`, sin qué regla falló).
 
 | Métrica | Tipo | Etiquetas | Qué responde |
 |---|---|---|---|
 | `ux_flow_steps_total` | counter | `flow`, `step` | embudo de cada flujo |
-| `ux_flow_abandoned_total` | counter | `flow`, `step` | abandono en cada paso |
-| `ux_flow_duration_seconds` | histogram | `flow` | tiempo de tarea (p. ej. tomar pedido) |
+| `ux_flow_abandoned_total` | counter | `flow`, `step` (último paso alcanzado) | abandono en cada paso |
+| `ux_flow_duration_seconds` | histogram, buckets 2, 5, 10, 20, 30, 60, 120, 300, 600 | `flow` (solo flujos con paso final de éxito) | tiempo de tarea, del primer paso al de éxito; los abandonados no la registran |
 | `ux_form_errors_total` (servidor) | counter | `form` (= `route`), `field`, `code` | errores de formulario (a partir de `http.validation.failed`) |
 | `ux_client_validation_errors_total` | counter | `form`, `field`, `code` | errores que el cliente muestra antes de enviar |
-| `ux_rage_clicks_total` | counter | `screen` | ≥ 3 toques en el mismo control (radio 30 px) en ≤ 1 s, sin cambio de estado |
-| `ux_offline_banner_total` / `ux_offline_seconds_total` | counter | `screen` | "Sin conexión" (HU-03) visto por el usuario |
-| `ux_conflict_shown_total` | counter | `screen` | aviso "El pedido ha cambiado" (HU-06) |
+| `ux_rage_clicks_total` | counter | `screen` | ≥ 3 toques en el mismo control (radio 30 px) en ≤ 1 s, sin cambio de estado (reglas de `docs/ux/flujos.md` §10.4) |
+| `ux_offline_banner_total` / `ux_offline_seconds_total` | counter | `screen` (P-02, P-04, P-05, P-06, P-08, P-11) | "Sin conexión" (HU-03) visto por el usuario |
+| `ux_conflict_shown_total` | counter | `screen` (P-02, P-05, P-06, P-08) | aviso "El pedido ha cambiado" (HU-06) |
 | `client_js_errors_total` | counter | `screen` | errores JS |
+| `ux_telemetry_pre_session_dropped_total` | counter | `reason` = `too_old` \| `too_many` \| `invalid_flow` | pasos previos a la sesión descartados por el servidor (§6.4.1); si crece, el cliente no aplica bien los límites |
+| `auth_provisional_sessions_ended_total` (servidor) | counter | `reason` (los de `auth_sessions_ended_total`) | sesiones con PIN provisional que terminan sin `auth.pin.changed`: es el abandono de `pin_change`, que el cliente no puede enviar (§6.4.1, punto 6) |
 
-Flujos y pasos iniciales (UX los ajusta):
+#### 6.4.1 Pasos previos a la sesión (`pre_session`): `login` y `pin_change`
 
-| `flow` | Pasos (`step`) | Abandono = |
-|---|---|---|
-| `login` | `user_selected`, `pin_entered`, `succeeded` | se elige usuario y no hay login en 60 s |
-| `take_order` | `started`, `table_chosen`, `product_added`, `sent` | `discarded` o borrador sin enviar al salir de la pantalla |
-| `payment` | `opened`, `method_chosen`, `amount_entered`, `confirmed` | cerrar el cobro sin confirmar |
-| `cancel_order` | `opened`, `reason_chosen`, `approval_requested`, `confirmed` | cerrar sin confirmar |
-| `modify_order` | `opened`, `changed`, `approval_requested`, `saved` | cerrar sin guardar, o `409` sin reintento |
+Los pasos de `login` ocurren sin sesión y los de `pin_change` con PIN
+provisional, y RS-43 rechaza ambos casos. Cybersecurity aprobó guardarlos en
+el cliente y enviarlos después, con condiciones (`docs/seguridad.md` §6.4,
+"UX (1.2c)"). **RS-43 no cambia**: no hay endpoint sin sesión ni excepción
+para la sesión provisional. Reglas:
+
+1. **Solo en memoria** de la página (una variable del módulo de telemetría):
+   nunca `localStorage`, `sessionStorage`, IndexedDB, cookies ni Service
+   Worker. Se pierden al recargar o cerrar la pestaña.
+2. **Como mucho 20 pasos y 10 min de antigüedad.** Al añadir el paso 21 se
+   descarta el más antiguo; antes de enviar se descartan los de más de
+   10 min. Solo `flow` = `login` o `pin_change`.
+3. **Contenido:** solo `flow`, `step` (enums de `docs/ux/flujos.md` §10.3),
+   `pre_session: true` y, en el elemento de éxito (`succeeded` o `saved`),
+   `duration_s` entero (≤ 600) para `ux_flow_duration_seconds`. **Nunca**:
+   usuario elegido, longitud del PIN, eventos por dígito, tiempos entre
+   pulsaciones ni marca de tiempo por paso (el cliente aplica la antigüedad
+   y el orden de la lista basta para el embudo). Es más estricto que la
+   condición 3 de Cybersecurity, que permitía la hora al segundo.
+4. **Envío:** en el **primer lote** tras `succeeded` (login correcto sin PIN
+   provisional) o tras `saved` (`pin_change`, cuando la sesión ya no es
+   provisional), dentro de los límites de RS-43 (≤ 50 elementos, ≤ 16 KiB,
+   ≤ 1 petición/30 s). Si el envío falla (`429`, red), se reintenta en el
+   lote siguiente de la misma sesión, siempre con el límite de 10 min. Tras
+   un `2xx` el búfer se vacía.
+5. **Se vacía** (sin enviar) al cerrar sesión, al recibir `401` por sesión
+   revocada o caducada (también la revocación por bloqueo indefinido) y en
+   `idle_logout`: los pasos de una persona no se envían con la sesión de la
+   siguiente. "Cambiar de usuario" en P-01 **no** lo vacía (aún no hay
+   sesión y es el abandono que se quiere medir).
+6. **Servidor:** el esquema acepta `pre_session: true` solo en `login` y
+   `pin_change` y como mucho 20 elementos así por lote; lo que no cumpla se
+   descarta y suma a `ux_telemetry_pre_session_dropped_total` (el resto del
+   lote se procesa). Estos elementos **solo suman a los contadores
+   agregados** de esta sección: no generan líneas de log, no se asocian al
+   `user_id` ni al `session_id` del lote (en una tablet compartida pueden ser
+   de otra persona) y no se guardan en BD.
+7. **Pérdidas aceptadas:** los abandonos de `login` sin un login posterior en
+   ese dispositivo (los fallos ya los mide el servidor con
+   `auth_login_attempts_total`) y los abandonos de `pin_change` ("Cerrar
+   sesión" sin `saved`), porque el punto 5 vacía el búfer; estos últimos los
+   mide el servidor con `auth_provisional_sessions_ended_total`.
+
+Verificación (Testing, Etapa 2): unit del búfer (límites 20/10 min, vaciado
+en los casos del punto 5, sin almacenamiento persistente) e integración del
+esquema (`pre_session` en otro flujo o 21 elementos → descartados y
+contados; ninguna línea de log con esos pasos).
 
 ### 6.5 Contenedores y host
 
@@ -711,7 +797,7 @@ publicar puertos a la LAN:
 |---|---|---|
 | Prometheus | PROD 30 días, DEMO 7 días | 256 MB |
 | Alertmanager | — (estado de silencios y notificaciones en su volumen) | 64 MB |
-| Loki (modo monolítico, almacenamiento en volumen local) | PROD 30 días general, 90 días `category="security"`; DEMO 7 días | 256 MB |
+| Loki (modo monolítico, almacenamiento en volumen local) | PROD 30 días general, 90 días `category="security"`; DEMO 24 h (T-22) | 256 MB |
 | Grafana Alloy | — | 128 MB |
 | Grafana | — | 192 MB |
 | node_exporter (solo textfile), postgres_exporter | — | 32 MB c/u |
@@ -744,10 +830,40 @@ limits_config:
 - La retención de 90 días se aplica a la etiqueta `category="security"`, que
   pone Alloy a partir del campo `category` de los servicios propios (§3.2). Los
   logs de `proxy` y `db` quedan en 30 días.
-- DEMO: Loki y Prometheus 7 días (`retention_period: 168h`, sin
-  `retention_stream`).
-- Testing comprueba en DEMO que el compactor borra (consulta de un intervalo
-  ya vencido sin resultados) antes de la Etapa 5.
+- DEMO (T-22, `docs/infraestructura.md` §11.3): DEMO dura de 3 a 5 días
+  laborables, así que Loki usa `limits_config.retention_period: 24h` (el
+  mínimo de Loki, igual al periodo del índice), **sin** `retention_stream`,
+  **sin** `max_query_lookback` y con el **mismo** bloque `compactor` que PROD
+  (`retention_enabled: true`, `retention_delete_delay: 2h`,
+  `compaction_interval` por defecto, 10 min). Misma imagen de Loki (mismo
+  digest) que PROD: solo cambia la configuración. Prometheus en DEMO sigue
+  con **7 días** (`--storage.tsdb.retention.time=7d`): las pruebas de
+  usabilidad se analizan con las métricas de UX de §6.4.
+- Comprobación en DEMO (`TX-MON-01`, `docs/testing.md` §5.10), **no antes de
+  T0 + 30 h** (T0 = despliegue de DEMO; 30 h = 24 h de retención + hasta 2 h
+  de `max_chunk_age` + 2 h de `retention_delete_delay` + ciclos de
+  compactación y margen, `docs/infraestructura.md` §11.3), antes de pedir la
+  puerta de la Etapa 4. No basta con una consulta vacía (también sale vacía
+  con `max_query_lookback` o si nunca hubo datos). La evidencia es:
+  1. Configuración desplegada como en la viñeta anterior (sin
+     `max_query_lookback` ni otro límite que oculte datos antiguos).
+  2. La métrica de última ejecución correcta de la retención del compactor
+     (`loki_compactor_apply_retention_last_successful_run_timestamp_seconds`
+     o la equivalente de la versión desplegada) es posterior al vencimiento
+     del intervalo + `retention_delete_delay` + un ciclo de compactación.
+  3. Los *chunks* del intervalo vencido (más de 24 h + 2 h atrás) ya no están
+     en el volumen de Loki: recuento (o `du -s`) del directorio de *chunks*
+     en T0 y después de la ejecución del compactor, sin root
+     (`podman unshare find ... -type f | wc -l`, comando completo en
+     `docs/infraestructura.md` §11.3), y `{service="app"}` sobre ese
+     intervalo devuelve 0 líneas.
+  4. Consulta de control: `{service="app"}` sobre un intervalo no vencido
+     (las últimas horas) devuelve líneas.
+- PROD: **no se espera al vencimiento** (30/90 días). En el smoke de la
+  Etapa 5 se comprueba solo la configuración desplegada: `retention_period:
+  720h`, `retention_stream` con `{category="security"}` a `2160h`,
+  `compactor.retention_enabled: true`, sin `max_query_lookback`, y
+  Prometheus con `30d`/`5GB` (punto 1 de `TX-MON-01`).
 
 Total ≈ 1 GB: Infrastructure lo tiene en cuenta al dimensionar el host
 (`docs/infraestructura.md` §11.2: 2 vCPU, 4 GB, 40 GB). Grafana solo en
@@ -877,7 +993,7 @@ receivers:
 
 Alertas **[24h]** (llevan la etiqueta `after_hours="notify"`):
 `LoginFailuresHigh` (aviso y crítica), `LockoutRepeated`, `LockoutSpray`,
-`AccountLockedManual`, `LoginIpRateLimited`, `SessionPinProbing`,
+`ManagerLocked`, `AccountLockedManual`, `LoginIpRateLimited`, `SessionPinProbing`,
 `ManagerApprovalFailures`, `AuthzDeniedBurst`,
 `CsrfRejected`, `InvalidSessionBurst`, `PrivilegeChange` (solo la de
 `new_role="manager"` o `initial_manager`), `LoginOutsideHours`,
@@ -947,9 +1063,10 @@ Umbrales iniciales a validar por Cybersecurity en `docs/seguridad.md`.
 | `LoginFailuresHigh` | `increase(auth_login_attempts_total{result=~"bad_pin\|unknown_user"}[5m]) > 10`; > 30 crítica | aviso / crítica **[24h]** | en Loki, agrupar `auth.login.failed` por `client_ip` y `target_user_id` | cybersecurity |
 | `LockoutRepeated` | ≥ 2 `auth.account.locked` con `lock_kind="temporary"` del mismo `target_user_id` en 24 h (Loki; con la escala 5/10/15/20, el 2.º bloqueo son ≥ 10 fallos) | crítica **[24h]** | posible fuerza bruta a un PIN de 4 dígitos (riesgo de §13 de arquitectura). El texto de la alerta incluye `purpose` de cada bloqueo: `login` → revisar `client_ip`; `approval` → un dispositivo de sala prueba el PIN del encargado; `confirm`/`change` → sesión propia desatendida. Restablecer el PIN si procede | cybersecurity |
 | `AccountLockedManual` | `increase(auth_lockouts_total{kind="manual"}[5m]) > 0` | crítica **[24h]** | 20 fallos: bloqueo indefinido y **todas** las sesiones de la cuenta ya revocadas (`auth.sessions.revoked`). El texto incluye `purpose` (motivo del último fallo), `client_ip` y `sessions_revoked`. Confirmar con el empleado, restablecer el PIN y desbloquear desde Personal o `unlock-user` | cybersecurity (informar al humano) |
-| `LockoutSpray` | ≥ 3 usuarios distintos bloqueados (`auth.account.locked`, cualquier `lock_kind`) en 15 min | crítica **[24h]** | rociado de un PIN común contra todos los usuarios; agrupar por `client_ip` y `purpose` | cybersecurity |
+| `ManagerLocked` | `increase(auth_lockouts_total{target_role="manager"}[5m]) > 0` (cualquier `kind`; SEC-024 a, HU-01/CA-N05) | crítica **[24h]** | se ha bloqueado una cuenta de encargado, el objetivo más valioso (T-01). El texto incluye `kind`, `purpose` y, desde Loki (`auth.account.locked` con `target_role="manager"`), `client_ip` y `failed_attempts`. `purpose="approval"` → un dispositivo de sala prueba su PIN; confirmar con el encargado y restablecer el PIN si procede | cybersecurity (informar al humano) |
+| `LockoutSpray` | ≥ 3 usuarios distintos bloqueados (`auth.account.locked`, cualquier `lock_kind`) en **1 h** (SEC-024 b: con 10 fallos/10 min por IP, bloquear a 3 usuarios desde un dispositivo exige más de 10 min) | crítica **[24h]** | rociado de un PIN común contra todos los usuarios; agrupar por `client_ip` y `purpose` | cybersecurity |
 | `LoginIpRateLimited` | `increase(auth_verifications_total{result="rate_limited_ip"}[15m]) > 0` (el límite por IP es común a todas las rutas de PIN) | aviso **[24h]** | identificar el dispositivo por `client_ip` en `auth.verify.rate_limited`; `purpose` indica la ruta | cybersecurity |
-| `SessionPinProbing` | `increase(auth_verifications_total{result="rate_limited_session"}[15m]) > 0` | aviso **[24h]** | una sesión abierta acumula 5 fallos de PIN en 10 min (aprobación, reconfirmación o cambio): `session_id`, `user_id` y `purpose` en `auth.verify.rate_limited` | cybersecurity |
+| `SessionPinProbing` | `increase(auth_verifications_total{result="rate_limited_session"}[15m]) > 0` | aviso **[24h]** | una sesión abierta acumula 5 fallos de aprobación en 10 min: tras T-20 solo puede ser `purpose="approval"` (una tablet de sala probando el PIN de un encargado); `session_id` y `user_id` en `auth.verify.rate_limited`. La sesión propia probando su PIN (`confirm`/`change`) la delatan `LockoutRepeated` y `AccountLockedManual` | cybersecurity |
 | `ManagerApprovalFailures` | `increase(auth_verifications_total{purpose="approval",result="invalid"}[15m]) >= 3` | aviso **[24h]** | alguien prueba el PIN del encargado desde un dispositivo de sala | cybersecurity |
 | `ProvisionalChangeMisuse` | `increase(auth_pin_change_rejected_total{reason="not_provisional"}[1h]) > 3` | info | `POST /auth/pin` sin PIN provisional: la UI no debería ofrecerlo; cliente manipulado o fallo de la UI | developer (cybersecurity si se repite) |
 | `AuthzDeniedBurst` | `increase(authz_denied_total[10m]) > 10`, o > 5 de una misma sesión (Loki) | aviso **[24h]** | sondeo de rutas o fallo de la UI que muestra opciones no permitidas | cybersecurity (developer si es la UI) |
