@@ -1,0 +1,126 @@
+# Imagen FINAL de la app (api + SPA): la misma en TESTING, DEMO y PROD.
+#
+# docs/arquitectura.md §3, §10, §10.1, §17.1; ADR-007; SEC-010 (UID 1000:1000);
+# docs/infraestructura.md §8 y §8.1. Construcción multietapa con pnpm desde la
+# raíz del monorepo; la etapa final es distroless (sin shell ni gestor de
+# paquetes) y solo contiene node, el package.json de apps/api, sus
+# node_modules de producción, apps/api/dist y apps/web/dist.
+#
+# Construir SIEMPRE con el script (rootless, sin sudo; formato docker para
+# conservar el HEALTHCHECK; lista de permitidos del contexto en
+# deploy/app/containerignore, que deja fuera .secrets/, .git/, tests/...):
+#   sh deploy/app/construir.sh
+# Equivale a:
+#   podman build --format docker --ignorefile deploy/app/containerignore \
+#     -f deploy/app/Containerfile -t localhost/mi-app:<commit> .
+#
+# Sin secretos en la imagen ni en los build args (reglas-equipo.md §3.2, §3.7).
+
+# --- Imágenes base, fijadas por digest (índice multi-arquitectura) ----------
+# Construcción: Node 26.13.1 sobre Debian 13 (trixie, glibc 2.41), la MISMA
+# versión de Node y la misma libc que la etapa final. No se usa la -alpine
+# (musl) de DEV: un módulo nativo (argon2) compilado o elegido para musl no
+# carga en la distroless (glibc). Ver docs/infraestructura.md §8.1.
+ARG BUILD_IMAGE=docker.io/library/node:26.13.1-trixie-slim@sha256:abe7e5a82b61a8ef67b315b85497c9e65173387ccf2f4a029248184b8e020be5
+# Ejecución: distroless nodejs26 sobre Debian 13 (Node v26.13.1, binario
+# /nodejs/bin/node). Etiqueta "latest" (no "nonroot": el usuario se fija abajo
+# a 1000:1000, SEC-010).
+ARG RUNTIME_IMAGE=gcr.io/distroless/nodejs26-debian13@sha256:b462e87a3db156aea160dd8a5306b85d02c3061ca0e3194fe0af81282a830ab0
+
+FROM ${BUILD_IMAGE} AS build
+
+# Debe coincidir con "packageManager" del package.json raíz (docs/infraestructura.md §2).
+ARG PNPM_VERSION=12.21.0
+# Rutas de salida del build dentro del monorepo (contrato con el Developer,
+# docs/infraestructura.md §8.1). Solo cambian si cambia la estructura de §3.
+ARG API_DIST=apps/api/dist
+ARG WEB_DIST=apps/web/dist
+# Nombres de paquete (docs/arquitectura.md §3.1).
+ARG API_PKG=@mi-app/api
+ARG WEB_PKG=@mi-app/web
+
+# Único paso como root, solo en construcción (rootless): pnpm global y la
+# carpeta de trabajo del usuario node (UID/GID 1000 en la imagen oficial).
+RUN npm install --global --no-fund --no-audit "pnpm@${PNPM_VERSION}" \
+ && npm cache clean --force \
+ && mkdir -p /src /out \
+ && chown 1000:1000 /src /out
+
+USER 1000:1000
+WORKDIR /src
+ENV HOME=/home/node \
+    CI=1 \
+    PNPM_HOME=/home/node/.local/share/pnpm
+
+# 1) Descarga de dependencias solo con el lockfile (capa cacheable mientras no
+#    cambie pnpm-lock.yaml).
+COPY --chown=1000:1000 pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+RUN pnpm fetch
+
+# 2) Código del monorepo (solo lo que deja pasar deploy/app/containerignore).
+COPY --chown=1000:1000 . .
+
+# 3) Instalación sin red (--offline), solo de api, web y sus dependencias (no
+#    las de tests/), build en orden topológico (packages/shared antes que apps/*)
+#    y node_modules de PRODUCCIÓN de apps/api en /out/api (pnpm deploy, sin
+#    devDependencies). deploy va con red: la comprobación de políticas de
+#    cadena de suministro de pnpm 12 necesita metadatos del registro.
+RUN pnpm install --offline --frozen-lockfile \
+      --filter "${API_PKG}..." --filter "${WEB_PKG}..." \
+ && pnpm --filter "${API_PKG}..." --filter "${WEB_PKG}..." run build \
+ && pnpm --filter "${API_PKG}" deploy --prod /out/api
+
+# 4) Comprobación del contrato: si falta un punto de entrada, falla el build
+#    (mejor aquí que en TESTING). docs/arquitectura.md §2.1, §10; infraestructura §8.1.
+RUN set -eu; \
+    for f in main.js migrate.js healthcheck.js \
+             commands/create-initial-manager.js commands/unlock-user.js; do \
+      [ -f "${API_DIST}/$f" ] || { echo "ERROR: falta ${API_DIST}/$f (contrato de docs/infraestructura.md §8.1)" >&2; exit 1; }; \
+    done; \
+    [ -f "${WEB_DIST}/index.html" ] || { echo "ERROR: falta ${WEB_DIST}/index.html" >&2; exit 1; }; \
+    [ -f /out/api/package.json ] && [ -d /out/api/node_modules ] \
+      || { echo "ERROR: pnpm deploy no generó /out/api/{package.json,node_modules}" >&2; exit 1; }; \
+    mkdir -p /out/app; \
+    cp -a /out/api/package.json /out/api/node_modules /out/app/; \
+    cp -a "${API_DIST}" /out/app/dist; \
+    cp -a "${WEB_DIST}" /out/app/public; \
+    if find /out/app/dist /out/app/public -name '.env*' -o -name '*.pem' -o -name '*.key' | grep -q .; then \
+      echo "ERROR: fichero de secreto en la salida del build" >&2; exit 1; \
+    fi
+
+# --- Etapa final: distroless -------------------------------------------------
+FROM ${RUNTIME_IMAGE}
+
+LABEL org.opencontainers.image.title="mi-app" \
+      org.opencontainers.image.description="Toma de pedidos para cafetería: API Fastify + SPA" \
+      org.opencontainers.image.base.name="gcr.io/distroless/nodejs26-debian13"
+
+# Distribución dentro de la imagen (fija; docs/infraestructura.md §8.1):
+#   /app/package.json   el de apps/api ("type": "module" si dist/ es ESM)
+#   /app/node_modules   dependencias de producción de apps/api (pnpm deploy)
+#   /app/dist           salida del build de apps/api (main, migrate, healthcheck, commands/)
+#   /app/public         salida del build de apps/web (SPA; la sirve la api)
+WORKDIR /app
+COPY --from=build --chown=1000:1000 /out/app/ /app/
+
+# Binario exacto de Node: /nodejs/bin/node. Se añade a PATH para que "node"
+# también funcione en compose/Quadlet (command: ["node", "dist/migrate.js"]).
+# HOME en /tmp (tmpfs) porque la raíz es de solo lectura.
+ENV NODE_ENV=production \
+    HOME=/tmp \
+    PATH=/nodejs/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+USER 1000:1000
+
+# 3000 API (solo red interna hacia Caddy); 9464 /metrics (solo red interna).
+EXPOSE 3000 9464
+
+# Liveness sin BD (docs/logging.md §8.1). Forma exec: no hay shell.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["/nodejs/bin/node", "dist/healthcheck.js"]
+
+# Se anula el ENTRYPOINT de distroless (/nodejs/bin/node) para que el comando
+# sea completo y explícito: CMD por defecto = la API; migrate y los comandos
+# lo sustituyen (node dist/migrate.js, node dist/commands/unlock-user.js <nombre>).
+ENTRYPOINT []
+CMD ["/nodejs/bin/node", "dist/main.js"]

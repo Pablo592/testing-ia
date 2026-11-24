@@ -1,0 +1,36 @@
+# Contexto de construcción de deploy/app/Containerfile (lista de PERMITIDOS).
+# Se pasa con --ignorefile (lo hace deploy/app/construir.sh). Todo queda fuera
+# salvo lo listado con "!": así nunca entran .secrets/, .git/, .claude/, docs/,
+# deploy/, tests/ (salvo su package.json), resultados ni ficheros nuevos de la raíz.
+*
+
+# Raíz del workspace pnpm
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!.npmrc
+!tsconfig*.json
+
+# Paquetes que van a la imagen
+!apps/api
+!apps/web
+!packages
+
+# tests/ es paquete del workspace (pnpm-workspace.yaml): solo su package.json,
+# para que el workspace coincida con el lockfile. Sus dependencias no se instalan.
+!tests/package.json
+
+# Dentro de lo permitido, nunca: dependencias o salidas del host, secretos,
+# configuración local.
+**/node_modules
+**/dist
+**/.vite
+**/.turbo
+**/coverage
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+**/*.secret
+**/*.pem
+**/*.key
+**/.secrets

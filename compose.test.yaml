@@ -1,8 +1,9 @@
 # Entorno TESTING efímero — Podman rootless + podman-compose (BORRADOR, T-12).
 #
-# Requisitos de docs/testing.md §7.1. Todavía no se puede levantar: faltan la
-# imagen final de la app (deploy/app/Containerfile, cuando exista el código) y
-# las imágenes de los ejecutores (las construye Testing desde tests/).
+# Requisitos de docs/testing.md §7.1. La imagen final de la app se construye con
+# `sh deploy/app/construir.sh` (deploy/app/Containerfile, docs/infraestructura.md
+# §8.1), que imprime la APP_IMAGE por digest; las imágenes de los ejecutores las
+# fija Testing.
 #
 # Lo orquesta tests/run.sh (Testing). Secuencia (docs/infraestructura.md §9):
 #   P="podman-compose -f compose.test.yaml -p <proyecto>"
@@ -10,6 +11,8 @@
 #   podman wait --condition=healthy <proyecto>_db_1
 #   $P --profile setup run --rm --no-deps migrate    # código de salida real
 #   $P --profile setup run --rm --no-deps migrate-template   # solo integration (T-28)
+#   $P --profile commands run --rm --no-deps commands [node dist/commands/<script>.js ...]
+#                                                    # T-41, suite containers (§9.2)
 #   $P --profile <suite> up --abort-on-container-exit --exit-code-from runner-<suite>
 #   $P --profile <suite> --profile setup down -v     # siempre (trap)
 #
@@ -23,8 +26,10 @@
 #   TEST_SECRETS_DIR     directorio 0700 con secretos aleatorios de ESTA ejecución
 #                        (p. ej. $XDG_RUNTIME_DIR/mi-app-test-<id>), borrado al final.
 #                        Ficheros: db_superuser_password, db_owner_password,
-#                        db_app_password, db_backup_password, pin_pepper y
-#                        db_test_admin_password (T-28; solo existe en TESTING).
+#                        db_app_password, db_backup_password, pin_pepper,
+#                        db_test_admin_password (T-28; solo existe en TESTING) y,
+#                        para el perfil commands (T-41), initial_manager_name e
+#                        initial_manager_pin (PIN válido de 6 dígitos).
 # Opcionales: APP_TZ (por defecto UTC), TEST_RESULTS_DIR (./tests/results),
 #   TEST_PROXY_APP_SUBNET (10.89.240.0/29), TEST_PROXY_IP (10.89.240.2) y
 #   TEST_APP_IP (10.89.240.3): cambiar en ejecuciones en paralelo. Las dos IP
@@ -196,6 +201,36 @@ services:
       DATABASE_USER: app_owner
       DATABASE_PASSWORD_FILE: /run/secrets/db_owner_password
     secrets: [db_owner_password]
+    networks: [backend]
+    healthcheck:
+      disable: true
+    restart: "no"
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 256m, pids: 100 }
+
+  # T-41: servicio EFÍMERO de comandos (docs/arquitectura.md §2.1, §17.1;
+  # docs/infraestructura.md §9.2). Misma imagen que app; ejecuta un envoltorio
+  # de dist/commands/ y su código de salida es el del proceso (0/2/1), que
+  # recibe tests/run.sh con `run --rm --no-deps`. Perfil propio: nunca arranca
+  # con un `up` de otra suite. Por defecto, create-initial-manager; para
+  # unlock-user se pasa el comando completo:
+  #   $P --profile commands run --rm --no-deps commands node dist/commands/unlock-user.js Ana
+  # Necesita db healthy y migrate hecho (lo hace la suite antes).
+  commands:
+    <<: *hardening
+    profiles: [commands]
+    image: ${APP_IMAGE:?APP_IMAGE obligatorio (por digest)}
+    command: ["node", "dist/commands/create-initial-manager.js"]
+    environment:
+      <<: *app-env
+      DATABASE_USER: app_rw
+      DATABASE_PASSWORD_FILE: /run/secrets/db_app_password
+      PIN_PEPPER_FILE: /run/secrets/pin_pepper
+      INITIAL_MANAGER_NAME_FILE: /run/secrets/initial_manager_name
+      INITIAL_MANAGER_PIN_FILE: /run/secrets/initial_manager_pin
+    secrets: [db_app_password, pin_pepper, initial_manager_name, initial_manager_pin]
+    # Solo backend (db); no está en proxy-app ni en edge.
     networks: [backend]
     healthcheck:
       disable: true
@@ -446,3 +481,6 @@ secrets:
   pin_pepper:            { file: "${TEST_SECRETS_DIR:?TEST_SECRETS_DIR obligatorio}/pin_pepper" }
   # T-28: solo TESTING; lo reciben db (init) y runner-integration.
   db_test_admin_password: { file: "${TEST_SECRETS_DIR:?TEST_SECRETS_DIR obligatorio}/db_test_admin_password" }
+  # T-41: solo el servicio commands (perfil commands). Ficheros de ESTA ejecución.
+  initial_manager_name:  { file: "${TEST_SECRETS_DIR:?TEST_SECRETS_DIR obligatorio}/initial_manager_name" }
+  initial_manager_pin:   { file: "${TEST_SECRETS_DIR:?TEST_SECRETS_DIR obligatorio}/initial_manager_pin" }

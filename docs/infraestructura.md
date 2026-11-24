@@ -6,7 +6,9 @@
 > `docs/logging.md` (§5, §6.5, §6.6, §7.0, §8.2) y `docs/testing.md` §7.
 > Estado: **DEV listo y validado con un workspace de prueba** (todavía no hay
 > código de la app). **TESTING en borrador** (`compose.test.yaml`; BD de test,
-> roles y plantilla validados el 2026-11-24, §9.1 y §15). DEMO y PROD
+> roles y plantilla validados el 2026-11-24, §9.1 y §15). **Imagen final de la
+> app definida** (`deploy/app/Containerfile`, §8.1; construida y probada con un
+> workspace de prueba, falta el código real) y servicio de comandos de T-41 (§9.2). DEMO y PROD
 > pendientes (Etapas 4 y 5), con las decisiones que ya condicionan su diseño en §10–§12.
 
 ## Índice
@@ -17,8 +19,8 @@
 5. Secretos
 6. Contrato con el código (para el Developer)
 7. Cumplimiento de la política §3.4 y excepciones
-8. Imágenes y digests
-9. TESTING (`compose.test.yaml`, T-12)
+8. Imágenes y digests (8.1 imagen final de la app)
+9. TESTING (`compose.test.yaml`, T-12; 9.2 servicio de comandos, T-41)
 10. Logs y PostgreSQL (M-05, M-06, SEC-015, SEC-020)
 11. Observabilidad en DEMO/PROD (M-06, M-08)
 12. Red, TLS e IP de origen (SEC-002, SEC-003, ADR-007)
@@ -63,7 +65,10 @@ mi-app/
     ├── db/initdb/10-roles.sh     # roles y BD (todos los entornos)
     ├── db/testing/20-test-admin.sh  # SOLO TESTING: rol con CREATEDB y BD plantilla (T-28, §9.1)
     ├── proxy/Caddyfile           # TESTING, DEMO y PROD
-    ├── app/Containerfile         # (pendiente) imagen final multi-stage → distroless
+    ├── app/
+    │   ├── Containerfile         # imagen final multi-stage → distroless (TESTING, DEMO, PROD; §8.1)
+    │   ├── containerignore       # lista de PERMITIDOS del contexto de construcción (--ignorefile)
+    │   └── construir.sh          # construye en rootless e imprime APP_IMAGE por digest
     ├── quadlet/                  # (pendiente, Etapa 5) unidades de PROD
     ├── host/                     # (pendiente, Etapa 5) script y unidades del temporizador de métricas (§11.1)
     └── monitoring/               # (pendiente) stack de observabilidad; incluye alertmanager.yml.tmpl (§11.1)
@@ -80,10 +85,10 @@ es la de `docs/arquitectura.md` §3, con los tests en `tests/` según
 
 ```
 package.json            # raíz del workspace pnpm; "packageManager": "pnpm@12.21.0"
-pnpm-workspace.yaml     # packages: apps/*, packages/*
-pnpm-lock.yaml          # obligatorio: deps instala con --frozen-lockfile
-apps/api/package.json   # scripts: dev, db:migrate, create-initial-manager (§6)
-apps/web/package.json   # script: dev (vite), acepta --host/--port/--strictPort
+pnpm-workspace.yaml     # packages: apps/*, packages/*, tests; allowBuilds (§6)
+pnpm-lock.yaml          # obligatorio: deps y la imagen final instalan con --frozen-lockfile
+apps/api/package.json   # scripts: dev, db:migrate, create-initial-manager (§6), build (§8.1)
+apps/web/package.json   # scripts: dev (vite, acepta --host/--port/--strictPort), build (§8.1)
 apps/web/vite.config.ts # proxy /api -> process.env.API_PROXY_TARGET
 packages/shared/
 tests/
@@ -211,8 +216,8 @@ dependen de `db` *healthy*. Esto afecta también a TESTING (§9).
 - **SEC-010 (resto), UID del secreto en PROD: 1000:1000.** El
   software-engineer fijó el 2026-11-23 (`docs/arquitectura.md` §10, ADR-001)
   que la imagen final de `app` usa **`USER 1000:1000`** (no el `nonroot`
-  65532 de distroless). Por tanto: (1) `deploy/app/Containerfile` (aún no
-  existe; lo crea el Developer en la Etapa 2 con revisión de Infrastructure)
+  65532 de distroless). Por tanto: (1) `deploy/app/Containerfile` (creado
+  por Infrastructure en la tarea 2.1l, §8.1)
   hace `COPY --chown=1000:1000` de `dist/` y de los `node_modules` de
   producción y declara `USER 1000:1000`; (2) las unidades Quadlet de `app` y
   `migrate` llevan `User=1000` y `Group=1000`, y compose `user: "1000:1000"`
@@ -267,7 +272,7 @@ cambian en `compose.dev.yaml` (pídelo a Infrastructure; no se edita en solitari
 | `TABLE_COUNT`, `DELAY_THRESHOLD_MINUTES` | ✓ | | | `20`, `10` (no secretas; arquitectura §4.1; `config.ts` no arranca fuera de 1–99 / 1–60). Igual en `app` de TESTING/DEMO/PROD |
 | `TZ` | ✓ | ✓ | ✓ | `UTC` (la fecha de negocio no depende de la zona del contenedor) |
 | `PUBLIC_ORIGIN` (obligatoria) | ✓ | ✓ | ✓ | `http://localhost:5173` (origen de Vite; Vite reenvía `/api` sin cambiar `Origin`). TESTING: `https://toxiproxy:8443`. DEMO/PROD: el nombre del local, p. ej. `https://caja.local:8443` (Etapas 4–5) |
-| `TRUSTED_PROXIES` | ✓ | ✓ | ✓ | vacía (no hay Caddy). TESTING: `10.89.240.2`, la IP fija de `proxy` en la red `proxy-app` (§9.1). DEMO/PROD: la IP de `proxy` en su red interna |
+| `TRUSTED_PROXIES` | ✓ | ✓ | ✓ | vacía (no hay Caddy). TESTING: `10.89.240.2`, la IP fija de `proxy` en la red `proxy-app` (§9.1). DEMO/PROD: la IP de `proxy` en su red interna. Formato estricto (SEC-029), ver abajo |
 | `METRICS_PORT` | ✓ | ✓ | ✓ | `9464` (no se publica en el host) |
 | `SESSION_MAX_HOURS` | ✓ | ✓ | ✓ | `12` (entero 1–12; fuera de rango no arranca, RS-13). Igual en todos los entornos salvo que el cliente pida menos |
 | `LOG_LEVEL` | ✓ | ✓ | ✓ | `debug` |
@@ -287,6 +292,28 @@ cambian en `compose.dev.yaml` (pídelo a Infrastructure; no se edita en solitari
   `migrate` y los comandos no arrancan si falla `parseSettings`, y
   `PUBLIC_ORIGIN` no tiene valor por defecto. Son no secretas; si el
   software-engineer confirma que `migrate` no las valida, se pueden quitar de ahí.
+- **Reglas de `TRUSTED_PROXIES` (SEC-029, `docs/arquitectura.md` §10.1).**
+  `config.ts` valida el valor y, si no cumple, **no arranca** (`ConfigError`
+  con `variable = 'TRUSTED_PROXIES'`, sin el valor; salida 1). Afecta
+  también a `migrate` y a los comandos, porque reciben la variable por el ancla
+  común. Al escribir el valor en compose o en Quadlet:
+  1. Ausente o `""` = ninguna (DEV). Si no, se parte por `,` **sin recortar
+     espacios**: nada de `"a, b"` ni comas sobrantes (`a,`, `,a`, `a,,b`).
+  2. Entre 1 y 4 elementos.
+  3. Cada elemento: IPv4 literal sin ceros a la izquierda (`10.89.240.2`, no
+     `010.89.240.2`), IPv6 literal sin `%zona` ni corchetes, o CIDR con
+     prefijo decimal sin ceros a la izquierda de **24–32** (IPv4) o
+     **120–128** (IPv6; `::ffff:a.b.c.d/n` cuenta como IPv6).
+  4. Prohibidos: nombres (`loopback`, `linklocal`, `uniquelocal`, nombres de
+     host como `proxy`), `true`/`false`, números de saltos (`1`, `2`) y
+     prefijos cortos (`0.0.0.0/0`, `10.0.0.0/8`, `fd00::/64`).
+  5. Criterio de Infrastructure: siempre **la IP única** de `proxy` en una red
+     dedicada `proxy`↔`app` con subred e IP fijas (como `proxy-app` en
+     TESTING); un CIDR solo si esa red no tiene más contenedores que `proxy`
+     y `app`. Nunca la subred de `backend` ni la de una red compartida.
+  El valor de TESTING, `${TEST_PROXY_IP:-10.89.240.2}`, cumple (un IPv4
+  literal). Si se cambia `TEST_PROXY_IP` para ejecuciones en paralelo, debe
+  seguir siendo un IPv4 literal sin ceros a la izquierda.
 - **`BUSINESS_TIMEZONE` retirada (2.1c):** la zona de negocio es una
   constante (`Europe/Madrid`) de `packages/shared`; `config.ts` no la lee.
 - *Pepper* (`pin_pepper`): `config.ts` exige **≥ 32 bytes**.
@@ -299,10 +326,24 @@ cambian en `compose.dev.yaml` (pídelo a Infrastructure; no se edita en solitari
 - `GET /healthz` en `api` (lo usa el healthcheck). Raíz del sistema de
   ficheros de solo lectura: cualquier escritura fuera de `/tmp` fallará con
   `EROFS`; las cachés deben ir a `/tmp` (`HOME=/tmp`, `XDG_CACHE_HOME=/tmp/.cache`).
-- pnpm 10+ bloquea los *scripts* de instalación de dependencias: el Developer
-  debe listar en `pnpm-workspace.yaml` (`onlyBuiltDependencies`) las que los
-  necesiten (p. ej. `argon2`, `esbuild`). `argon2` trae binarios precompilados
-  para musl; si alguno necesitara compilar, se avisa a Infrastructure.
+- pnpm bloquea los *scripts* de instalación de dependencias y, en pnpm 12
+  (12.21.0, la fijada), **falla** con `ERR_PNPM_IGNORED_BUILDS` si alguno no
+  está aprobado (comprobado en la 2.1l). El ajuste en pnpm 12 es `allowBuilds`
+  en `pnpm-workspace.yaml` (ya **no** `onlyBuiltDependencies`), con los que
+  los necesiten, p. ej.:
+  ```yaml
+  allowBuilds:
+    argon2: true
+    esbuild: true
+  ```
+  `argon2` trae binarios precompilados para musl (DEV) y glibc (imagen final);
+  si alguno necesitara compilar, se avisa a Infrastructure.
+- **Señales (imagen final):** en la distroless `node` es el PID 1 y Node, como
+  PID 1, **no termina con `SIGTERM` si no hay manejador** (comprobado: el
+  motor tuvo que matarlo con `SIGKILL` a los 10 s). `main.ts` debe registrar
+  `SIGTERM` y `SIGINT` y cerrar ordenadamente (`app.close()`, que cierra el
+  *pool*, el *hub* SSE y el servidor de métricas) y salir. Así `podman stop`,
+  `down` y el reinicio de Quadlet no pierden 10 s ni cortan una transacción.
 - Vite: usar una versión parcheada (CVE de lectura de ficheros del servidor de
   desarrollo, SEC-013); `server.host` lo pasa compose por argumentos.
 
@@ -319,7 +360,7 @@ Aplicado a **todos** los servicios de DEV con un bloque común (`x-hardening`):
 | `--memory`, `--cpus` | `deploy.resources.limits` (`memory`, `cpus`, `pids`) | cumple |
 | Sin `--privileged`, sin socket, sin `network=host`, sin directorios del sistema | redes bridge propias; solo se monta el proyecto, sus secretos y volúmenes con nombre | cumple |
 | Imagen con `USER` ≥ 1000 y `HEALTHCHECK` | `USER 1000:1000` y `HEALTHCHECK` en el Containerfile; además en compose | cumple |
-| Base por digest | `node:26.13.1-alpine@sha256:…`, `postgres:19.0-alpine@sha256:…` | cumple |
+| Base por digest | `node:26.13.1-alpine@sha256:…`, `postgres:19.0-alpine@sha256:…` (imagen final: §8.1) | cumple |
 
 `userns_mode: keep-id` hace que el UID 1000 del contenedor sea el usuario del
 host (sin privilegios). Así el código y los secretos (0600) se leen sin `chmod`
@@ -501,6 +542,9 @@ real en §15.
 | PostgreSQL | `docker.io/library/postgres:19.0-alpine@sha256:8b0ff4cdf221f0c53d7fcda681d3b461be725c492cd881c5ec9c0ad25023f188` (última mayor estable, ADR-003) | todos |
 | Caddy | `docker.io/library/caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0` | TESTING, DEMO, PROD |
 | pnpm | 12.21.0 (`ARG PNPM_VERSION`) | DEV (y etapa de construcción de la imagen final) |
+| Etapa de construcción de la imagen final | `docker.io/library/node:26.13.1-trixie-slim@sha256:abe7e5a82b61a8ef67b315b85497c9e65173387ccf2f4a029248184b8e020be5` (Debian 13, glibc 2.41) | solo construcción |
+| Etapa final de la imagen de la app | `gcr.io/distroless/nodejs26-debian13@sha256:b462e87a3db156aea160dd8a5306b85d02c3061ca0e3194fe0af81282a830ab0` (etiqueta `latest`; Node v26.13.1, glibc 2.41, sin shell) | TESTING, DEMO, PROD |
+| Escáner (§3.3) | `docker.io/aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb` (0.76.2), en contenedor rootless sobre un `podman save` | construcción |
 
 Los digests son del índice multi-arquitectura. Para actualizar: consultar el
 digest nuevo del tag, cambiar la referencia, reconstruir y pasar el escaneo
@@ -514,11 +558,142 @@ declaran además su healthcheck, así que funciona aunque se construya en OCI.
 **PostgreSQL 19.0** es una versión `.0`. Si Cybersecurity o el SE prefieren
 esperar a 19.1, el cambio es solo el digest (y un volumen de DEV nuevo).
 
+### 8.1 Imagen final de la app (`deploy/app/Containerfile`, tarea 2.1l, T-41)
+
+La **misma** imagen (mismo digest) para `app`, `migrate`, `migrate-template` y
+`commands` en TESTING, y para DEMO y PROD (`docs/arquitectura.md` §10).
+
+**Construir** (rootless, sin `sudo`, desde la raíz del repositorio; necesita red
+para descargar dependencias):
+
+| Acción | Comando |
+|---|---|
+| Construir | `sh deploy/app/construir.sh` (etiqueta `localhost/mi-app:<commit>`, con `-sucio` si hay cambios sin commit en `apps/`, `packages/` o los ficheros del workspace) |
+| Con etiqueta propia | `sh deploy/app/construir.sh <etiqueta>` |
+| Equivalente manual | `podman build --format docker --ignorefile deploy/app/containerignore -f deploy/app/Containerfile -t localhost/mi-app:<etiqueta> .` |
+| Referencia por digest | la imprime el script: `APP_IMAGE=localhost/mi-app@sha256:…` (o `podman image inspect --format '{{.Digest}}' localhost/mi-app:<etiqueta>`) |
+| Usarla en TESTING | `APP_IMAGE=localhost/mi-app@sha256:… sh tests/run.sh <suite>` |
+| Borrar | `podman rmi localhost/mi-app:<etiqueta>` |
+
+`--format docker` es obligatorio (si no, Podman descarta el `HEALTHCHECK`, §8)
+y `--ignorefile deploy/app/containerignore` también: es una **lista de
+permitidos** (`*` y luego `!package.json`, `!pnpm-lock.yaml`,
+`!pnpm-workspace.yaml`, `!.npmrc`, `!tsconfig*.json`, `!apps/api`, `!apps/web`,
+`!packages`, `!tests/package.json`; dentro, fuera `node_modules`, `dist`,
+`.env*`, `*.pem`, `*.key`, `.secrets`). Así **nunca** entran en el contexto
+`.secrets/`, `.git/`, `.claude/`, `docs/`, `deploy/` ni `tests/` (comprobado,
+§15). Por eso se construye con el script y no con un `podman build .` a mano.
+
+**Etapas:**
+1. `build` (`node:26.13.1-trixie-slim`, por digest): pnpm 12.21.0 con `npm`
+   como root (único paso con root, solo en construcción); el resto como UID
+   1000. `pnpm fetch` (solo con el lockfile; capa cacheable) → copia del
+   contexto → `pnpm install --offline --frozen-lockfile` **solo** de
+   `@mi-app/api...` y `@mi-app/web...` (no de `tests/`) → `pnpm ... run build`
+   en orden topológico (`packages/shared` antes que `apps/*`) → `pnpm --filter
+   @mi-app/api deploy --prod /out/api` (dependencias de producción, sin
+   `devDependencies`; `pnpm deploy` valida el lockfile contra las políticas
+   de cadena de suministro de pnpm, por eso va con red). Después **comprueba
+   el contrato** (abajo): si falta un punto de entrada, el build falla con el
+   nombre del fichero.
+2. Final (`distroless/nodejs26-debian13`, por digest): solo `/app` con
+   `COPY --chown=1000:1000`, `USER 1000:1000`, `EXPOSE 3000 9464`,
+   `HEALTHCHECK` y `CMD`.
+
+**Por qué la etapa de construcción no es `-alpine`** (desviación de
+`docs/arquitectura.md` §10, que dice `node:<LTS>-alpine` para compilar): la
+etapa final es distroless (Debian, **glibc**). Un módulo nativo instalado en
+Alpine (**musl**) puede no cargar en glibc, y `pnpm deploy` instala para la
+libc de la etapa donde corre. Con `trixie-slim` la etapa de construcción
+tiene la misma versión de Node (26.13.1, ABI 147) y la misma glibc (2.41)
+que la final. DEV sigue en Alpine (no se despliega). Lo puede ratificar el
+software-engineer; no cambia ningún ADR.
+
+**Dentro de la imagen** (fijo):
+
+| Ruta | Contenido |
+|---|---|
+| `/nodejs/bin/node` | **binario exacto de Node** (v26.13.1). También está en `PATH`, así que `node` funciona |
+| `/app` | **`WORKDIR`** |
+| `/app/package.json` | el `package.json` de `apps/api` (lo escribe `pnpm deploy`; conserva `"type"`) |
+| `/app/node_modules` | dependencias de producción de `apps/api` (incluida `@mi-app/shared` si es dependencia, copiada por `pnpm deploy`) |
+| `/app/dist` | salida del build de `apps/api` (`ARG API_DIST=apps/api/dist`) |
+| `/app/public` | salida del build de `apps/web` (`ARG WEB_DIST=apps/web/dist`): la SPA |
+
+- `ENTRYPOINT []` (se anula el `/nodejs/bin/node` de distroless) y
+  `CMD ["/nodejs/bin/node", "dist/main.js"]`: el comando siempre es completo.
+  `migrate`: `node dist/migrate.js`; comandos: `node dist/commands/<script>.js`.
+- `HEALTHCHECK` (forma exec, sin shell): `/nodejs/bin/node dist/healthcheck.js`
+  cada 15 s, *timeout* 5 s, `start-period` 30 s, 3 reintentos.
+- `ENV NODE_ENV=production HOME=/tmp`; la raíz va en solo lectura con `/tmp`
+  en tmpfs.
+- **Comandos de operación** (T-41, `docs/arquitectura.md` §2.1), con el mismo
+  usuario de la imagen (sin `-u`):
+  ```
+  podman exec <contenedor-app> /nodejs/bin/node dist/commands/unlock-user.js "Ana"
+  podman exec <contenedor-app> /nodejs/bin/node dist/commands/create-initial-manager.js
+  ```
+  `create-initial-manager` necesita en el contenedor `PIN_PEPPER_FILE`,
+  `INITIAL_MANAGER_NAME_FILE` e `INITIAL_MANAGER_PIN_FILE` (en `app` solo
+  existe la primera): en DEMO/PROD se ejecuta como servicio efímero aparte con
+  esos secretos (como `commands` en TESTING, §9.2, o un `.container` de
+  Quadlet de una sola ejecución, Etapa 5), no con `exec` sobre `app`.
+  Códigos de salida: `0` hecho/omitido, `2` `not_found`, `1` error.
+
+**Contrato con el Developer (lo comprueba el propio build):**
+1. Raíz del workspace: `package.json` (`"packageManager": "pnpm@12.21.0"`),
+   `pnpm-workspace.yaml` (con `tests` en `packages` y `allowBuilds`, §6) y
+   `pnpm-lock.yaml` al día (`--frozen-lockfile`).
+2. `apps/api/package.json`: `"name": "@mi-app/api"`, script **`build`** que
+   deja en `apps/api/dist/` **todo** lo que necesita en ejecución, con estos
+   puntos de entrada (JavaScript ejecutable con `node`, sin `tsx` ni
+   *loaders*):
+   `dist/main.js`, `dist/migrate.js`, `dist/healthcheck.js`,
+   `dist/commands/create-initial-manager.js`, `dist/commands/unlock-user.js`.
+   Las migraciones, si se leen de disco, también dentro de `dist/`
+   (ninguna ruta a `src/` ni fuera de `/app`).
+3. Las dependencias de ejecución de `apps/api` en `dependencies` (lo de
+   `devDependencies` no llega a la imagen: TypeScript, tsx, Vitest…).
+4. `@mi-app/shared` en la imagen. Dos opciones válidas:
+   (a) **recomendada**: el `build` de `apps/api` empaqueta su código y el de
+   `@mi-app/shared` (esbuild/tsup, `--platform=node`, dependencias npm como
+   *external*), y `@mi-app/shared` va en `devDependencies`; o
+   (b) `@mi-app/shared` en `dependencies` y su `exports` resuelve a **JavaScript**
+   compilado (p. ej. condición `"default": "./dist/pin.js"`, con su propio
+   script `build`): Node no ejecuta `.ts` dentro de `node_modules`.
+   Con (b) se probó el mecanismo con un workspace de prueba (§15).
+5. `apps/web/package.json`: `"name": "@mi-app/web"`, script **`build`** (Vite)
+   con salida en `apps/web/dist/` e `index.html` en su raíz.
+6. La API sirve la SPA desde **`/app/public`**, calculado respecto al propio
+   fichero (`new URL('../public/', import.meta.url)` desde `dist/main.js`, o
+   una ruta equivalente), no desde `process.cwd()` ni `src/`.
+7. `dist/healthcheck.js`: `GET http://127.0.0.1:${PORT:-3000}/healthz`, sale con
+   `0` si es 2xx y `1` si no o si no responde en < 5 s; sin BD
+   (`docs/logging.md` §8.1).
+8. `main.ts` maneja `SIGTERM`/`SIGINT` (§6, "Señales").
+9. Nada escribe fuera de `/tmp` en ejecución.
+10. Si cambia una ruta de salida, se pasa por `--build-arg API_DIST=…`/
+    `WEB_DIST=…` (pídelo a Infrastructure; no se edita el Containerfile en
+    solitario).
+
+**Escaneo (§3.3), resultado de la prueba del 2026-11-24** (Trivy 0.76.2 sobre la
+imagen construida con el workspace de prueba; la parte del sistema base es la
+misma que tendrá la real): 0 críticas; **2 altas en `libssl3t64`
+3.5.9-1~deb13u1 de la base distroless** (CVE-2026-107494 y CVE-2026-124709,
+denegación de servicio en QUIC), **sin versión corregida** en Debian
+("affected"). Node no carga esa biblioteca (usa su OpenSSL 3.5.9 incluido;
+comprobado en `/proc/self/maps`) y la app no usa QUIC. Sin decidir: aceptar
+con justificación (fichero de excepciones del escáner con fecha de revisión)
+o esperar a una base corregida. **Decide Cybersecurity** (hallazgo anotado
+para el Orquestador). El escaneo de la imagen real se repite en cada build
+con el mismo comando de §15.
+
 ## 9. TESTING (`compose.test.yaml`, T-12)
 
 Borrador que cumple `docs/testing.md` §7.1; `podman-compose ... config` lo
-valida con todos los perfiles. **No se puede levantar todavía**: faltan la
-imagen final de la app y las imágenes de los ejecutores.
+valida con todos los perfiles. La imagen final de la app ya está definida
+(§8.1; falta el código del Developer para construirla de verdad); las de los
+ejecutores las fija Testing.
 
 | Requisito §7.1 | Cómo se cumple |
 |---|---|
@@ -530,7 +705,7 @@ imagen final de la app y las imágenes de los ejecutores.
 | BD de integración aislada por fichero (§9.2 de testing) | rol `test_admin` con `CREATEDB` y BD `app_template` migrada, **solo en TESTING** (T-28, §9.1) |
 | E2E siembra y fabrica estado en BD | `runner-e2e` en la red `db-seed` (solo `db`) con `app_rw` y el *pepper* de la ejecución (T-29, §9.1) |
 | Toxiproxy entre ejecutores y `proxy` | servicio `toxiproxy` (perfiles `e2e`, `perf`); Caddy sirve los nombres `proxy` y `toxiproxy` |
-| Perfiles por suite | `unit`, `integration`, `e2e`, `perf`, `security` (+ `setup` para `migrate` y `migrate-template`) |
+| Perfiles por suite | `unit`, `integration`, `e2e`, `perf`, `security` (+ `setup` para `migrate` y `migrate-template`, + `commands` para el servicio de comandos de T-41, §9.2) |
 | Secretos aleatorios por ejecución | ficheros en `TEST_SECRETS_DIR` (ver nota) |
 | Salida escribible sin montar el repo en escritura | repo en `ro`; solo `tests/results` (o `TEST_RESULTS_DIR`) y `tests/screenshots` en rw, con `keep-id` |
 | `TZ=UTC` y ejecución con otra zona | `TZ: ${APP_TZ:-UTC}` en `app`; `APP_TZ=America/New_York` para la segunda ejecución |
@@ -724,6 +899,54 @@ probar con la imagen real de Playwright).**
    salida real, como `migrate`).
 3. Nada más: el `entrypoint` de `runner-e2e` respeta el comando que pasa
    `ejecutar`, y las variables de §9.1 ya están en el compose.
+
+### 9.2 Servicio efímero de comandos `commands` (T-41, tarea 2.1l)
+
+Para que la suite `containers` compruebe los códigos de salida reales de los
+envoltorios de la imagen (`docs/arquitectura.md` §2.1, §17.1):
+
+| Campo | Valor |
+|---|---|
+| Servicio / perfil | `commands`, perfil **`commands`** (propio: ningún `up` de otra suite lo arranca; `run.sh` lo incluye en su `down -v` solo si añade `--profile commands` a `TODOS_PERFILES`) |
+| Imagen | `${APP_IMAGE}`: la misma que `app` |
+| Comando por defecto | `node dist/commands/create-initial-manager.js`; para `unlock-user` se pasa el comando completo |
+| Endurecimiento | `x-hardening`: UID 1000, `cap_drop: ALL`, `no-new-privileges`, raíz `ro`, `/tmp` tmpfs `noexec`, límites 1 CPU / 256 MB / 100 pids, sin *healthcheck*, `restart: "no"` |
+| Red | solo `backend` (llega a `db`; no está en `proxy-app` ni en `edge`) |
+| Rol de BD | `app_rw` |
+| Secretos | `db_app_password`, `pin_pepper`, `initial_manager_name`, `initial_manager_pin` (todos de `TEST_SECRETS_DIR`) |
+| Variables | ancla `x-app-env` (incluidas `PUBLIC_ORIGIN`, `TRUSTED_PROXIES`, `METRICS_PORT`, `SESSION_MAX_HOURS`: `parseSettings` también corre en los comandos) + `DATABASE_USER`, `DATABASE_PASSWORD_FILE`, `PIN_PEPPER_FILE`, `INITIAL_MANAGER_NAME_FILE`, `INITIAL_MANAGER_PIN_FILE` |
+
+Uso (con `db` *healthy* y `migrate` hecho; `run --rm --no-deps` devuelve el
+código de salida del proceso, §4.3):
+
+```
+P="podman-compose -f compose.test.yaml -p <proyecto>"
+$P --profile commands run --rm --no-deps commands                                              # create-initial-manager: 0 (created), 0 otra vez (skipped)
+$P --profile commands run --rm --no-deps commands node dist/commands/unlock-user.js encargado  # 0 (unlocked)
+$P --profile commands run --rm --no-deps commands node dist/commands/unlock-user.js no-existe  # 2 (not_found)
+$P --profile commands run --rm --no-deps commands node dist/commands/unlock-user.js            # 1 (uso)
+$P --profile commands run --rm --no-deps commands node dist/commands/create-initial-manager.js sobra  # 1 (argumento de más)
+```
+
+Lo que tiene que hacer **Testing** en `tests/run.sh` (Infrastructure no lo edita):
+1. Generar en `TEST_SECRETS_DIR` `initial_manager_name` (p. ej. un nombre fijo
+   de 1–30 caracteres) e `initial_manager_pin`: un **PIN de 6 dígitos que
+   cumpla las reglas de encargado** (si no, `create-initial-manager` sale con
+   `1` y no se puede probar el `0`). Sirve la función `random_pin`/`pin_ok` de
+   `deploy/dev/generar-secretos.sh` (mismo filtro de §5) o la propia
+   `validatePin` desde la imagen de tests. Ficheros `0600`, sin imprimirlos.
+   Sin ellos solo falla `commands` (`statfs …/initial_manager_pin: no such
+   file or directory`); el resto de suites no los necesita (comprobado).
+2. Añadir `--profile commands` a `TODOS_PERFILES` (limpieza del `trap`).
+3. En la suite `containers` (que ya levanta `db` y hace `migrate`), ejecutar
+   los comandos de arriba con `set +e`, comparar cada código con el esperado y
+   comprobar que la salida (stdout + stderr) **no contiene el PIN** del fichero
+   (`grep -F -f` sobre el fichero del PIN, sin mostrarlo). Orden sugerido:
+   `create` → `0`; `create` otra vez → `0` (`skipped`); `unlock` del encargado
+   → `0`; `unlock` inexistente → `2`; `unlock` sin argumento → `1`.
+4. `APP_IMAGE` por digest, como ya exige `run.sh`:
+   `APP_IMAGE=localhost/mi-app@sha256:… sh tests/run.sh containers` (el valor lo
+   imprime `sh deploy/app/construir.sh`, §8.1).
 
 ## 10. Logs y PostgreSQL (M-05, M-06, SEC-015, SEC-020)
 
@@ -1247,6 +1470,63 @@ El escaneo de imágenes (Trivy/Grype) se integra con la imagen final de la app
 (Etapa 2); la imagen de herramientas de DEV no se despliega.
 
 ## 15. Qué se validó realmente y qué no
+
+Validado en esta máquina el **2026-11-24 (tarea 2.1l, imagen final y T-41)**,
+sin `sudo`, Podman 5.7.0 rootless, cgroups v2, `podman-compose` 1.5.0 (con
+`DBUS_SESSION_BUS_ADDRESS` del propio usuario, §4.2). **Todavía no hay código
+de la app** (`apps/` y `packages/` vacíos): `sh deploy/app/construir.sh` sobre
+el repositorio se detiene con `ERROR: falta package.json`. Todo lo demás se
+probó con un **workspace de prueba en el scratchpad** (fuera del repo):
+`@mi-app/shared` (JS, sin empaquetar, opción (b) de §8.1), `@mi-app/api` con
+`argon2` (nativo) y `typescript` como `devDependency`, `@mi-app/web` con un
+`build` que escribe `dist/index.html`, `tests/package.json`, un `.secrets/`,
+`docs/` y un `apps/api/.env` de señuelo, y el lockfile generado con pnpm
+12.21.0. Con el `Containerfile` y el `containerignore` reales:
+- `podman build --format docker --ignorefile deploy/app/containerignore -f
+  deploy/app/Containerfile`: correcto. Las dos bases se descargaron por
+  digest. Primero falló con `ERR_PNPM_IGNORED_BUILDS` usando
+  `onlyBuiltDependencies`; con `allowBuilds: { argon2: true }` funciona (§6).
+  `pnpm deploy --offline` falla (`ERR_PNPM_NO_OFFLINE_META`, la comprobación
+  de políticas de pnpm necesita metadatos), así que `deploy` va con red.
+- Contexto: en la etapa de construcción **no** están `.secrets/`, `docs/`,
+  `deploy/`, `apps/api/.env` ni `node_modules/` del host. `/app/node_modules`
+  tiene `argon2` y `@mi-app/shared`, y **no** `typescript`.
+- Imagen: `User 1000:1000`, `WorkingDir /app`, `Entrypoint` vacío,
+  `Cmd ["/nodejs/bin/node","dist/main.js"]`, `HEALTHCHECK` conservado
+  (`/nodejs/bin/node dist/healthcheck.js`, 15 s/5 s/30 s/3), puertos 3000 y
+  9464, 183 MB.
+- `podman run` con `--user 1000:1000 --cap-drop ALL --security-opt
+  no-new-privileges --read-only --tmpfs /tmp --memory --cpus`: llega a
+  *healthy*; `argon2` (nativo) carga y calcula en la distroless (glibc);
+  `@mi-app/shared` se resuelve desde `node_modules`; `podman top`: UID del
+  host 100999 (subuid), nunca 0. **`SIGTERM` no detuvo** el servidor de
+  prueba (sin manejador; Node como PID 1): de ahí el punto 8 del contrato (§8.1).
+- `sh deploy/app/construir.sh <etiqueta>` (copiado al workspace de prueba):
+  construye, conserva el `HEALTHCHECK` y la etiqueta `revision`, e imprime
+  `APP_IMAGE=localhost/mi-app@sha256:…`.
+- `compose.test.yaml`: `config` correcto en los 7 perfiles (`unit`,
+  `integration`, `e2e`, `perf`, `security`, `setup`, `commands`). Con la
+  imagen de prueba por digest y secretos aleatorios en `$XDG_RUNTIME_DIR`
+  (borrados al final), `--profile commands run --rm --no-deps commands …`
+  devuelve el código del proceso: `create` → 0; `create sobra` → 1;
+  `unlock-user.js Ana` → 0; `… Nadie` → 2; sin argumento → 1; con
+  `/nodejs/bin/node` en vez de `node` → 0. Dentro: UID/GID 1000, `CapEff` 0,
+  `NoNewPrivs` 1, `/app` y `/` en `EROFS`, `/run/secrets` con solo sus 4
+  secretos (modo 0600), `cwd` `/app`, `execPath` `/nodejs/bin/node`.
+- Sin los ficheros `initial_manager_*`: `--profile setup run migrate` funciona;
+  solo `commands` falla (`statfs … no such file or directory`).
+- Trivy 0.76.2 en contenedor rootless (UID 1000, `cap-drop ALL`, raíz `ro`)
+  sobre `podman save` de la imagen de prueba: 0 críticas, 2 altas en la base
+  (`libssl3t64`, sin corrección; §8.1, decide Cybersecurity); `node-pkg`
+  limpios.
+- Limpieza: borradas las imágenes de prueba, sus capas intermedias, la de
+  Trivy y la red del proyecto de prueba; quedan las dos bases fijadas
+  (`node:26.13.1-trixie-slim`, `distroless/nodejs26-debian13`) para el build
+  real. `mi-app-dev_db_1` sin tocar.
+- **No validado:** el build con el código real del Developer (salidas de
+  `build`, empaquetado de `@mi-app/shared`, migraciones en `dist/`, Vite
+  real), `create-initial-manager`/`unlock-user` reales contra la BD, RS-38
+  con la imagen real, y el escaneo de la imagen real.
 
 Validado en esta máquina el **2026-11-24 (tarea 2.1b, T-28 / T-29 / T-34 /
 T-35)**, sin `sudo`, Podman 5.7.0 rootless, cgroups v2, `podman-compose` 1.5.0
