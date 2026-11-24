@@ -203,6 +203,22 @@ Privilegios de `app_rw` (además de `USAGE` en el esquema y en las secuencias):
 | `audit_log` | ✓ | ✓ | ✗ | ✗ (+ trigger que rechaza `UPDATE/DELETE` para cualquiera) |
 
 Sin `TRUNCATE`, `REFERENCES` ni `TRIGGER` para `app_rw` en ninguna tabla.
+
+**Solo TESTING (T-28, revisión 2.1f de Cybersecurity, `docs/seguridad.md` §6.5).**
+Única excepción a `NOCREATEDB`, que no existe en DEV, DEMO ni PROD:
+
+| Usuario | Lo usa | Privilegios | Límite de conexiones |
+|---|---|---|---|
+| `test_admin` | Solo `runner-integration` de `compose.test.yaml` | `LOGIN CREATEDB`; nada más (sin `SUPERUSER`, `CREATEROLE`, `REPLICATION`, `BYPASSRLS`, sin pertenencia a otros roles, **sin `pg_signal_backend`**). Sin `CONNECT` en `cafeteria` ni en `app_template`; clona `app_template` (`IS_TEMPLATE`) y borra solo las BD que crea | 4 |
+
+Lo crea `deploy/db/testing/20-test-admin.sh`, que solo monta
+`compose.test.yaml` (condiciones `MI_APP_ENTORNO=testing` y secreto
+`db_test_admin_password`). `app_template` es de `app_owner` y tiene los mismos
+permisos que `cafeteria` (sin `app_backup`); la migra `migrate-template`. En
+TESTING `runner-integration` usa `app_rw` + `test_admin` (ya no `app_owner`) y
+`runner-e2e` usa `app_rw` desde la red `db-seed`, sin acceso a `app`. El límite
+de `app_rw` (20) no se cambia en `10-roles.sh`; si TESTING necesitara más, se
+sube solo en `20-test-admin.sh` con aviso a Cybersecurity.
 Recomendado (defensa en profundidad, decide el SE): trigger que impida anular
 un cobro ya anulado y modificar `order_lines` de pedidos `paid`.
 
@@ -233,6 +249,14 @@ montan el proyecto llevan un tmpfs vacío con `notmpcopyup` sobre
 `.claude/`, `tests/run.sh`, `deploy/`, `tools/`…) es escribible desde un
 contenedor (SEC-018 y SEC-023, verificados; SEC-026 para enlaces simbólicos y
 herramientas del host sobre esa lista).
+
+TESTING (efímero, secretos aleatorios de cada ejecución en `TEST_SECRETS_DIR`,
+revisión 2.1f): `db` recibe además `db_test_admin_password` (solo init);
+`runner-integration`, `db_app_password` y `db_test_admin_password`;
+`runner-e2e`, `db_app_password` y el *pepper* de la ejecución (nunca el de
+otro entorno); `runner-perf`, `runner-unit`, `runner-security` y `zap`,
+ninguno. `deps` (DEV) escribe también en `tests/node_modules` (T-35), con la
+misma comprobación de enlaces de SEC-026.
 
 ## 8. Contenedores y host
 

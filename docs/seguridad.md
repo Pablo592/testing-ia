@@ -22,6 +22,11 @@
 > (`comprobar_enlaces`, commit 0075d18), con prueba propia en el scratchpad
 > (14 casos) y prueba de enlace duro en Podman 5.7.0 rootless. Comando de
 > SEC-026/RS-45 corregido. Sin hallazgos nuevos.
+> Revisión 2.1f, 2026-11-24 (Etapa 2, HU-01): TESTING de infrastructure
+> 2.1b/2.1b2 (`test_admin`, `app_template`, `db-seed`, `proxy-app`, T-34,
+> T-35) y tres puntos de la 2.1c (motivo del `401`, `TRUSTED_PROXIES` con
+> CIDR, actividad por petición), con prueba propia en Podman 5.7.0 rootless
+> (§6.5). Hallazgos nuevos SEC-028 (baja), SEC-029 (media) y SEC-030 (baja).
 > Entradas: `docs/historias/` (README + HU-01..HU-09, IDs estables `CA-`),
 > `docs/arquitectura.md`, `docs/decisiones/ADR-001..008`, `docs/ux/`,
 > `docs/infraestructura.md`, `compose.dev.yaml`, `compose.test.yaml`,
@@ -780,6 +785,201 @@ en un navegador ni en un dispositivo fuera de los contenedores efímeros;
 (c) recomendado (no bloqueante): montar solo `root.crt` en lugar del volumen
 entero. En DEMO/PROD nunca se monta en otro contenedor.
 
+### 6.5 Revisión 2.1f (2026-11-24): TESTING de HU-01 (infrastructure 2.1b/2.1b2) y tres puntos de la 2.1c
+
+Entradas: commits `5b4acb2` (2.1b) y `f9b0198` (2.1b2) (`compose.test.yaml`,
+`compose.dev.yaml`, `deploy/db/testing/20-test-admin.sh`,
+`deploy/dev/levantar.sh`, `deploy/dev/generar-secretos.sh`),
+`docs/infraestructura.md` §6, §9.1 y §15; `06fbaf7` (`docs/arquitectura.md`
+§5 `401`, §7 sesión, §10.1 `TRUSTED_PROXIES`).
+
+**Pruebas propias (no destructivas, Podman 5.7.0 rootless, `rootless true`).**
+Proyecto efímero `mi-app-test-secprobe` levantado con el `compose.test.yaml`
+real (solo `db`, perfil `integration`; imágenes de app/ejecutores con un
+digest ficticio porque no se arrancan; secretos aleatorios en
+`$XDG_RUNTIME_DIR`, nunca mostrados). Clientes `psql`/`node` con UID 1000,
+`cap-drop=ALL`, `no-new-privileges`, raíz `ro`. Al terminar: `down -v`,
+contenedor auxiliar y directorio de secretos borrados; `podman ps -a` solo
+muestra `mi-app-dev_db_1` (detenido, sin tocar); ninguna red ni volumen de la
+prueba queda. Guion y SQL en el scratchpad de la sesión, fuera del repo.
+- `db` *healthy*; `podman top`: procesos con el usuario del host, nunca UID 0.
+- `pg_roles`: `test_admin` solo `CREATEDB` (sin `SUPERUSER`, `CREATEROLE`,
+  `REPLICATION`, `BYPASSRLS`), `CONNECTION LIMIT 4`, sin pertenencia a ningún
+  rol. `app_owner` 2 y `app_rw` 20 conexiones, sin cambios.
+- `test_admin`: `CREATE DATABASE … TEMPLATE cafeteria` → `permission denied
+  to copy database`; `TEMPLATE app_template` → correcto; `… OWNER app_owner`
+  → `must be able to SET ROLE`; `ALTER ROLE test_admin SUPERUSER |
+  CREATEROLE | BYPASSRLS | CONNECTION LIMIT -1` y `ALTER ROLE app_rw
+  CONNECTION LIMIT 100` → denegados; `ALTER/DROP/RENAME` de `cafeteria` y
+  `app_template` (incluido `IS_TEMPLATE false`) → `must be owner`;
+  `pg_terminate_backend`/`pg_cancel_backend` sobre `app_rw` → no ve sus
+  procesos (0 filas); `pg_stat_activity` de otros → `<insufficient
+  privilege>`; `COPY … TO PROGRAM` y `pg_read_file('/run/secrets/…')` →
+  denegados; `CONNECT` a `cafeteria` y `app_template` → denegado; en su clon
+  no ve las tablas de la migración; `DROP DATABASE t_ok WITH (FORCE)` sin
+  conexiones abiertas → correcto.
+- Clon `t_ok`: `app_rw` inserta y lee, no puede crear tablas; `PUBLIC` tiene
+  `CONNECT` y `TEMP` (como dice §9.1). **Comprobado además:** como
+  propietario del clon, `test_admin` puede hacer `ALTER DATABASE t_ok SET
+  search_path = trampa, public`, crear el esquema `trampa` y una tabla `t`
+  con `GRANT` a `app_rw`; las consultas sin esquema de `app_rw` en ese clon
+  van entonces a la tabla de `test_admin` (`public.t` 0 filas, `trampa.t` 1).
+  `session_preload_libraries` → denegado. Valoración en el punto 1.
+- Red `db-seed` (contenedor solo en ella, con un servicio falso `app:3000`
+  en `backend`): `db:5432` conecta; `app` → `ENOTFOUND`; IP de `backend` del
+  servicio falso y de `db` → `ENETUNREACH` (la red interna no tiene ruta a
+  otras subredes). Control: desde `backend`, `app:3000` sí responde.
+- SEC-015/SEC-020 con `20-test-admin.sh`: las 5 contraseñas aparecen 0 veces
+  en el log de `db`.
+- Asignación de IP en una red `internal` con subred `/29` (red de prueba
+  `secprobe-ipam`, borrada): el primer contenedor sin IP fija recibe `.2`, y
+  después un contenedor con `ip=…2` falla con `IPAM error: requested ip
+  address … is already allocated`. Es el orden real de TESTING (`proxy`
+  depende de `app`): **SEC-028**.
+- `comprobar_enlaces` de `deploy/dev/levantar.sh` (extraída tal cual, árboles
+  de prueba en el scratchpad): pasa con enlaces tipo pnpm en
+  `tests/node_modules` (`→ ../../apps/web`, `→ ../../node_modules/.pnpm/pg`);
+  se detiene con `tests/node_modules/malo → ../run.sh`, con
+  `node_modules/x → ../tests/node_modules/../run.sh`, con un destino absoluto
+  fuera del árbol, con un enlace anidado a `tests/` y con el prefijo
+  engañoso `tests/node_modulesX` (y con el falso positivo conocido de un
+  enlace a la carpeta raíz de la lista sin barra).
+- `podman-compose -f compose.dev.yaml --profile setup config`:
+  `./tests/node_modules` en `rw` **solo** en `deps`; `web` sigue con
+  `apps/`, `packages/`, `node_modules/`; los 5 servicios con `./:/workspace:ro`.
+
+**Dictámenes de infrastructure (2.1b/2.1b2).**
+
+1. **`test_admin` y `app_template`: APROBADO; se mantiene SIN
+   `pg_signal_backend`.** El rol solo puede crear BD clonando plantillas
+   (`IS_TEMPLATE`) o `template0/1`, y borrar las suyas; no puede tocar
+   `cafeteria`, ni la plantilla, ni roles, ni leer datos (comprobado).
+   `pg_signal_backend` le permitiría terminar cualquier proceso no
+   superusuario (también los de `app` y `migrate`): no hace falta, porque el
+   fallo del `DROP` con conexiones abiertas es una señal útil de un test que
+   no cierra su *pool*. La doble condición es defensa en profundidad; el
+   control real es que el script vive en `deploy/db/testing/` y solo lo monta
+   `compose.test.yaml` como fichero suelto (las dos condiciones vienen del
+   mismo fichero, no son independientes). Condiciones: (a) DEMO/PROD montan
+   solo `deploy/db/initdb/` (nunca `deploy/db/testing/`) y no fijan
+   `MI_APP_ENTORNO=testing`; se comprueba al crear `compose.demo.yaml` y las
+   unidades Quadlet (infrastructure; Cybersecurity lo revisa en la Etapa 4);
+   (b) `CONNECT`/`TEMP` de `PUBLIC` en los clones: aceptado (efímeros, sin
+   datos reales, solo `test_admin` y `app_rw` tienen credenciales en el
+   ejecutor). **Riesgo residual aceptado:** como propietario del clon,
+   `test_admin` puede desviar con `search_path` las consultas sin esquema de
+   `app_rw` hacia objetos suyos (comprobado). No da privilegio nuevo, porque
+   el mismo ejecutor ya tiene las dos credenciales y la BD es desechable;
+   solo afectaría a la fiabilidad de un test que lo hiciera a propósito. En
+   `cafeteria` (todos los entornos) solo `app_owner` puede crear esquemas.
+   Recomendado, no bloqueante (developer): fijar `search_path=public` en las
+   opciones de conexión del *pool* de `app` (defensa en profundidad tipo
+   CVE-2018-1058).
+2. **`db` con `db_test_admin_password` en todos los perfiles de TESTING:
+   APROBADO.** `db` ya recibe la contraseña del superusuario; un secreto
+   aleatorio de la ejecución más no cambia nada. Que falte el fichero haga
+   fallar `db` (falla cerrado) es lo correcto. `tests/run.sh` ya lo genera.
+3. **`runner-e2e` con `app_rw` y el *pepper* de la ejecución en `db-seed`:
+   APROBADO.** Cumple la condición (d) de §6.3 (`chromiumSandbox`): solo
+   recibe secretos aleatorios de esa ejecución (`tests/run.sh`, 48 bytes de
+   `/dev/urandom`, borrados en el `trap`); (c) sin salida a internet (las 4
+   redes `internal`); llega a `db` pero no a `app` (comprobado: `ENOTFOUND` y
+   `ENETUNREACH`), así que no se salta `proxy`/Toxiproxy. `runner-perf` no
+   recibe BD ni *pepper*: correcto. Condiciones: el *pepper* de TESTING no se
+   reutiliza nunca en DEV/DEMO/PROD ni a la inversa; ningún informe de
+   Playwright (trazas, vídeos, `tests/results`) incluye el contenido de
+   `/run/secrets` ni la cadena de conexión (Testing lo revisa en RS-38).
+4. **`runner-integration` sin `app_owner`: APROBADO** (mínimo privilegio; en
+   `tests/` no queda ningún uso de `DATABASE_USER` ni de `app_owner`).
+5. **T-34, tmpfs sobre `/etc/ssl/certs` + `entrypoint` `sh`: APROBADO.**
+   §3.4 prohíbe montar directorios del sistema **del host**; un tmpfs del
+   propio contenedor efímero con `nosuid,nodev,noexec`, tamaño acotado y
+   copia del contenido de la imagen no expone nada del host ni amplía
+   privilegios (UID 1000, sin capacidades, el resto de la raíz sigue `ro`).
+   Lo que puede escribir allí es el propio código del contenedor, que ya es
+   de confianza dentro de esa ejecución. **Confiar en toda la CA en WebKit
+   es aceptable:** la CA es de esa ejecución, solo emite Caddy, y es
+   exactamente el modelo de DEMO/PROD (los dispositivos confían en la CA
+   interna, `docs/infraestructura.md` §12.6), así que WebKit prueba el
+   escenario real. La fijación SPKI de Chromium es más estricta, pero
+   frente a quién podría emitir otro certificado (alguien con la clave de la
+   CA, que solo existe en el volumen efímero `caddy-data`) no añade
+   protección real en TESTING. Condiciones: (a) nunca `ignoreHTTPSErrors`
+   (comprobado: no aparece en `tests/`); (b) si el `entrypoint` no puede
+   añadir la CA, el proyecto WebKit debe **fallar** por certificado, no
+   saltarse (hoy es así: avisa y WebKit no conecta); (c) siguen las
+   condiciones de `caddy-data` de §6.4 (volumen destruido al terminar; la CA
+   de TESTING no se instala fuera de los contenedores efímeros). Pendiente
+   de Testing: comprobar en la primera ejecución real que WebKit
+   (glib-networking/GnuTLS) lee ese bundle.
+6. **Límite de 20 conexiones de `app_rw` compartido: APROBADO.** Es un
+   problema de capacidad de los tests, no de seguridad. Si hiciera falta
+   más, **no** se cambia `10-roles.sh` (lo comparten todos los entornos): se
+   sube solo en TESTING con `ALTER ROLE app_rw CONNECTION LIMIT n` en
+   `20-test-admin.sh`, avisando a Cybersecurity. PROD sigue con 20.
+7. **`tests/node_modules` en `rw` solo en `deps` y `comprobar_enlaces`
+   ampliada: APROBADO** (SEC-023 y SEC-026 siguen como estaban: verificado y
+   corregido). `tests/` entero y `tests/run.sh` siguen en `ro`; `web` no
+   monta `tests/node_modules`; los enlaces de `tests/node_modules` se
+   comprueban como los del resto de la lista (7 casos). Nada del host ejecuta
+   `tests/node_modules` (las suites corren en contenedores). La condición de
+   §7.1 sobre el IDE se extiende a `tests/node_modules`.
+8. **Red `proxy-app`, `TRUSTED_PROXIES` = IP fija de `proxy`, `proxy` fuera
+   de `backend`: APROBADO en diseño**, con **SEC-028** (baja) por la
+   asignación de IP. Una sola IP (no la subred) es lo correcto: el
+   *gateway* `.1` y `app` también están en esa subred. Nadie más está en
+   `proxy-app`; `runner-integration` llega a `app` por `backend` con su IP
+   propia (no de confianza), y sin `NET_RAW` ningún contenedor puede
+   falsificar la IP de origen. Sacar `proxy` de `backend` le quita el acceso
+   a `db`: mejora. Para DEMO/PROD, el mismo esquema (red propia `proxy`↔`app`
+   e IP fija para los dos).
+
+**Dictámenes de la 2.1c (software-engineer).**
+
+- **Motivo del `401` (`details.reason`, `revokedReason`): APROBADO con
+  condiciones.** Solo lo recibe quien presenta un token de 256 bits que casa
+  con un `token_hash` guardado, es decir, el propio dispositivo de esa
+  sesión. No revela nada que el titular no vaya a saber al volver a entrar
+  (`403 USER_DISABLED`, `423 ACCOUNT_LOCKED_MANUAL`). En una tablet
+  compartida el siguiente usuario puede ver "la sesión anterior se cerró
+  porque se restableció el PIN": dato menor, aceptado. Condiciones: (a)
+  `details` solo con `reason` y `revokedReason` de la lista cerrada, sin
+  `userId`, nombre, fechas ni quién revocó; (b) sin cookie o con token
+  desconocido, sin `details` y con el mismo cuerpo y tiempo de respuesta que
+  hoy (no se puede distinguir "token que existió" de "token inventado" salvo
+  teniendo el token); (c) recomendado: la respuesta `401` borra la cookie
+  (`Set-Cookie: __Host-sid=; Max-Age=0; Path=/; Secure; HttpOnly;
+  SameSite=Strict`) para que el dispositivo no la siga enviando; (d) los
+  motivos dejan de devolverse cuando se purga la fila (30 días, `docs/permisos.md` §6).
+- **`TRUSTED_PROXIES` con CIDR: APROBADO con condiciones → SEC-029
+  (media).** El CIDR es útil, pero un valor amplio (o los nombres que acepta
+  `proxy-addr`, como `uniquelocal`, que equivale a `10/8, 172.16/12,
+  192.168/16`) haría que cualquier contenedor o equipo de esas redes pudiera
+  falsificar `X-Forwarded-For` y saltarse el límite por IP del login (la
+  defensa contra el rociado de PIN de SEC-001) o culpar a otra IP (SEC-003).
+  `config.ts` debe validar de forma estricta y pasar a Fastify un *array*,
+  no la cadena tal cual.
+- **`last_activity_at` en cada petición y barra cada 60 s y al cerrar: el
+  modelo de amenazas no cambia en lo esencial; un hallazgo bajo
+  (SEC-030).** (a) Escribir en cada petición: solo con sesión válida, por
+  clave primaria y con `GREATEST`; no abre una vía de denegación de servicio
+  sin autenticar ni retrocede la marca. La comprobación se hace **antes** de
+  escribir, así que una petición tardía no resucita una sesión caducada.
+  Aceptado. (b) Barra: la exención ya existía (HU-01/CA-F09); las
+  escrituras del *hub* solo la hacen robusta frente a cortes y reinicios. La
+  ventana real tras cerrar la cola es de 15 min, igual que para cualquier
+  otro rol. Condiciones: las escrituras del temporizador y del cierre usan
+  `GREATEST` y `WHERE … AND revoked_at IS NULL AND expires_at > now`, solo
+  para sesiones `kitchen` con flujo abierto **en ese momento** (nunca
+  resucitan una sesión revocada o caducada ni se aplican a un encargado);
+  un cambio de rol cierra el flujo (ya en ADR-004) y saca la sesión de la
+  lista. (c) Lo que sí debilita el control del servidor: las peticiones
+  automáticas (los *snapshots* que cada pantalla pide al recibir `hello` o
+  al reconectar, §5 de la arquitectura, rutas de la SPA) cuentan como actividad, de modo que
+  una tablet desatendida con Wi-Fi inestable alarga su sesión sin que nadie
+  la toque. El temporizador del cliente es el control principal y la
+  caducidad de 12 h limita el máximo, de ahí baja: **SEC-030**.
+
 ---
 
 ## 7. Requisitos de seguridad verificables (para Testing)
@@ -1211,7 +1411,55 @@ de bloqueo por la regla de contenedores. RS-39 sigue pendiente de la Etapa 2.
 - Cómo verificar: lectura de §3 frente a `podman-compose -f compose.dev.yaml --profile setup config`.
 - Estado: **verificado** (1.7q). §3 dice ahora `./` → `/workspace` en `ro` en los 5 servicios y `./apps`, `./packages`, `./node_modules` en `rw` solo en `web` y `deps` (lista de permitidos), sin la fila antigua de montajes `ro` sobre `.git`, `.claude`…; añade la nota de copiar la tabla y no un montaje `rw` del proyecto entero. Contrastado por mí con `podman-compose -f compose.dev.yaml --profile setup config`: `./:/workspace:ro` en `api`, `web`, `deps`, `migrate` e `init-manager`; los tres `rw` solo en `web` y `deps`; tmpfs de `.secrets` con `notmpcopyup` en los 5.
 
+## SEC-028: La IP fija de `proxy` en `proxy-app` puede estar ya asignada a `app`
+- Severidad: baja
+- Ubicación: compose.test.yaml:248-251 (`proxy`, `ipv4_address: ${TEST_PROXY_IP:-10.89.240.2}`), :222 (`app` en `proxy-app` sin IP fija), :252-253 (`proxy` depende de `app`), :424-428 (subred `/29`); tests/run.sh (`up -d proxy toxiproxy` arranca antes `app`)
+- Descripción: Podman asigna las IP dinámicas desde la primera libre de la subred. `app` se crea antes que `proxy` (depende de ella) y recibe `10.89.240.2`, la IP fija que se reserva a `proxy`; después `proxy` no arranca. Comprobado con una red `internal` `/29` de prueba: primer contenedor sin IP fija → `.2`; el siguiente con `ip=….2` → `IPAM error: requested ip address … is already allocated`. Falla cerrado (no se confía en nadie más), pero bloquearía todas las suites que usan `proxy` (e2e, a11y, visual, perf, security) y empuja a la "solución" peligrosa de poner en `TRUSTED_PROXIES` la subred entera. La prueba de §15 de `docs/infraestructura.md` arrancó `proxy` sin `app` (no hay imagen), por eso no apareció.
+- Responsable: infrastructure
+- Cómo corregir: dar también IP fija a `app` en `proxy-app` (p. ej. `TEST_APP_IP`, por defecto `10.89.240.3`), o reservar las dinámicas fuera de la de `proxy` (`ip_range` de la red, si `podman-compose` lo pasa); `TRUSTED_PROXIES` sigue siendo solo la IP de `proxy`. Mismo esquema en DEMO/PROD.
+- Cómo verificar: con la imagen de la app, `tests/run.sh e2e` llega a `proxy` *healthy*; `podman inspect` muestra `proxy` con `TEST_PROXY_IP` y `app` con otra; RS-06 (una petición directa a `app:3000` desde `backend` con `X-Forwarded-For` falso no cambia la IP que ve la app).
+- Estado: abierto (baja, no bloquea)
+
+## SEC-029: `TRUSTED_PROXIES` admite CIDR sin límites ni validación estricta
+- Severidad: media
+- Ubicación: docs/arquitectura.md:1551 (§10.1, fila `TRUSTED_PROXIES`: "lista separada por comas de IP o CIDR") y :1388 (`trustProxy` solo para `proxy`)
+- Descripción: el diseño acepta cualquier CIDR. Fastify pasa `trustProxy` a `proxy-addr`, que también admite nombres (`loopback`, `linklocal`, `uniquelocal` = 10/8, 172.16/12, 192.168/16) y que con un rango amplio confía en `X-Forwarded-For` de cualquier equipo o contenedor de ese rango. Un valor como `10.0.0.0/8`, `uniquelocal` o `0.0.0.0/0` (error de instalación o "arreglo" de SEC-028) deja que cualquiera de la red falsifique la IP de origen: se salta el límite de 10 fallos/10 min por IP del login, que es la defensa contra el rociado de PIN entre usuarios (SEC-001, §6.1.5), y puede bloquear a propósito la IP de otro dispositivo (SEC-003). Requiere un error de configuración, de ahí media y no alta.
+- Responsable: software-engineer (`docs/arquitectura.md` §10.1) y developer (`config.ts`)
+- Cómo corregir: en `parseSettings`, cada elemento debe ser una IPv4/IPv6 literal o un CIDR con prefijo **≥ /24** (IPv4) o **≥ /120** (IPv6); se rechazan (no arranca) `0.0.0.0/0`, `::/0`, nombres (`loopback`, `linklocal`, `uniquelocal`), `true`, números de saltos y elementos vacíos o con espacios; se pasa a Fastify un *array* ya validado, nunca la cadena original. En TESTING, DEMO y PROD el valor es la IP única de `proxy` (`/32`); un CIDR solo para una red dedicada `proxy`↔`app`. Documentarlo en §10.1 y en `docs/infraestructura.md` §6.
+- Cómo verificar: unitario de `parseSettings` (como RS-13) con `10.0.0.0/8`, `uniquelocal`, `0.0.0.0/0`, `::/0`, `true`, `1`, `10.89.240.2,` → no arranca; `10.89.240.2` y `10.89.240.0/29` → arranca. RS-06 en integración: `X-Forwarded-For` desde una IP no listada se ignora.
+- Estado: abierto (media, no bloquea; debe estar corregido al implementar `config.ts` en HU-01)
+
+## SEC-030: Las peticiones automáticas del cliente cuentan como actividad para la inactividad de 15 min
+- Severidad: baja
+- Ubicación: docs/arquitectura.md:1246-1249 (§7, "cuenta como actividad cualquier petición REST con sesión válida salvo `POST /telemetry`") y :1121-1125 (§5, rutas de la SPA: los *snapshots* se piden "al recibir `hello`/reconexión")
+- Descripción: con la regla actual, las peticiones que la app hace sin intervención del usuario (recarga del *snapshot* al recibir `hello`, al reconectar el SSE tras un corte o tras el aviso de 5 s sin `ping`) renuevan `last_activity_at`. Una tablet desatendida con Wi-Fi inestable puede así mantener viva una sesión de camarero o encargado más allá de 15 min sin interacción (hasta la caducidad de 12 h), y la comprobación del servidor deja de ser un respaldo fiable del temporizador del cliente (CA-F09). El temporizador del cliente sigue cerrando la pantalla, por eso es baja.
+- Responsable: software-engineer (§7 y §9) y developer
+- Cómo corregir: marcar las peticiones que no nacen de una acción del usuario (p. ej. cabecera `X-Activity: passive` en los *snapshots* por `hello`/reconexión y en cualquier recarga automática) y no actualizar `last_activity_at` con ellas (sí se comprueban caducidad e inactividad). Las acciones del usuario y `POST /session/activity` siguen contando como ahora. La cabecera solo puede **restar** actividad, nunca sumarla, así que no hace falta confiar en ella.
+- Cómo verificar: integración con reloj falso: sesión de camarero, 14 min sin actividad, `GET` con `X-Activity: passive` → `200`; a los 15 min → `401` con `reason: idle`. E2E: tras un corte de red con la pantalla montada y sin tocar nada, la sesión se cierra a los 15 min de la última interacción.
+- Estado: abierto (baja, no bloquea)
+
 ---
+
+### Resumen de la revisión 2.1f (Etapa 2, HU-01, 2026-11-24)
+- **Altos o críticos abiertos: ninguno.**
+- Dictámenes (§6.5): `test_admin`/`app_template` aprobado y **sin**
+  `pg_signal_backend`; `db_test_admin_password` en `db` aprobado;
+  `runner-e2e` con `app_rw` y *pepper* en `db-seed` aprobado (sin acceso a
+  `app`, comprobado); `runner-integration` sin `app_owner` aprobado; T-34
+  (tmpfs en `/etc/ssl/certs`, CA entera en WebKit) aprobado con condiciones;
+  20 conexiones de `app_rw` aprobado; T-35 aprobado; `proxy-app` aprobado en
+  diseño. 2.1c: motivo del `401` aprobado con condiciones; CIDR con
+  SEC-029; actividad por petición sin cambio esencial, con SEC-030.
+- Nuevos: **SEC-029** (media; software-engineer + developer: validación
+  estricta de `TRUSTED_PROXIES`, antes de cerrar HU-01); **SEC-028** (baja;
+  infrastructure: IP fija de `proxy` ya ocupada por `app`, rompe las suites
+  con `proxy`); **SEC-030** (baja; software-engineer + developer: peticiones
+  automáticas como actividad).
+- Abiertos que no bloquean: SEC-003 (media), SEC-025 (baja), SEC-028,
+  SEC-029, SEC-030. Corregido pendiente de verificación: SEC-026.
+- Contenedores: sin motivo de bloqueo (UID del usuario, sin root, sin
+  `--privileged`, sin sockets, redes `internal`). Escaneo de imágenes
+  (RS-39): pendiente de que existan la imagen de la app y las de ejecutores.
 
 ### Resumen para la puerta de la Etapa 1 (revisión 1.7q, 2026-11-24)
 - **Altos o críticos abiertos: ninguno.**
