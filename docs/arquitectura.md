@@ -35,6 +35,14 @@
 > sentencias de las transacciones del cerrojo de cierre, y `409
 > DAY_ALREADY_CLOSED` (nunca `500`) con dos cierres en paralelo (T-26, §4.4,
 > §9). Registro en la §16.
+>
+> Revisión 2026-11-24 (tarea 2.1c, Etapa 2): contrato de `buildApp(deps)`, de
+> los comandos y de los *exports* de los paquetes (§2.1, §3.1, T-32), formato
+> de errores (§5), reglas de PIN con códigos y orden (§7), actividad de sesión
+> sin desfase (T-37, §7), `SESSION_MAX_HOURS` y resto de variables (§10.1,
+> T-36), rutas de la SPA y "Acceso denegado" (§5.2, T-31) y `BEGIN ISOLATION
+> LEVEL READ COMMITTED` explícito en el cerrojo de cierre (§4.4, T-27).
+> Registro en la §17.
 
 ## 1. Visión general
 
@@ -132,6 +140,103 @@ La aplicación se construye con una factoría `buildApp(deps)` (en `main.ts` se
 compone con `SystemClock`; los tests de integración la componen en proceso con
 un `FakeClock` y la BD real). No hay endpoints de prueba en la imagen.
 
+### 2.1 Contrato de `buildApp(deps)` y de los comandos [2.1c, T-32]
+
+Se adopta la propuesta de Testing (`tests/README.md` §2) con dos añadidos
+(`sessionMaxHours`, aislamiento del registro de métricas) y una precisión
+(quién recibe el hasher).
+
+```ts
+// apps/api/src/app.ts — export '@mi-app/api/app'
+export interface Clock { now(): Date }
+
+export interface DatabaseDeps {
+  host: string; port: number; database: string;
+  user: string; password: string;       // la contraseña ya leída del fichero de secreto
+  poolMax?: number;                     // por defecto 10
+}
+
+export interface AppDeps {
+  clock: Clock;                         // SystemClock en main.ts, FakeClock en los tests
+  database: DatabaseDeps;               // buildApp crea el pool y lo cierra en onClose
+  pinHasher: PinHasher;                 // solo lo recibe el módulo auth (ver abajo)
+  publicOrigin: string;                 // origen exacto aceptado en Origin (RS-24), p. ej. 'https://caja.local:8443'
+  trustedProxies: string[];             // IP o CIDR de proxy; solo de ellas se acepta X-Forwarded-For (RS-06). [] = ninguna
+  installation: { tableCount: number; delayThresholdMinutes: number };  // §4.1
+  sessionMaxHours?: number;             // caducidad absoluta, entero 1–12, por defecto 12 (§10.1, T-36)
+  logDestination?: NodeJS.WritableStream; // destino de pino (por defecto stdout); misma redacción (§11)
+  logLevel?: string;                    // por defecto 'info'
+  onRoute?: (route: { method: string | string[]; url: string; config?: unknown }) => void;
+}
+
+export function buildApp(deps: AppDeps): Promise<FastifyInstance>;
+```
+
+- **No llama a `listen`**: `main.ts` hace `listen({ host, port })` y arranca el
+  servidor de métricas en `METRICS_PORT` (§10.1) sirviendo
+  `app.metricsText()`. Los tests usan `inject()` o `listen({ port: 0 })`.
+- **Valida sus dependencias** con la misma función que `config.ts`
+  (`parseSettings`, §10.1): fuera de rango → rechaza la promesa (defensa en
+  profundidad; en producción ya ha fallado `config.ts`).
+- **`onRoute`** se registra como **primer** hook `onRoute`, antes de cualquier
+  plugin de rutas, así ve todas las rutas (RS-17).
+- **Decorador `metricsText(): Promise<string>`**: texto Prometheus de un
+  `prom-client` `Registry` **propio de esa instancia** (nunca el registro
+  global por defecto, para que dos instancias en el mismo proceso no se
+  mezclen ni fallen por métricas duplicadas). Los contadores de
+  `docs/logging.md` §6.3 existen a 0 desde el arranque (RS-47).
+- **Contadores por IP y por sesión** (§7) en memoria **de la instancia**;
+  igual el temporizador del hub SSE (§7, actividad de barra), que se detiene
+  en `onClose`.
+- **Cada ruta declara en `config` exactamente uno** de:
+  `{ permission: '<permiso>' }` (permiso de la matriz de §7),
+  `{ public: true }` (solo `POST /api/v1/auth/login` y
+  `GET /api/v1/auth/login-options`) o `{ internal: true }` (solo `GET /healthz`
+  y `GET /readyz`). El plugin de RBAC lee `routeOptions.config` en
+  `onRequest`; una ruta sin ninguno de los tres responde `403 FORBIDDEN`
+  (denegación por defecto) y el test RS-17 la detecta. Rutas "con sesión" sin
+  permiso de negocio (`/auth/me`, `/auth/logout`, `/auth/pin`,
+  `/session/activity`) usan `session:self`; `/events` usa
+  `events:subscribe`; `/telemetry`, `telemetry:write`.
+- **Hasher**: `PinHasher = { hash(pin): Promise<string>; verify(hash, pin): Promise<boolean> }`,
+  creado con `createPinHasher({ pepper })` (export `@mi-app/api/auth/hasher`,
+  argon2id + *pepper*). `buildApp` lo entrega **solo al módulo `auth`**, que
+  expone dos funciones: `verifyPin` (única que llama a `verify`, §7) y
+  `hashNewPin(pin, role)` (valida las reglas de PIN con `validatePin` y llama a
+  `hash`; la usan el alta, el restablecimiento y el cambio obligatorio). Ningún
+  otro módulo recibe el hasher.
+
+**Comandos** (export `@mi-app/api/commands`; los scripts
+`create-initial-manager` y `unlock-user` de la imagen son envoltorios finos
+que leen la configuración con `loadConfig()` y llaman a estas funciones):
+
+```ts
+export interface CommandDeps {
+  clock: Clock; database: DatabaseDeps; pinHasher: PinHasher;
+  logDestination?: NodeJS.WritableStream;
+}
+export function createInitialManager(deps: CommandDeps, input: { name: string; pin: string }): Promise<'created' | 'skipped'>;
+export function unlockUser(deps: Pick<CommandDeps, 'clock' | 'database' | 'logDestination'>, name: string): Promise<'unlocked' | 'not_found'>;
+```
+
+- `createInitialManager`: en una transacción con
+  `pg_advisory_xact_lock(INITIAL_MANAGER_LOCK)` comprueba si existe algún
+  usuario `manager` (activo o no); si existe → `'skipped'` sin tocar nada. Si
+  no, valida `validatePin(pin, 'manager')` (si falla, **rechaza** con
+  `InvalidPinError` cuyo `rule` es el `PinRule`, sin crear nada y sin incluir
+  el PIN en el mensaje), valida el nombre (1–30 caracteres tras recortar) e
+  inserta con `must_change_pin = true`, `pin_digits = 6` y auditoría
+  `user.created` con actor `system` (RS-09).
+- `unlockUser`: busca por `lower(name)`; si no existe → `'not_found'`; si
+  existe pone `failed_attempts = 0`, `locked_until = null`,
+  `locked_manual = false` y audita `user.unlocked` con actor `system` (RS-09b),
+  aunque no estuviera bloqueado.
+- Envoltorios: código de salida `0` en `created`/`skipped`/`unlocked`, `2` en
+  `not_found`, `1` en cualquier error (el mensaje en stderr nunca contiene el
+  PIN). Ambos escriben un log JSON con la misma redacción.
+- `unlockUser` acepta un `CommandDeps` completo (es un subconjunto): los tests
+  pueden pasar el mismo objeto a los dos.
+
 Funciones puras en `packages/shared`: dinero, máquina de estados del pedido
 (preparación y cobro), deshacer, fecha de negocio, reglas de PIN, matriz de
 permisos. Las usa el servidor (autoridad) y el cliente (feedback inmediato,
@@ -175,12 +280,44 @@ mi-app/
 ├── deploy/                       # (Infrastructure) Containerfile, compose.*.yaml, Caddyfile, quadlet/
 ├── infra/                        # (Infrastructure) Terraform PROD
 ├── docs/
-└── package.json                  # workspaces (pnpm): apps/*, packages/*, tests
+├── package.json
+└── pnpm-workspace.yaml           # paquetes: apps/*, packages/*, tests
 ```
 
 Gestor de paquetes: **pnpm workspaces** (un único lockfile, versiones fijadas).
 Los tests **no** viven dentro de `apps/*` (T-11): así se ejecutan como imagen de
 pruebas independiente sin tocar las imágenes de producción.
+
+### 3.1 Paquetes y subrutas de import [2.1c, T-32]
+
+| Paquete | Carpeta |
+|---|---|
+| `@mi-app/shared` | `packages/shared` |
+| `@mi-app/api` | `apps/api` |
+| `@mi-app/web` | `apps/web` |
+| `@mi-app/tests` | `tests` |
+
+Cada paquete publica solo lo que se lista en el campo `exports` de su
+`package.json` (pueden apuntar a `src/*.ts` en DEV/tests o a `dist/` en la
+imagen). Importar rutas internas que no estén aquí no está permitido (bajo
+acoplamiento: los tests y la web dependen de estas superficies, no de la
+estructura interna).
+
+| Subruta | Exporta |
+|---|---|
+| `@mi-app/shared/pin` | `validatePin(pin: string, role: Role): { ok: true } \| { ok: false; rule: PinRule }`, tipos `Role`, `PinRule` (§7) |
+| `@mi-app/shared/permissions` | `PERMISSIONS_BY_ROLE: Readonly<Record<Role, readonly Permission[]>>`, `hasPermission(role, permission): boolean`, tipo `Permission` |
+| `@mi-app/shared/lockout` | `lockoutForFailures(failedAttempts): { kind: 'none' } \| { kind: 'temporary'; minutes: 5 \| 15 \| 60 } \| { kind: 'manual' }` (efecto de **llegar** a ese número de fallos consecutivos: 5, 10, 15 → temporal de 5, 15 y 60 min; ≥ 20 → manual; el resto, incluidos los fallos entre escalones, → `none`) |
+| `@mi-app/shared/retry` | `retryMinutes(retryAfterSeconds): number` (minutos redondeados hacia arriba, mínimo 1; I-03) |
+| `@mi-app/api/app` | `buildApp`, tipos `AppDeps`, `Clock`, `DatabaseDeps` (§2.1) |
+| `@mi-app/api/auth/hasher` | `createPinHasher({ pepper: Buffer \| string }): PinHasher`, tipo `PinHasher` |
+| `@mi-app/api/commands` | `createInitialManager`, `unlockUser`, tipos `CommandDeps`, `InvalidPinError` (§2.1) |
+| `@mi-app/api/config` | `parseSettings(env)` y `loadConfig()` (§10.1) |
+
+`Role = 'waiter' | 'kitchen' | 'manager'`. Los esquemas zod y DTOs de la API
+se añaden como subrutas de `@mi-app/shared` cuando los pida cada historia
+(p. ej. `@mi-app/shared/money`, `/business-date`), siguiendo esta misma
+regla.
 
 ## 4. Modelo de datos
 
@@ -237,8 +374,8 @@ erDiagram
 | token_hash | bytea UNIQUE | SHA-256 del token; el token en claro solo vive en la cookie |
 | user_id | uuid FK users | |
 | created_at | timestamptz | |
-| last_activity_at | timestamptz | para inactividad de 15 min |
-| expires_at | timestamptz | caducidad absoluta **12 h** para todos los roles, configurable solo a la baja (SEC-004) |
+| last_activity_at | timestamptz | hora (del `Clock`) de la última petición que cuenta como actividad; se escribe en **cada** una (sin intervalo mínimo, T-37, §7) |
+| expires_at | timestamptz | `created_at + SESSION_MAX_HOURS` (12 h por defecto, 1–12, solo a la baja; SEC-004, §10.1). Se fija al crear la sesión: cambiar la variable no alarga ni acorta las sesiones ya abiertas |
 | revoked_at | timestamptz null | logout, desactivación, restablecimiento de PIN, cambio de PIN propio (las demás), bloqueo indefinido (todas) |
 | user_agent | varchar(200) | solo diagnóstico |
 
@@ -246,7 +383,8 @@ erDiagram
 Número de mesas y umbral de retraso son valores **de solo lectura** para la
 aplicación: no hay tabla `settings`, ni ruta de escritura, ni evento, ni
 auditoría de ajustes (YAGNI). `config.ts` los lee al arrancar de variables de
-entorno no secretas y **no arranca** si están fuera de rango:
+entorno no secretas y **no arranca** si están fuera de rango (lista completa
+de variables de `app` en §10.1):
 
 | Variable | Rango | Valor por defecto | Uso |
 |---|---|---|---|
@@ -558,11 +696,29 @@ de calcular la instantánea:
   despreciable. Lo demás (líneas, preparación) no toma el cerrojo: solo cambia
   pedidos abiertos, que no están en la instantánea.
 
-**Aislamiento y orden de las transacciones del cerrojo [1.7o, T-26].** Las
-cuatro transacciones que toman `CASH_CLOSING_LOCK` (cierre, cobro, anulación y
-cancelación) corren en **`READ COMMITTED`** (el valor por defecto de
-PostgreSQL; el helper de transacción no lo cambia y ninguna de ellas usa
-`REPEATABLE READ` ni `SERIALIZABLE`). Motivo: en `REPEATABLE READ` la foto se
+**Aislamiento y orden de las transacciones del cerrojo [1.7o, T-26; 2.1c,
+T-27].** Las cuatro transacciones que toman `CASH_CLOSING_LOCK` (cierre, cobro,
+anulación y cancelación) corren en **`READ COMMITTED`**, **declarado de forma
+explícita** al abrir la transacción (decisión del humano, T-27): no se confía
+en el valor por defecto de PostgreSQL, que un `ALTER DATABASE`/`ALTER ROLE …
+SET default_transaction_isolation` o un cambio de configuración podría
+cambiar sin tocar el código. Las cuatro se abren con un único helper de
+`apps/api/src/db/locks.ts`:
+
+```ts
+withCashClosingLock(db, mode: 'shared' | 'exclusive', fn: (tx) => Promise<T>): Promise<T>
+// = db.transaction().setIsolationLevel('read committed').execute(async (tx) => {
+//     await sql`SELECT pg_advisory_xact_lock[_shared](${CASH_CLOSING_LOCK})`.execute(tx);
+//     return fn(tx);   // fn lee clock.now() aquí dentro, nunca antes
+//   })
+```
+
+Kysely emite `start transaction isolation level read committed`, que en
+PostgreSQL es equivalente a `BEGIN ISOLATION LEVEL READ COMMITTED`. Ninguna
+otra ruta abre una transacción con `CASH_CLOSING_LOCK` por su cuenta (se
+comprueba en revisión de código; Testing puede verificarlo con
+`log_statement` o con `pg_stat_activity` en integración). Ninguna de las
+cuatro usa `REPEATABLE READ` ni `SERIALIZABLE`. Motivo: en `REPEATABLE READ` la foto se
 toma al empezar la primera sentencia, que es el propio
 `pg_advisory_xact_lock`, **antes** de esperar al cerrojo; un cobro que confirma
 mientras el cierre espera tendría `paid_at < closed_at` y no saldría ni en la
@@ -572,7 +728,7 @@ cerrojo ven lo confirmado por quien lo tenía.
 
 Orden obligatorio en el cierre (una sola transacción, una sentencia por paso):
 
-1. `BEGIN` (`READ COMMITTED`).
+1. `BEGIN ISOLATION LEVEL READ COMMITTED` (explícito).
 2. `SELECT pg_advisory_xact_lock(CASH_CLOSING_LOCK)`: espera a que confirmen o
    deshagan todos los cobros, anulaciones y cancelaciones en vuelo.
 3. `SELECT 1 FROM cash_closings WHERE business_date = $date`: si existe →
@@ -585,8 +741,8 @@ Orden obligatorio en el cierre (una sola transacción, una sentencia por paso):
    DAY_ALREADY_CLOSED`.
 7. `COMMIT` y `201`.
 
-Orden obligatorio en cobro, anulación y cancelación: `BEGIN` (`READ
-COMMITTED`) → `SELECT pg_advisory_xact_lock_shared(CASH_CLOSING_LOCK)` →
+Orden obligatorio en cobro, anulación y cancelación: `BEGIN ISOLATION LEVEL
+READ COMMITTED` (explícito) → `SELECT pg_advisory_xact_lock_shared(CASH_CLOSING_LOCK)` →
 `clock.now()` → `SELECT … FOR UPDATE` y comprobaciones (§9) → escrituras →
 `COMMIT`. Ninguna sentencia de lectura ni de escritura de datos va antes del
 cerrojo (las validaciones de entrada con zod y la autorización, que no tocan
@@ -693,6 +849,64 @@ HU-05/HU-07), `401` sin sesión o caducada, `403` sin permiso, `404`,
 `409` conflicto de estado/versión (incluye el recurso actual), `422` regla de
 negocio sobre datos válidos, `423` usuario bloqueado (con `retryAfterSeconds`),
 `429` límite de peticiones.
+
+**Contrato del formato de error [2.1c, T-32]** (un único plugin de errores
+en `apps/api/src/http/`; esquema zod `ApiError` en `packages/shared`):
+
+```ts
+interface ApiError {
+  error: {
+    code: string;            // MAYÚSCULAS_CON_GUION_BAJO, estable: el cliente decide por code, nunca por message
+    message: string;         // texto breve en español, solo para diagnóstico; la UI usa sus propios textos
+    requestId: string;       // = cabecera X-Request-Id
+    details?: Record<string, unknown>;
+  };
+}
+```
+
+- **Tiempo de espera** (`423 LOCKED`, `429 TOO_MANY_ATTEMPTS` y cualquier
+  otro `429`): `error.details.retryAfterSeconds` (entero ≥ 1, segundos
+  restantes **redondeados hacia arriba**) y, además, la cabecera
+  `Retry-After` con el mismo valor. `423 ACCOUNT_LOCKED_MANUAL` no lleva
+  ninguno de los dos (no hay espera que termine sola). La UI convierte a
+  minutos con `retryMinutes` (§3.1).
+- **`400` de validación**: `code = 'VALIDATION_FAILED'` y
+  `details.issues: Array<{ path: (string | number)[]; rule: string }>` (la
+  ruta del campo tal como la da zod; los índices de *array* son números, p. ej.
+  `["lines", 3, "quantity"]`). Valores de `rule`:
+  - campos de PIN nuevo (`pin` de alta/restablecimiento, `newPin`): los
+    códigos de `PinRule` (§7), uno por campo, el primero que falla;
+  - el resto: `required`, `type`, `format`, `enum`, `min`, `max`,
+    `min_length`, `max_length`, `not_allowed` (campo no admitido, p. ej.
+    `tableNumber` con `type = "counter"`, o clave desconocida en un esquema
+    `.strict()`), `invalid_json` (cuerpo que no es JSON, con `path: []`).
+  El traductor de issues de zod a estas reglas vive en un solo sitio.
+- **Nunca** se repite en `message` ni en `details` el valor recibido de
+  ningún campo (en particular de los que casan con `/pin/i`, RS-31).
+- **`401`**: `code = 'UNAUTHENTICATED'` para toda petición sin sesión válida.
+  Si la cookie corresponde a una sesión que existió, `details.reason` dice por
+  qué terminó, para que la app elija el banner de P-01 aunque no recibiera el
+  evento SSE (pantalla apagada, sin red): `idle` (inactividad), `absolute`
+  (12 h) o `revoked` con `details.revokedReason` ∈ `logout`,
+  `user_disabled`, `pin_reset`, `pin_changed`, `account_locked_manual`. Sin
+  cookie o con un token desconocido, sin `details`. Revelar el motivo a quien
+  tiene la cookie de esa sesión no da información a terceros.
+- **`403` por permiso (RBAC)**: `code = 'FORBIDDEN'`, sin `details`. Los demás
+  `403` usan su propio código (`PIN_CHANGE_REQUIRED`,
+  `MANAGER_APPROVAL_INVALID`, `PIN_INVALID`, `USER_DISABLED`…).
+- **`403` por `Origin`** ausente o distinto de `publicOrigin` en métodos que
+  modifican (RS-24): `code = 'ORIGIN_NOT_ALLOWED'`. `415` por `Content-Type`:
+  `UNSUPPORTED_MEDIA_TYPE`.
+- **Orden de las comprobaciones** (fijo, para que cada caso dé siempre el
+  mismo código): hooks `onRequest` en este orden: `request_id` → `Origin`
+  (`403 ORIGIN_NOT_ALLOWED`, solo `POST/PUT/PATCH/DELETE`) → sesión
+  (`401 UNAUTHENTICATED`, salvo rutas `public`/`internal`) → PIN provisional
+  (`403 PIN_CHANGE_REQUIRED`) → permiso (`403 FORBIDDEN`). Después, ya en el
+  ciclo de Fastify, el analizador de cuerpo (`415`, `400 invalid_json`) y la
+  validación zod (`400 VALIDATION_FAILED`) y, por último, el *handler*. Así un
+  rol sin permiso recibe `403` aunque el cuerpo sea inválido, y nada de lo
+  anterior al *handler* toca la BD salvo la lectura de la sesión y la
+  actualización de `sessions.last_activity_at` (§7).
 
 **Autorización del encargado (HU-06, supuesto 22).** Las operaciones que la
 requieren aceptan en el cuerpo
@@ -874,6 +1088,60 @@ iniciar sesión y al reconectar: no hace falta una ruta más.
 AÑADIDO/ELIMINADO). La ruta y el hub SSE eligen por el rol de la sesión. Así
 "barra no ve importes" (HU-03) no depende de la UI.
 
+### 5.2 Rutas de la SPA y "Acceso denegado" [2.1c, T-31]
+
+Rutas del navegador (React Router, `apps/web/src/app/`), en español porque
+las ve el usuario. Se acepta la propuesta de Testing (`tests/README.md` §5):
+
+| Ruta | Pantalla | Permiso de la guarda (`hasPermission`, §7) | Inicio de |
+|---|---|---|---|
+| `/` | P-01 Inicio de sesión (sin sesión). Con sesión válida redirige al inicio del rol | — | todos sin sesión |
+| `/pedidos` | P-02 Pedidos (sala) | `order:read` | W, M |
+| `/cola` | P-05 Cola de barra | `kitchen:read` | K |
+| `/menu` | P-09 Gestión del menú | `menu:manage` | — |
+| `/personal` | P-10 Personal | `staff:read` | — |
+| `/resumen` | P-11 Resumen del día | `reports:read` | — |
+
+- Las pantallas que abren desde otra (P-03/P-04 toma, P-06/P-07 cobro, P-08
+  detalle) y las pestañas de P-02 ("Cobrados hoy") se añaden como subrutas
+  cuando las implementa su historia (p. ej. `/pedidos/nuevo`,
+  `/pedidos/:id`); esta tabla solo fija las de primer nivel (YAGNI). La
+  ventana de 90 días de P-11 puede ir en la consulta (`/resumen?fecha=…`).
+- Ruta desconocida → redirige al inicio del rol (o a `/` sin sesión).
+- **Sin sesión** en cualquier ruta distinta de `/` → `/` (P-01). Tras entrar,
+  se va al inicio del rol, no a la ruta pedida (una tablet compartida no debe
+  llevar a nadie a la pantalla de otro).
+- **Guarda de ruta** (un solo componente `RequirePermission` en
+  `apps/web/src/app/`): decide con `permissions` de `GET /auth/me` (ya
+  cargado por la *layout*) **antes** de montar la pantalla. Sin permiso
+  muestra la pantalla **"Acceso denegado"** dentro de la *layout* normal
+  (barra superior con nombre y rol, CA-U04) y **no monta** la pantalla
+  pedida, así que no hace ninguna petición de esa función. Las únicas
+  peticiones permitidas en ese estado son las globales de la *layout*:
+  `GET /auth/me`, `GET /events`, `POST /session/activity` y `POST /telemetry`.
+  Por eso **los *snapshots* de datos los pide cada pantalla al montarse** (y
+  al recibir `hello`/reconexión mientras está montada), no la *layout* ni el
+  cliente SSE global (§6): en "Acceso denegado" no se carga nada de pedidos,
+  cola, menú, personal ni resumen.
+- Contenido propuesto (lo fija UX en el wireframe y el design system): `h1`
+  "Acceso denegado", texto "No tienes permiso para ver esta pantalla." y
+  botón "Ir al inicio" (inicio del rol). La URL no cambia (el E2E comprueba la
+  ruta pedida). Es la versión de UI del `403` de la API (HU-01/CA-F04); el
+  servidor sigue respondiendo `403 FORBIDDEN` aunque se salte la guarda.
+- Si una petición de una pantalla montada recibe `403 FORBIDDEN` (p. ej. el
+  rol cambió en otro dispositivo y aún no llegó `session.updated`), la
+  pantalla se sustituye por "Acceso denegado" y la app recarga
+  `GET /auth/me`.
+- **En HU-01 se crean ya las cinco rutas** con su guarda: `/pedidos` y
+  `/cola` (inicios tras el login) y `/menu`, `/personal`, `/resumen` **vacías**
+  (solo barra superior y su `h1`), enlazadas desde "Gestión" del encargado.
+  Su contenido llega con HU-02/HU-03/HU-04, HU-05, HU-07 y HU-08. Así se
+  prueban CA-F03 (el encargado llega a todas) y CA-F04 "por URL" desde HU-01.
+- Servir la SPA: `app` (y Vite en DEV) devuelve `index.html` para cualquier
+  `GET` que no empiece por `/api/` ni sea un fichero estático existente, con
+  `Cache-Control: no-cache`; los *assets* con *hash* en el nombre, caché
+  larga. `/healthz` y `/readyz` no son rutas de la SPA.
+
 ## 6. Tiempo real (ADR-004)
 
 - **Transporte:** Server-Sent Events en `GET /api/v1/events` (un único flujo por
@@ -900,7 +1168,7 @@ AÑADIDO/ELIMINADO). La ruta y el hub SSE eligen por el rol de la sesión. Así
 | `payment.created` · `payment.voided` | fila de "Cobrados hoy" | ✓ | — | ✓ | HU-04 |
 | `product.updated` | disponibilidad/precio/activo | ✓ | ✓ (sin precio) | ✓ | HU-05 |
 | `menu.changed` | estructura/orden → recarga `GET /menu` | ✓ | ✓ | ✓ | HU-05 |
-| `session.revoked` (y se cierra el flujo) | — | sesión afectada | sesión afectada | sesión afectada | HU-01, HU-07 |
+| `session.revoked` (y se cierra el flujo) | `reason`: `logout` \| `user_disabled` \| `pin_reset` \| `pin_changed` \| `account_locked_manual` (el mismo valor que `details.revokedReason` del `401`, §5; elige el banner de P-01) [2.1c] | sesión afectada | sesión afectada | sesión afectada | HU-01, HU-07 |
 | `session.updated` (cambio de rol → recarga `/auth/me` y reconecta; si la promoción a encargado deja `mustChangePin`, el servidor cierra el flujo tras el evento y la app abre el cambio obligatorio del PIN, §5) | — | sesión afectada | sesión afectada | sesión afectada | HU-07 |
 | `ping` cada 2 s | `serverTime`, `businessDate` | ✓ | ✓ | ✓ | latido |
 
@@ -911,10 +1179,11 @@ AÑADIDO/ELIMINADO). La ruta y el hub SSE eligen por el rol de la sesión. Así
 - **"Sin conexión" en ≤ 5 s (HU-03):** el cliente tiene un vigilante; si no
   recibe nada (ni `ping`) en 5 s muestra el aviso y fuerza reconexión.
 - **Resincronización sin pérdidas:** al (re)conectar, el servidor envía primero
-  `hello`; el cliente entonces pide el snapshot de su rol (K: `GET /kitchen/queue`;
-  W/M: `GET /orders/floor` + `GET /payments/today`; todos: `GET /menu` y
-  `GET /auth/me`, que trae `localConfig` tras un reinicio de `app`) y lo
-  **reemplaza** por completo. Los eventos que lleguen durante la carga se
+  `hello`; el cliente entonces recarga `GET /auth/me` (trae `localConfig` tras
+  un reinicio de `app`) y **cada pantalla montada** pide su snapshot (P-05:
+  `GET /kitchen/queue`; P-02: `GET /orders/floor` + `GET /payments/today`;
+  las que muestran productos: `GET /menu`) y lo **reemplaza** por completo. No
+  hay snapshot global de la *layout* (§5.2: "Acceso denegado" no carga datos). Los eventos que lleguen durante la carga se
   aplican si su `version` es mayor que la del snapshot. No se usa
   `Last-Event-ID`: el estado completo es pequeño (≤ decenas de pedidos).
 - **Orden y consistencia:** se publica tras el `COMMIT`; el cliente descarta los
@@ -938,6 +1207,29 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
   nunca en BD ni imagen). Parámetros ajustados para ≤ ~250 ms por verificación
   (HU-01 pide ≤ 1 s p95). Reglas de composición y **lista de PIN prohibidos**
   (versionada) en `packages/shared`, validadas en servidor.
+- **Reglas de PIN: `validatePin(pin, role)` [2.1c, T-32]** (función pura de
+  `@mi-app/shared/pin`, la misma en servidor y cliente). Devuelve
+  `{ ok: true }` o `{ ok: false, rule }` con **la primera regla que falla en
+  este orden** (es el orden de los mensajes de
+  `docs/ux/wireframes/01-login.md`, "Reglas de PIN", que se muestran de uno en
+  uno):
+
+  | # | `PinRule` | Falla si | Ejemplos |
+  |---|---|---|---|
+  | 1 | `digits_only` | algún carácter no es un dígito ASCII `0`–`9` (espacios, signos, dígitos Unicode no ASCII). La cadena vacía no falla aquí | `48a1`, `" 4831"`, `４８３１` |
+  | 2 | `length` | rol `waiter`/`kitchen` y longitud fuera de 4–6 (incluida la vacía) | `483`, `7391648` |
+  | 2 | `manager_length` | rol `manager` y longitud distinta de 6 (sustituye a `length` para el encargado) | `4831`, `11111` |
+  | 3 | `all_same` | todos los dígitos iguales | `1111`, `000000` |
+  | 4 | `sequence` | contiene en **cualquier posición** 4 o más dígitos consecutivos ascendentes (+1) o descendentes (−1); sin vuelta de 9 a 0 | `1234`, `381234`, `836543` (no `1235`, `7891`) |
+  | 5 | `repeated_block` | el PIN entero es un bloque de 2 o 3 dígitos repetido (longitud múltiplo del bloque, ≥ 2 repeticiones) | `1212`, `123123`, `121212`, `234234` |
+  | 6 | `common` | está en la lista de PIN prohibidos (`packages/shared/src/pin/common-pins.ts`, versionada, ≥ 100 entradas, la mantiene Cybersecurity, `docs/seguridad.md` §6.1.2) | `2580`, `1122`, `147258` |
+
+  Se aplica al crear, restablecer y cambiar un PIN (alta, `reset-pin`,
+  `newPin`, encargado inicial), **nunca** al verificar uno en el login: un PIN
+  antiguo que hoy no cumpla sigue sirviendo para entrar. Error de la API:
+  `400 VALIDATION_FAILED` con `issues: [{ path: ["pin" | "newPin"], rule }]`
+  (§5). `digits_only` no tiene mensaje propio en UX porque el teclado de la app
+  no puede producirlo; solo llega por la API.
 - **Red (SEC-002, condición de despliegue):** el login y la API solo son
   alcanzables desde la red del personal; nunca desde internet ni la Wi-Fi de
   clientes (ADR-007, `docs/infraestructura.md`).
@@ -951,14 +1243,44 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
   Se resuelve en **cada** petición junto con el usuario → un cambio de rol o una desactivación surte
   efecto en la siguiente petición (HU-07), y la desactivación además revoca
   sesiones y cierra el flujo SSE al instante.
-- **Inactividad 15 min (HU-01):** cuenta como actividad cualquier petición REST
-  salvo `POST /telemetry` (y no el flujo SSE ni sus `ping`), más
-  `POST /session/activity`. `last_activity_at` se actualiza como mucho cada
-  30 s. El cliente también cierra la pantalla al llegar a 15 min. **Excepción
-  rol barra:** mientras su flujo SSE esté abierto, la sesión no caduca por
-  inactividad (un encargado con la cola abierta no hereda la exención).
-  **Caducidad absoluta 12 h** para todos los roles (SEC-004); `config.ts` no
-  arranca con un valor mayor (solo se puede bajar).
+- **Inactividad 15 min (HU-01) [2.1c, T-37]:** cuenta como actividad
+  cualquier petición REST con sesión válida salvo `POST /telemetry` (y no el
+  flujo SSE ni sus `ping`), más `POST /session/activity`.
+  - **Regla exacta**: con `now = clock.now()`, la sesión está caducada por
+    inactividad si `now >= last_activity_at + 15 min` (a los 14 min 59 s
+    sigue viva; a los 15 min 0 s, `401 UNAUTHENTICATED` con
+    `reason: idle`). Se comprueba **antes** de registrar la actividad de esa
+    petición.
+  - **`last_activity_at` se escribe en cada petición que cuenta**, sin
+    intervalo mínimo:
+    `UPDATE sessions SET last_activity_at = GREATEST(last_activity_at, $now) WHERE id = $id`
+    (`GREATEST` evita retroceder con peticiones paralelas). Se elimina el
+    "como mucho cada 30 s" de la revisión anterior: era la causa de que la
+    sesión pudiera cerrarse hasta 30 s antes de los 15 min reales (T-37). Con
+    ~10 dispositivos son unas pocas escrituras por segundo en el peor caso,
+    por clave primaria: despreciable (§1). Así **no hace falta tolerancia en
+    HU-01/CA-F09** y el PO no tiene que cambiar el criterio.
+  - **Excepción rol barra:** mientras la sesión tenga un flujo SSE abierto,
+    no caduca por inactividad (un encargado con la cola abierta no hereda la
+    exención). El hub SSE mantiene la lista de sesiones `kitchen` con flujo
+    abierto y: (a) al **cerrarse** el flujo, escribe
+    `last_activity_at = clock.now()`, de modo que la inactividad cuenta
+    **desde el cierre de la cola** y no desde la última petición (si no, una
+    reconexión tras un corte de Wi-Fi de segundos daría `401` a una barra que
+    llevaba 15 min sin tocar nada); (b) cada 60 s (temporizador de la
+    instancia) escribe `last_activity_at = clock.now()` de esas sesiones en
+    una sola sentencia, para que un reinicio brusco de `app` (sin cierre
+    ordenado de los flujos) no deje a la barra fuera al reconectar. El
+    middleware, para `kitchen` con flujo abierto, no aplica la regla de
+    inactividad (sí la de 12 h).
+  - El cliente también cierra la pantalla al llegar a 15 min sin interacción
+    (aviso a los 14 min) con su propio temporizador.
+- **Caducidad absoluta (SEC-004, RS-13, T-36):** `expires_at = created_at +
+  SESSION_MAX_HOURS` (por defecto 12, entero 1–12, §10.1); caducada si
+  `now >= expires_at` (`401 UNAUTHENTICATED` con `reason: absolute`), para
+  todos los roles y también con el flujo SSE abierto (el hub lo cierra en el
+  siguiente `ping` tras `expires_at`). `config.ts` no arranca con un valor
+  mayor que 12, menor que 1 o no entero.
 - **Una sola verificación de PIN: `verifyPin` (SEC-016).** Toda comprobación
   de un PIN contra su hash —login (`pin`), autorización de encargado
   (`managerApproval.pin`), reconfirmación (`confirmPin`) y cambio del PIN
@@ -1070,8 +1392,10 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
 - **CSRF:** `SameSite=Strict` + mismo origen + comprobación de `Origin` en
   peticiones que modifican datos.
 - **Autorización (RBAC):** matriz rol → permisos en `packages/shared/permissions.ts`.
-  Cada ruta declara su permiso (`requirePermission('order:serve')`) y el
-  middleware responde `403` antes de ejecutar nada (HU-01). La UI usa la misma
+  Cada ruta declara su permiso en `config` (`{ permission: 'order:serve' }`,
+  o `public`/`internal`, §2.1) y el middleware responde `403 FORBIDDEN` antes
+  de ejecutar nada (HU-01); sin declaración, también `403` (denegación por
+  defecto, RS-17). La UI usa la misma
   matriz solo para ocultar opciones. Matriz:
 
 | Permiso | W | K | M |
@@ -1098,6 +1422,7 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
 - **Encargado inicial (HU-01):** comando `create-initial-manager` (en la imagen
   de `app`) que lee nombre y PIN provisional (6 dígitos) de un `podman secret`,
   solo si no existe ningún encargado; queda con `must_change_pin = true`.
+  Contrato de la función `createInitialManager` y de `unlockUser` en §2.1.
 
 ## 8. Dinero (ADR-006)
 
@@ -1145,8 +1470,9 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
   y cancelación, que leen la hora del `Clock` **después** de tomarlo. Así el
   reparto entre la instantánea (`< closed_at`) y "Cambios tras el cierre"
   (`>= closed_at`) no deja nada fuera ni lo cuenta dos veces (§4.4).
-  **[1.7o]** Las cuatro transacciones corren en `READ COMMITTED` (por defecto)
-  y la primera sentencia es el cerrojo; en el cierre, `clock.now()` se lee
+  **[1.7o, 2.1c]** Las cuatro transacciones corren en `READ COMMITTED`
+  declarado explícitamente (`BEGIN ISOLATION LEVEL READ COMMITTED`, helper
+  `withCashClosingLock`, T-27) y la primera sentencia es el cerrojo; en el cierre, `clock.now()` se lee
   después del cerrojo y de comprobar que el día no está cerrado. Dos cierres
   en paralelo: uno `201` y el otro `409 DAY_ALREADY_CLOSED` (comprobación tras
   el cerrojo + `INSERT … ON CONFLICT DO NOTHING`; un `23505` en
@@ -1203,6 +1529,38 @@ la arquitectura exige:
 - **Una sola réplica de `app`** (estado SSE y bus en memoria). Reinicio
   automático por el motor; los clientes reconectan y resincronizan solos.
 
+### 10.1 Variables de configuración de `app` (`config.ts`) [2.1c, T-36]
+
+`apps/api/src/config.ts` (export `@mi-app/api/config`) tiene dos funciones:
+`parseSettings(env: Record<string, string | undefined>)` **pura** (solo las
+variables no secretas; valida con zod y lanza `ConfigError` con el **nombre**
+de la variable, nunca su valor) y `loadConfig()` (llama a `parseSettings` con
+`process.env` y lee los secretos de los ficheros `*_FILE`, recortando el
+salto de línea final). `main.ts`, `migrate` y los comandos no arrancan si
+cualquiera de las dos falla. Los nombres coinciden con
+`docs/infraestructura.md` §6; los nuevos los añade Infrastructure.
+
+| Variable | Secreta | Rango / formato | Por defecto | Uso |
+|---|---|---|---|---|
+| `HOST`, `PORT` | no | IP; 1025–65535 | `0.0.0.0`, `3000` | `listen` de la API |
+| `METRICS_PORT` | no | 1025–65535, distinto de `PORT` | `9464` | servidor de `/metrics` (§11) |
+| `TABLE_COUNT` | no | entero 1–99 | `20` | §4.1 |
+| `DELAY_THRESHOLD_MINUTES` | no | entero 1–60 | `10` | §4.1 |
+| **`SESSION_MAX_HOURS`** (nueva) | no | **entero 1–12** | **`12`** | caducidad absoluta de las sesiones nuevas (§7, SEC-004). Mayor que 12, menor que 1, decimal o no numérica → no arranca (RS-13). No se expone en `localConfig`: el cliente ya recibe `session.expiresAt` |
+| `PUBLIC_ORIGIN` (nueva) | no | origen URL exacto `esquema://host[:puerto]`, sin ruta ni barra final | **obligatoria** (sin valor por defecto) | `Origin` aceptado (RS-24), p. ej. `https://caja.local:8443`; en DEV, el origen del servidor Vite |
+| `TRUSTED_PROXIES` (nueva) | no | lista separada por comas de IP o CIDR; vacía = ninguna | vacía | `trustProxy` de Fastify: solo de esas direcciones se acepta `X-Forwarded-For` (RS-06, SEC-003). En TESTING/DEMO/PROD, la IP (o la subred interna mínima) de `proxy`; en DEV, vacía (no hay Caddy) |
+| `LOG_LEVEL` | no | `fatal`…`trace` | `info` | pino |
+| `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_NAME`, `DATABASE_USER` | no | — | obligatorias | conexión (`app_rw` en `app`; `app_owner` en `migrate`) |
+| `DATABASE_PASSWORD_FILE` | **sí** (fichero) | ruta | obligatoria | contraseña del rol |
+| `PIN_PEPPER_FILE` | **sí** (fichero) | ruta; contenido ≥ 32 bytes | obligatoria en `app` y `create-initial-manager` | *pepper* de `createPinHasher` |
+| `INITIAL_MANAGER_NAME_FILE`, `INITIAL_MANAGER_PIN_FILE` | **sí** (ficheros) | rutas | solo `create-initial-manager` | §2.1 |
+
+- La zona horaria de negocio **no** es configurable (`Europe/Madrid`,
+  constante de `packages/shared`, §4): `config.ts` no lee
+  `BUSINESS_TIMEZONE`. `TZ=UTC` del contenedor no afecta a la lógica.
+- `parseSettings` es lo que prueba el unitario de RS-13 (sin secretos ni
+  ficheros). `buildApp` usa la misma validación sobre `AppDeps` (§2.1).
+
 ## 11. Observabilidad (puntos de enganche)
 
 El estándar lo define Monitoring (`docs/logging.md`). La arquitectura aporta:
@@ -1235,7 +1593,9 @@ El estándar lo define Monitoring (`docs/logging.md`). La arquitectura aporta:
   4. La primera barrera sigue siendo no registrar cuerpos de petición.
 - **Salud:** `/healthz` (liveness) y `/readyz` (BD + migraciones), §5.1 (M-01).
 - **Métricas:** `prom-client` en un servidor HTTP aparte dentro del mismo
-  proceso, escuchando en 9464 (`/metrics`), sin rutas de la API (M-02). Lista
+  proceso, escuchando en 9464 (`/metrics`), sin rutas de la API (M-02). Lo
+  arranca `main.ts` sirviendo `app.metricsText()`; el `Registry` es propio de
+  cada instancia de `buildApp` (§2.1). Lista
   de métricas en `docs/logging.md` §6; etiquetas sin cardinalidad ilimitada.
 - **Telemetría del cliente (M-03):** `POST /api/v1/telemetry`, con sesión
   (rechazado con PIN provisional) y comprobación de `Origin`, por lotes (como
@@ -1252,8 +1612,9 @@ El estándar lo define Monitoring (`docs/logging.md`). La arquitectura aporta:
 - Validación de toda entrada en el borde con zod (esquemas en `packages/shared`,
   reutilizados para tipos de request/response).
 - Dominio en inglés en código y BD; textos de UI en español.
-- Servicios con dependencias por constructor (DI manual en `main.ts`, sin
-  contenedor de DI). **`Clock` inyectable** (`now(): Date`) para expiración,
+- Servicios con dependencias por constructor (DI manual en `buildApp`, que
+  `main.ts` llama con `SystemClock` y la configuración de `loadConfig()`; sin
+  contenedor de DI; contrato en §2.1). **`Clock` inyectable** (`now(): Date`) para expiración,
   bloqueo, "Deshacer 30 s", espera/retraso y fecha de negocio; prohibido
   `new Date()`/`Date.now()` y `now()` de SQL en la lógica de negocio.
 - Funciones puras para reglas (totales, transiciones, deshacer, fecha de
@@ -1341,3 +1702,17 @@ de la cabecera; el detalle está en las secciones citadas.
 | HU-08/CA-N02 (1.7h) | Índices `payments (business_date)`, `order_lines (order_id)`, `orders (cancelled_at) WHERE status = 'cancelled'` y PK de `payment_orders`; lectura en una transacción `REPEATABLE READ` de solo lectura | §4.1, §4.4 |
 | HU-08/CA-F03 en día cerrado (1.7h) | El aviso de pedidos sin cobrar se calcula al consultar, no es parte de la instantánea (coincide con I-15) | §4.4, §5.1 |
 | T-26 (Testing, media) (1.7o) | **Resuelto.** Cierre, cobro, anulación y cancelación en `READ COMMITTED` (no `REPEATABLE READ`, cuya foto se tomaría en la sentencia del cerrojo, antes de esperar). Orden del cierre: cerrojo exclusivo → comprobar que el día no está cerrado → `clock.now()` → `computeDailySummary` → `INSERT … ON CONFLICT DO NOTHING`; escritores: cerrojo compartido → `clock.now()` → `FOR UPDATE` → escrituras. Coherencia entre sentencias garantizada por el cerrojo exclusivo. Dos cierres en paralelo → un `201` y un `409 DAY_ALREADY_CLOSED`; un `23505` en `cash_closings_pkey` se traduce a `409`, nunca `500`. `GET /reports/daily` sigue en `REPEATABLE READ` de solo lectura (no toma el cerrojo). Sin ADR: no cambia ninguna decisión de ADR-008 | §4.4, §9 |
+
+## 17. Registro de decisiones de la tarea 2.1c (Etapa 2, 2026-11-24)
+
+Ninguna cambia una decisión de ADR (lenguaje, framework, BD, autenticación):
+son detalles de contrato dentro de ADR-001, ADR-005 y ADR-008. Sin ADR nuevo.
+
+| Origen | Decisión | Dónde |
+|---|---|---|
+| T-32 (Testing, baja) | **Aceptada la propuesta de `tests/README.md` §1–§3** con estos ajustes: (1) `AppDeps.sessionMaxHours?` (1–12, por defecto 12); (2) `metricsText()` sobre un `Registry` propio de cada instancia; (3) el hasher solo lo recibe el módulo `auth` (`verifyPin` y `hashNewPin`); (4) `unlockUser` tipado con `Pick<CommandDeps, 'clock' \| 'database' \| 'logDestination'>` (acepta el `CommandDeps` completo); (5) `issues[].path` es `(string \| number)[]` (índices de *array* numéricos, como zod), no `string[]`; (6) nueva subruta `@mi-app/api/config` (`parseSettings`, `loadConfig`) para el unitario de RS-13; (7) se fijan los códigos `401 UNAUTHENTICATED` (con `details.reason` y `revokedReason`), `403 FORBIDDEN`, `403 ORIGIN_NOT_ALLOWED`, `415 UNSUPPORTED_MEDIA_TYPE`, el catálogo de `rule` para campos que no son PIN y el orden de los hooks; (8) `423 ACCOUNT_LOCKED_MANUAL` sin `retryAfterSeconds` ni `Retry-After`. Reglas de PIN y su orden: los de Testing, con definiciones exactas | §2.1, §3.1, §5, §7 |
+| T-36 (Testing, baja) | `SESSION_MAX_HOURS`, entero 1–12, por defecto 12; fuera de rango → no arranca. Se fija `expires_at` al crear la sesión. Tabla completa de variables de `app`, con `PUBLIC_ORIGIN`, `TRUSTED_PROXIES` y `METRICS_PORT` nuevas; `BUSINESS_TIMEZONE` no se lee | §4.1, §7, §10.1 |
+| T-37 (Testing, baja) | **Sin tolerancia en el criterio.** `last_activity_at` se escribe en **cada** petición que cuenta (`GREATEST`), en vez de como mucho cada 30 s; regla `now >= last_activity_at + 15 min`. Barra: el hub escribe `last_activity_at` al cerrarse el flujo y cada 60 s mientras está abierto (la inactividad cuenta desde el cierre de la cola; una reconexión o un reinicio de `app` no echan a la barra) | §4.1, §7 |
+| T-31 (Testing y UX, baja) | Rutas `/`, `/pedidos`, `/cola`, `/menu`, `/personal`, `/resumen` (las de Testing) con guarda por permiso; "Acceso denegado" dentro de la *layout* sin montar la pantalla ni pedir sus datos; los *snapshots* los pide cada pantalla montada. En HU-01 se crean las cinco rutas, con Menú, Personal y Resumen vacías | §5.2, §6 |
+| T-27 (decisión del humano) | `BEGIN ISOLATION LEVEL READ COMMITTED` **explícito** en cierre, cobro, anulación y cancelación, con un único helper `withCashClosingLock` (`setIsolationLevel('read committed')` de Kysely). Lo implementa el Developer con HU-08 (cobro y anulación con HU-04, cancelación con HU-06, si llegan antes) | §4.4, §9 |
+| `session.revoked` | El evento lleva `reason` (mismos valores que `revokedReason`), para el banner de P-01 | §6 |
