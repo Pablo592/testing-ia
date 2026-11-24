@@ -26,8 +26,9 @@
 #                        db_app_password, db_backup_password, pin_pepper y
 #                        db_test_admin_password (T-28; solo existe en TESTING).
 # Opcionales: APP_TZ (por defecto UTC), TEST_RESULTS_DIR (./tests/results),
-#   TEST_PROXY_APP_SUBNET (10.89.240.0/29) y TEST_PROXY_IP (10.89.240.2): cambiar
-#   en ejecuciones en paralelo.
+#   TEST_PROXY_APP_SUBNET (10.89.240.0/29), TEST_PROXY_IP (10.89.240.2) y
+#   TEST_APP_IP (10.89.240.3): cambiar en ejecuciones en paralelo. Las dos IP
+#   deben ser distintas y estar dentro de la subred (SEC-028).
 
 x-podman:
   in_pod: false
@@ -219,7 +220,13 @@ services:
       PIN_PEPPER_FILE: /run/secrets/pin_pepper
     secrets: [db_app_password, pin_pepper]
     # backend: db. proxy-app: solo recibe de proxy (único origen de confianza).
-    networks: [backend, proxy-app]
+    # IP fija también para app (SEC-028): app arranca antes que proxy y, sin
+    # ella, Podman le daría la primera libre (.2), la reservada para proxy, y
+    # proxy fallaría con "IPAM error: ... already allocated".
+    networks:
+      backend: {}
+      proxy-app:
+        ipv4_address: ${TEST_APP_IP:-10.89.240.3}
     depends_on:
       db: { condition: service_healthy }
     # HEALTHCHECK de la imagen (node dist/healthcheck.js), docs/logging.md §8.1.
@@ -418,9 +425,10 @@ networks:
   # Solo db y runner-e2e (T-29).
   db-seed:
     internal: true
-  # Solo proxy y app. Subred fija para que proxy tenga una IP conocida
-  # (TRUSTED_PROXIES). Dos ejecuciones EN PARALELO necesitan valores distintos
-  # de TEST_PROXY_APP_SUBNET y TEST_PROXY_IP (si no, Podman rechaza la red).
+  # Solo proxy y app, los dos con IP fija (SEC-028). Subred fija para que proxy
+  # tenga una IP conocida (TRUSTED_PROXIES). Dos ejecuciones EN PARALELO
+  # necesitan valores distintos de TEST_PROXY_APP_SUBNET, TEST_PROXY_IP y
+  # TEST_APP_IP (si no, Podman rechaza la red).
   proxy-app:
     internal: true
     ipam:

@@ -580,7 +580,7 @@ Notas y cambios que se piden a Testing (respuesta a T-12):
 | `runner-integration` | `backend` | `app_rw` + `test_admin` | `db_app_password`, `db_test_admin_password` (**ya no** `db_owner_password`) | `DATABASE_HOST/PORT/NAME`, `DATABASE_APP_USER=app_rw`, `DATABASE_APP_PASSWORD_FILE`, `DATABASE_ADMIN_USER=test_admin`, `DATABASE_ADMIN_PASSWORD_FILE`, `DATABASE_TEMPLATE=app_template` |
 | `runner-e2e` (también la semilla de k6) | `edge`, `db-seed` | `app_rw` | `db_app_password`, `pin_pepper` | `DATABASE_HOST/PORT/NAME`, `DATABASE_APP_USER`, `DATABASE_APP_PASSWORD_FILE`, `PIN_PEPPER_FILE`, `TOXIPROXY_API`, `SSL_CERT_FILE` |
 | `runner-perf` (k6), `runner-unit`, `runner-security`, `zap` | sin cambios | ninguno | ninguno | sin cambios |
-| `app` | `backend`, `proxy-app` | `app_rw` | `db_app_password`, `pin_pepper` | §6 (con `PUBLIC_ORIGIN=https://toxiproxy:8443`, `TRUSTED_PROXIES=10.89.240.2`) |
+| `app` | `backend`, `proxy-app` (IP fija `10.89.240.3`, SEC-028) | `app_rw` | `db_app_password`, `pin_pepper` | §6 (con `PUBLIC_ORIGIN=https://toxiproxy:8443`, `TRUSTED_PROXIES=10.89.240.2`) |
 | `proxy` | `proxy-app` (IP fija `10.89.240.2`), `edge` | — | — | sin cambios; **ya no está en `backend`** (no llega a `db`) |
 
 **Red `proxy-app` y `TRUSTED_PROXIES` (2.1b2).** `app` solo acepta
@@ -588,13 +588,44 @@ Notas y cambios que se piden a Testing (respuesta a T-12):
 y `app` comparten una red `internal` propia con subred fija
 (`TEST_PROXY_APP_SUBNET`, por defecto `10.89.240.0/29`) y `proxy` tiene IP
 fija (`TEST_PROXY_IP`, por defecto `10.89.240.2`); `TRUSTED_PROXIES` es esa
-IP sola, no la subred. El resto de contenedores llega a `app` por `backend`
+IP sola, no la subred. `app` también tiene IP fija en esa red
+(`TEST_APP_IP`, por defecto `10.89.240.3`; SEC-028, ver abajo). El resto de contenedores llega a `app` por `backend`
 (p. ej. `runner-integration` con `API_URL`) y no es de confianza. Dos
-ejecuciones **en paralelo** necesitan valores distintos de esas dos
-variables; si no, Podman rechaza la segunda red (falla, no se mezclan).
+ejecuciones **en paralelo** necesitan valores distintos de esas tres
+variables (`TEST_PROXY_APP_SUBNET`, `TEST_PROXY_IP`, `TEST_APP_IP`; las dos IP
+distintas entre sí y dentro de la subred); si no, Podman rechaza la segunda red (falla, no se mezclan).
 `tests/run.sh` ejecuta las suites en serie, así que hoy no hace falta.
 Comprobado: `proxy` arranca con `10.89.240.2` en `proxy-app` (interna,
 `10.89.240.0/29`) y otra IP en `edge`.
+
+**SEC-028 (2.1h): IP fija también para `app`.** `proxy` depende de `app`, así
+que `app` se crea antes; sin IP fija, Podman le daba la primera libre de la
+subred (`.2`, la reservada para `proxy`) y `proxy` fallaba con
+`IPAM error: requested ip address … is already allocated`. Ahora `app` tiene
+`ipv4_address: ${TEST_APP_IP:-10.89.240.3}` en `proxy-app`; `TRUSTED_PROXIES`
+sigue siendo solo la IP de `proxy`. La `/29` deja `.2`–`.6` utilizables; no
+hay más contenedores en esa red.
+
+Validado el 2026-11-24, rootless (Podman 5.7.0, `podman-compose` 1.5.0,
+cgroups v2, con `DBUS_SESSION_BUS_ADDRESS` del propio usuario, §4.2), con
+secretos aleatorios en `$XDG_RUNTIME_DIR` (borrados al final) y, como no hay
+imagen de la app, un sustituto de `app` (la imagen `node` fijada por digest
+con un servidor HTTP mínimo en `:3000` y *healthcheck*, mediante un override
+fuera del repositorio; las redes, IP, variables y endurecimiento son los de
+`compose.test.yaml`):
+- `podman-compose -f compose.test.yaml --profile e2e config`: `app` con
+  `proxy-app: ipv4_address 10.89.240.3`, `proxy` con `10.89.240.2`,
+  `TRUSTED_PROXIES=10.89.240.2`; con `TEST_PROXY_IP=10.89.240.4
+  TEST_APP_IP=10.89.240.5` se propagan los dos (y `TRUSTED_PROXIES`).
+- Orden real (`up -d proxy`, que arranca `db` → `app` → `proxy`) y paso a
+  paso `db`, `app`, `proxy` con `--no-deps`: los tres *healthy*, `app` en
+  `10.89.240.3` y `proxy` en `10.89.240.2`, sin error de IPAM.
+- Orden inverso (`proxy` primero y luego `app`, con `--no-deps`): los dos
+  *healthy* con las mismas IP.
+- Desde `proxy`, `wget http://app:3000` responde en los dos órdenes.
+- `podman top`: ningún proceso con UID 0 en el host.
+- Limpieza con `down -v` de cada proyecto de prueba: sin contenedores, redes
+  ni volúmenes restantes; `mi-app-dev_db_1` sin tocar.
 
 **`PUBLIC_ORIGIN` en TESTING** es un único origen: `https://toxiproxy:8443`
 (el `BASE_URL` de los navegadores). Una petición que modifica estado enviada
