@@ -3,7 +3,12 @@
 > Responsable: Cybersecurity. Etapa 1 (tarea 1.4), 2026-11-21. Revisión 1.4b,
 > 2026-11-23: verificación de SEC-001..SEC-015 sobre las historias (ronda 1.1d),
 > la arquitectura (revisión 1.3b) y la infraestructura (tarea 1.5); hallazgos
-> nuevos SEC-016..SEC-022; dictámenes sobre M-06 y HU-09 (§6.3).
+> nuevos SEC-016..SEC-022; dictámenes sobre M-06 y HU-09 (§6.3). Revisión
+> 1.4c, 2026-11-23: verificación de SEC-010 y SEC-016..SEC-022 sobre la
+> arquitectura 1.3c, la infraestructura 1.5b y el logging 1.6c/1.6e;
+> dictámenes sobre HU-01/CA-F13, T-14, T-18, T-20, umbrales de alertas,
+> comandos del temporizador, `NoNewPrivileges`, salida de Alertmanager y
+> telemetría previa a la sesión (§6.4); hallazgos nuevos SEC-023..SEC-025.
 > Entradas: `docs/historias/` (README + HU-01..HU-09, IDs estables `CA-`),
 > `docs/arquitectura.md`, `docs/decisiones/ADR-001..008`, `docs/ux/`,
 > `docs/infraestructura.md`, `compose.dev.yaml`, `compose.test.yaml`,
@@ -19,6 +24,18 @@
 > ningún fichero versionado) y prueba del filtro de PIN de
 > `deploy/dev/generar-secretos.sh` con casos conocidos (§9, SEC-014). No se
 > imprimió el contenido de ningún secreto.
+>
+> Comprobaciones ejecutadas en 1.4c (solo lectura, sin levantar contenedores
+> ni tocar volúmenes): `podman info` (rootless `true`);
+> `podman-compose -f compose.dev.yaml config` y `compose.test.yaml config`
+> (con valores ficticios para las variables obligatorias de imagen); análisis
+> de los dos compose fuente servicio a servicio (incluidos los perfiles que
+> `config` no muestra): `user 1000:1000`, `cap_drop: ALL` sin `cap_add`,
+> `no-new-privileges`, `read_only`, sin `privileged`, sockets ni
+> `network_mode: host` (solo `none` en `runner-unit`), puertos solo en
+> `127.0.0.1` (DEV) o ninguno (TESTING), tmpfs con `notmpcopyup` sobre
+> `/workspace/.secrets` en los 11 servicios que montan el proyecto;
+> lectura de `deploy/db/initdb/10-roles.sh`.
 
 ## Índice
 1. Alcance y método
@@ -26,7 +43,7 @@
 3. Actores de amenaza
 4. Superficies de ataque y fronteras de confianza
 5. Amenazas (STRIDE)
-6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos)
+6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c)
 7. Requisitos de seguridad verificables (para Testing)
 8. Revisión de la arquitectura frente a la política de contenedores (§3)
 9. Hallazgos (SEC-xxx)
@@ -242,17 +259,27 @@ valioso es el **encargado** (anular cobros, crear usuarios, ver la caja).
 4. **Las aprobaciones de encargado** (`managerApproval`, HU-06) cuentan en el
    mismo contador del encargado y siguen la misma escala. Una cuenta bloqueada,
    desactivada o con PIN provisional no puede aprobar (mismo error genérico).
-   **[1.4b, SEC-016]** Toda verificación de un PIN contra el hash cuenta igual,
-   sea cual sea la ruta: login, `managerApproval`, `confirmPin` (SEC-007) y
-   **`currentPin` de `POST /auth/pin`** (cambio del PIN propio). Las tres
-   últimas tienen además el límite por sesión de 5 fallos en 10 min. Si una
-   cuenta llega al bloqueo indefinido por fallos hechos desde una sesión
-   abierta de esa misma cuenta (`confirmPin`, `currentPin`), se revocan todas
-   sus sesiones: alguien está probando PIN en un dispositivo desatendido.
-5. **Límite por origen (IP del dispositivo):** 10 fallos de autenticación
-   (login + aprobaciones) en 10 min desde la misma IP → `429` durante 10 min
-   para cualquier usuario desde esa IP, comprobado **antes** de calcular el
-   hash. Límite por sesión para aprobaciones: 5 fallos en 10 min → `429`.
+   **[1.4b, SEC-016; ajustado en 1.4c]** Toda verificación de un PIN contra
+   el hash pasa por la función única `verifyPin` y cuenta igual, sea cual sea
+   la ruta: login, `managerApproval`, `confirmPin` (SEC-007) y **`currentPin`
+   de `POST /auth/pin`** (que en el MVP solo sirve para el cambio obligatorio
+   del PIN provisional). **Todo bloqueo indefinido revoca todas las sesiones
+   de la cuenta, venga de donde venga el fallo** (login desde otro
+   dispositivo, aprobaciones o sesión propia; HU-01/CA-F13): a los 20 fallos
+   alguien está probando ese PIN y ninguna sesión de esa cuenta debe seguir
+   viva. Durante un bloqueo **temporal** la sesión sigue abierta y
+   `confirmPin`/`currentPin` reciben `423 LOCKED` sin verificar ni contar
+   (HU-01/CA-F12).
+5. **Límite por origen (IP del dispositivo):** 10 fallos de **cualquier
+   verificación de PIN** (login, `managerApproval`, `confirmPin` y
+   `currentPin`) en 10 min desde la misma IP → `429` durante 10 min para
+   cualquier usuario y cualquier ruta de PIN desde esa IP, comprobado
+   **antes** de calcular el hash. Límite por sesión **para aprobaciones**
+   (`managerApproval`, PIN de otro usuario): 5 fallos en 10 min → `429`.
+   **[1.4c, T-20]** `confirmPin` y `currentPin` (PIN del propio titular de la
+   sesión) no llevan límite por sesión: los acota el bloqueo de la cuenta,
+   que para esos usos se comprueba antes que cualquier límite de sesión
+   (dictamen T-20 en §6.4).
    Requiere que `app` vea la IP real del dispositivo (SEC-003).
    **[1.4b] "Dispositivo" = IP de origen.** Es lo que recogen HU-01/CA-F11 y el
    supuesto 11 ("10 fallos desde un mismo dispositivo en 10 min lo bloquean 10
@@ -431,7 +458,10 @@ rootless, así que no añade ningún privilegio; y evita lo que sí está prohib
    nunca el `inspect` completo, que incluye entorno y montajes), `systemctl
    --user show -p NRestarts,Result,ActiveState` y `df -P` sobre rutas fijas.
    Prohibidos `podman exec/run/rm/kill`, `podman secret inspect
-   --showsecret` y cualquier `sudo`.
+   --showsecret` y cualquier `sudo`. **[1.4c]** Se añaden, con las
+   condiciones de §6.4: `date` con formato fijo, lectura de `/proc/loadavg` y
+   `/proc/meminfo` desde el host y `timedatectl show` con propiedades
+   concretas (`chronyc` solo en el caso descrito allí).
 3. Salida: lista cerrada de métricas con etiquetas acotadas (nombre del
    contenedor o de la unidad; nunca imagen, comando, variables ni rutas de
    montaje). Se escribe de forma atómica (fichero temporal + `mv`) en un
@@ -479,9 +509,12 @@ ninguna de las dos cosas: un cambio malicioso desde una sesión de encargado
 desatendida solo molesta (mesas que no aparecen, retrasos que no se marcan), no
 borra datos (HU-09/CA-F04, CA-F08), se deshace en segundos y queda auditado con
 valor anterior y nuevo (CA-N02). Pedir el PIN añadiría fricción sin reducir un
-riesgo relevante. Se mantiene: `GET/PATCH /settings` solo para el encargado
-(`settings:read`/`settings:manage`), esquema `.strict()` con los rangos de la
-BD y auditoría `settings.changed`.
+riesgo relevante. **[1.4c]** Tras la revisión 1.3c no existen en el MVP la
+tabla `settings`, `GET/PATCH /settings`, los permisos `settings:*` ni los
+eventos `settings.updated`/`settings.changed`: mesas (20) y umbral (10 min)
+son configuración de instalación de solo lectura (`TABLE_COUNT`,
+`DELAY_THRESHOLD_MINUTES`) que llega a cada rol por `localConfig`. Si HU-09
+volviera, aplicarían solo M, esquema `.strict()` con rangos y auditoría.
 
 **[1.4b] Caddy — redirección HTTP → HTTPS con el `Host` del cliente
 (`docs/infraestructura.md` §12.2).** Riesgo bajo: el navegador solo envía en
@@ -508,6 +541,232 @@ interna y que el bloque HTTPS de Caddy no sirve (solo responde a
   con dos dispositivos. Si se puede, usar también en DEMO la opción 1 (mismas
   unidades que PROD).
 
+### 6.4 Revisión 1.4c (2026-11-23): dictámenes
+
+**SEC-016 — validación de la solución del SE (`docs/arquitectura.md` §5,
+§5.1, §7; ADR-005 revisión (c)). Aceptada.**
+- *Función única `verifyPin`, único componente con el hasher (DI por
+  constructor).* Es la recomendación de 1.4b y cierra el problema de raíz: una
+  ruta nueva no puede verificar un PIN sin los límites. En la Etapa 2 se
+  comprueba con revisión de código y con un test que falle si otro módulo
+  importa el hasher (RS-16c).
+- *Revocación de todas las sesiones en el bloqueo indefinido, venga de donde
+  venga el fallo* (más amplio que lo que pedía §6.1.4 en 1.4b). **Aceptada**
+  y se adopta como regla (§6.1.4 corregido). Motivo: llegar a 20 fallos
+  significa que el PIN de esa cuenta está bajo ataque, y una sesión viva de
+  esa cuenta es justo lo que el atacante querría usar. Coste: quien provoca el
+  bloqueo desde otro dispositivo también echa al titular de sus sesiones
+  abiertas (p. ej. la pantalla de barra). Se acepta porque la cuenta ya no
+  puede entrar de nuevo, llegar a 20 exige unos 80 min con esperas de
+  5/15/60 min y cada paso genera alertas (`LockoutRepeated`,
+  `AccountLockedManual`). Es el mismo DoS leve ya aceptado (T-35).
+- *`403 PIN_INVALID` en `POST /auth/pin`* (no `401`). **Correcto:** el PIN
+  actual incorrecto no invalida la sesión; con `401` el cliente cerraría la
+  sesión y perdería el formulario. No revela nada: el titular ya está
+  autenticado y sabe de quién es la cuenta.
+- *`POST /auth/pin` solo con PIN provisional* (`403 FORBIDDEN` sin verificar
+  ni contar con `mustChangePin = false`). **Correcto y reduce superficie:**
+  una sesión desatendida normal ya no tiene ninguna ruta donde probar su
+  propio PIN salvo `confirmPin` (solo encargado, con contador). El `403` sin
+  contar no abre un oráculo: no verifica nada. Si se repite, salta
+  `ProvisionalChangeMisuse` (`docs/logging.md` §7.4).
+- *`423` sin verificar y sin contar durante un bloqueo temporal.* **Correcto**
+  y coherente con §6.1.3 ("durante un bloqueo no se verifica el PIN ni cuentan
+  los intentos"): sin esa regla, intentar durante el bloqueo alargaría la
+  escala sin dar información al atacante, y con ella el PIN no se comprueba,
+  así que tampoco hay oráculo.
+- Resto detectado: en `managerApproval` con el encargado bloqueado, el paso 3
+  responde sin calcular el hash, y la diferencia de tiempo (~0 ms frente a
+  100–250 ms) revela al camarero que el encargado está bloqueado, aunque el
+  error sea el genérico. Se abre **SEC-025 (baja)**.
+
+**T-20 (Testing) — orden de los pasos 2 y 3 de `verifyPin` para `confirm` y
+`change`. Opción A aceptada.** Para `confirmPin` y `currentPin` (el PIN es del
+propio titular de la sesión): se comprueba el bloqueo de la cuenta **antes**
+que cualquier límite de sesión, y el límite de sesión **no se aplica**. Orden
+resultante: (1) límite por IP → `429`; (2) cuenta bloqueada → `423` sin hash
+ni contar; (3) hash; (4) fallo → contador de la cuenta + contador de la IP.
+Para `managerApproval` (PIN de otro usuario) se mantiene el orden actual: IP →
+sesión (5/10 min) → bloqueo (error genérico) → hash. Motivo por el que es
+aceptable: el límite por sesión se pidió para que una tablet de camarero no
+pueda dedicarse a probar y bloquear el PIN de un encargado (§6.3); cuando el
+PIN es del titular, el contador de su cuenta ya es más estricto (5 fallos →
+bloqueo; no se reinicia al expirar; tope de 20 y revocación) y además sigue el
+límite por IP de 10/10 min. El límite de sesión solo añadía en ese caso un
+`429` que contradecía HU-01/CA-F12 (c) y (d). Riesgo residual aceptado: si el
+titular acierta su PIN en otro sitio entre tandas, el contador vuelve a 0 (ya
+ocurría igual con el login); lo acota el límite por IP del dispositivo, la
+inactividad de 15 min y la caducidad de 12 h, y queda visible en
+`auth.reconfirm.failed`/`auth.pin.change_failed`. Cambios: software-engineer
+en `docs/arquitectura.md` §7 (pasos 2–3) y ADR-005 revisión (c); monitoring
+en `SessionPinProbing` (ahora solo `purpose="approval"`), y RS-16b.
+**No bloquea:** la redacción actual de la arquitectura es más estricta, no
+menos segura; el cambio es de coherencia con la historia. No hace falta que el
+PO cambie CA-F12.
+
+**HU-01/CA-F13, puntos que dejó el PO "a confirmar por Cybersecurity".**
+1. *Revocar también si el bloqueo indefinido llega por inicios de sesión
+   fallidos desde otro dispositivo:* **confirmado** (ver SEC-016 arriba). El
+   PO puede quitar la marca "a confirmar" y redactar CA-F13 para todo bloqueo
+   indefinido, sea cual sea su origen.
+2. *Pantalla sin interacción (cola de barra) vuelve al login en ≤ 1 s:*
+   **confirmado** y exigido: es la misma regla de RS-14 para toda revocación.
+   El servidor envía `session.revoked` y cierra el flujo SSE tras el `COMMIT`;
+   si el flujo estaba caído, la reconexión recibe `401` y la UI va al login.
+   Además, la pantalla no debe seguir mostrando datos después de la
+   revocación (se vacía el estado en memoria al ir al login). RS-14 ampliado.
+3. *Que el titular de la sesión vea "Cuenta bloqueada. Espera X min" en lugar
+   del "PIN incorrecto" genérico (CA-F12 (c)):* **aceptado, solo para el PIN
+   del propio titular** (`confirmPin`, `currentPin`). Quien usa la sesión ya
+   está autenticado como esa cuenta y el bloqueo lo ha causado su propio
+   intento o lo verá al intentar entrar (CA-F06 ya muestra el bloqueo en el
+   login): no se revela nada nuevo. **Nunca** en `managerApproval`, donde el
+   PIN es de otra persona: ahí sigue el error genérico (HU-06/CA-F18) y,
+   además, sin diferencia de tiempo (SEC-025). El quinto fallo, el que activa
+   el bloqueo, muestra el mensaje normal de PIN incorrecto (CA-F12 (b)):
+   correcto, coherente con el login.
+
+**T-14 (parte de seguridad).** Cerrado desde seguridad: la sesión no se
+cierra en el bloqueo temporal (CA-F12) y se revoca en el indefinido
+(CA-F13), que es lo que Cybersecurity defendía. Cerrar la sesión en cada
+bloqueo temporal sería un DoS gratuito (cinco logins fallidos desde otra
+tablet echarían al encargado) sin reducir riesgo, porque mientras dura el
+bloqueo la sesión no puede probar ni usar el PIN.
+
+**T-18 (Testing) — oráculo de RS-18.** **Aceptado.** RS-18 queda: tabla
+esperada **escrita a mano** en el test a partir de `docs/permisos.md` §3 (y
+§1 para los estados de cuenta), sin importar `permissions.ts`; un test aparte
+compara `permissions.ts` con esa tabla y falla si difieren. Si difieren, manda
+`docs/permisos.md` hasta que se corrijan los dos (§0 de permisos). Además se
+añaden a la tabla las rutas que no deben existir (`GET/PATCH /settings` →
+`404`).
+
+**Monitoring — umbrales de `docs/logging.md` §7.4.**
+- `LockoutRepeated` (≥ 2 bloqueos temporales del mismo usuario en 24 h,
+  crítica [24h]): **aprobado.** Coincide con §6.1.7 ("segundo bloqueo de un
+  mismo usuario en 24 h"); el cuarto bloqueo es indefinido y lo cubre
+  `AccountLockedManual`.
+- `AccountLockedManual` (`increase(...{kind="manual"}[5m]) > 0`, crítica
+  [24h]): **aprobado con condición**: la serie del contador debe existir con
+  valor 0 desde el arranque de `app` para todas las combinaciones de
+  etiquetas (`kind` × `purpose`); si la serie nace con el primer incremento,
+  `increase()` no ve el paso de "no existe" a 1 y la primera alerta tras un
+  reinicio no salta. Lo mismo para `auth_verifications_total` (`result` =
+  `rate_limited_ip`/`rate_limited_session`/`invalid`), `csrf_rejected_total`
+  y `staff_privilege_changes_total`. → SEC-024.
+- `SessionPinProbing` (`rate_limited_session` > 0 en 15 min, aviso [24h]):
+  **aprobado**; tras T-20 solo puede venir de `purpose="approval"` (una
+  tablet de sala probando el PIN de un encargado). La sesión propia probando
+  su PIN la delatan `LockoutRepeated` y `AccountLockedManual` con
+  `purpose` = `confirm`/`change`.
+- **Faltan o no cumplen §6.1.7 (→ SEC-024, media, monitoring):**
+  (a) no hay alerta para **cualquier bloqueo de una cuenta de encargado**
+  (§6.1.7, HU-01/CA-N05); `auth_lockouts_total` no tiene la etiqueta de rol.
+  (b) `LockoutSpray` usa 15 min y §6.1.7 pide **1 h**: con el límite de 10
+  fallos/10 min por IP, bloquear a 3 usuarios desde un mismo dispositivo
+  exige 15 fallos y por tanto más de 10 min, así que un rociado desde una
+  sola tablet puede no caer nunca en una ventana de 15 min.
+  `ManagerApprovalFailures` (≥ 3 en 15 min) es más amplia que los 10 min de
+  §6.1.7: aprobado.
+
+**Monitoring/Infrastructure — comandos nuevos del temporizador (condición 2
+de §6.3).** Todos se ejecutan **en el host** por el script del usuario de
+servicio; leer `/proc` desde el host no es montar `/proc` en un contenedor
+(lo prohibido por §3.4), y son datos sin secretos que cualquier usuario del
+host ya puede leer.
+- `date`: **aprobado** solo con formato fijo de salida (`date +%s`,
+  `TZ=Europe/Madrid date +%H%M`, `+%u`); nunca `-s`/`--set` (además
+  fallaría sin `CAP_SYS_TIME`).
+- `/proc/loadavg` y `/proc/meminfo`: **aprobados** con lectura de esas dos
+  rutas fijas (`read`/`cat` o `awk` sobre la ruta literal), exportando solo
+  `load1` (y, si se quiere, `load5`/`load15`) y `MemTotal`/`MemAvailable`
+  (+ `SwapTotal`/`SwapFree`); nunca otras rutas de `/proc` (en particular
+  `/proc/<pid>/*`, que expone entornos y líneas de comandos).
+- `timedatectl show`: **aprobado** solo con propiedades concretas
+  (`timedatectl show -p NTPSynchronized -p TimeUSec --value` o equivalente;
+  `timedatectl show-timesync -p …` si el host usa `systemd-timesyncd`);
+  nunca `set-*` ni `timedatectl` sin subcomando. Funciona por D-Bus
+  (`AF_UNIX`), compatible con `RestrictAddressFamilies=AF_UNIX`.
+- `chronyc tracking`: **aprobado solo como `chronyc -n -c tracking`** y solo
+  si funciona sin ampliar `RestrictAddressFamilies` (por el socket Unix de
+  `chronyd`). Si necesita UDP a `127.0.0.1:323` no se abre `AF_INET` en la
+  unidad: se usa `timedatectl` (`NTPSynchronized`) y `ClockDrift` se basa en
+  ese indicador. Nunca comandos de control de `chronyc` (`makestep`,
+  `settime`, `burst`…), ni añadir el usuario de servicio al grupo `chrony`.
+- Las métricas nuevas siguen la condición 3 (lista cerrada, etiquetas
+  acotadas). Monitoring y Infrastructure actualizan la lista de
+  `docs/infraestructura.md` §11.1 (hoy dice "pendientes de aprobación").
+
+**Infrastructure — `NoNewPrivileges=yes` con `podman` en el temporizador.**
+**Aprobado tal cual.** Que `podman` no pueda ejecutar `newuidmap`/`newgidmap`
+(setuid) y solo se una al espacio de usuarios ya creado por los servicios
+Quadlet es el comportamiento deseado: el temporizador no crea nada y, si no
+hay espacio de usuarios, falla de forma segura (sin métricas →
+`HostMetricsStale`). Condiciones: (1) no se "arregla" relajando
+`NoNewPrivileges`, añadiendo capacidades de fichero a `newuidmap` ni
+ejecutando `podman system migrate`/`podman unshare` desde el script; (2) la
+alerta `HostMetricsStale` debe tener un margen que cubra el arranque del host
+(los Quadlet arrancan después de `OnBootSec=30s`), para que no sea ruido en
+cada reinicio; (3) se prueba en DEMO, incluido un arranque en frío.
+
+**Infrastructure/Monitoring — salida de Alertmanager por `alert-egress`
+filtrada con nftables `meta skuid` hacia 587. Aprobado con condiciones.**
+El filtro por UID es válido en rootless: la salida de las redes de los
+contenedores la hace un proceso del propio usuario (`pasta`/`slirp4netns`),
+así que el paquete sale por la cadena `output` con `skuid` = usuario de
+servicio (en Podman con root no funcionaría: el tráfico se reenvía y no tiene
+socket propietario). Lo filtrado es **todo** el tráfico de ese usuario, no
+solo Alertmanager; por eso:
+1. Tabla de familia `inet` (IPv4 **e** IPv6); política del usuario: aceptar
+   `oif lo`, `ct state established,related`, DNS solo al resolvedor
+   configurado, `tcp dport 587` y **denegar el resto** (con contador o
+   `log` limitado para ver intentos).
+2. Destino del 587: si el proveedor SMTP tiene direcciones estables, limitar
+   a un `set` con sus IP (rellenado en el despliegue); si no, solo el puerto,
+   y se acepta el riesgo residual (exfiltración por 587 a otro servidor) por
+   ser Alertmanager el único contenedor con red no interna.
+3. Solo Alertmanager está en `alert-egress` (y `proxy` en una red con
+   salida solo en la topología B con ACME). Ningún otro contenedor del stack
+   tiene red no interna.
+4. La apertura temporal de 443 para `podman pull` la hace el
+   aprovisionamiento o la cuenta de administración (las reglas nftables
+   necesitan privilegios); el usuario de servicio **no** recibe `sudo` ni
+   permisos sobre nftables. Se cierra al terminar el despliegue y queda
+   registrado.
+5. Alertmanager con TLS verificado hacia el SMTP: `smtp_require_tls: true` y
+   sin `insecure_skip_verify`.
+6. Prueba en DEMO: desde Alertmanager, `587` al servidor SMTP funciona; `443`
+   y `80` a internet y `587` a otra IP (si se usa el `set`) fallan; IPv6
+   igual.
+
+**UX (1.2c, `docs/ux/flujos.md` §10) — pasos de telemetría de `login` y
+`pin_change` previos a la sesión. Aprobado con condiciones (baja, no
+bloquea).** Es preferible a abrir un endpoint de telemetría sin sesión, que
+sería una superficie pública nueva; RS-43 no cambia. Condiciones:
+1. Solo en memoria de la página (nunca `localStorage`, `sessionStorage`,
+   IndexedDB ni cookies); se pierden al recargar o cerrar.
+2. Como mucho 20 pasos y 10 min de antigüedad; lo que exceda se descarta.
+   Se envían en el primer lote tras `succeeded` (login) o `saved`
+   (`pin_change`), dentro de los límites de RS-43 (≤ 50 elementos, ≤ 16 KiB).
+3. Solo los enums ya definidos por UX: sin usuario elegido, sin longitud del
+   PIN, sin eventos por dígito y sin tiempos entre pulsaciones (que podrían
+   revelar patrones del PIN); la hora de cada paso, como mucho al segundo.
+4. Cada paso previo va marcado (p. ej. `pre_session: true`) y Monitoring no
+   lo atribuye al `user_id` de la sesión que lo envía: en una tablet
+   compartida, el abandono o el `locked_shown` puede ser de otra persona. Se
+   usan solo para métricas agregadas.
+5. Al cerrar sesión (o al revocarse), el búfer se vacía: los pasos de una
+   persona no se envían con la sesión de la siguiente.
+
+**Infrastructure — volumen `caddy-data` montado en los ejecutores de
+TESTING** (`docs/infraestructura.md` §9, nota 4). Aceptado con condiciones:
+contiene la clave de la CA de la ejecución, así que (a) `tests/run.sh` lo
+destruye al terminar cada ejecución (`down -v` o `podman volume rm`), de modo
+que la CA es de verdad efímera; (b) la CA raíz de TESTING no se instala nunca
+en un navegador ni en un dispositivo fuera de los contenedores efímeros;
+(c) recomendado (no bloqueante): montar solo `root.crt` en lugar del volumen
+entero. En DEMO/PROD nunca se monta en otro contenedor.
+
 ---
 
 ## 7. Requisitos de seguridad verificables (para Testing)
@@ -519,11 +778,11 @@ contra TESTING/DEMO), **S** estático (SAST/lint/CI), **C** contenedores/host.
 ### Autenticación y PIN
 | ID | Requisito | Verificación |
 |---|---|---|
-| RS-01 | Encargado: PIN de exactamente 6 dígitos; camarero y barra: 4 a 6. Aplica en alta, restablecimiento, cambio propio, promoción a encargado y encargado inicial. Error `400` con la regla | U (tabla de casos en `packages/shared`) + I (cada endpoint) |
+| RS-01 | Encargado: PIN de exactamente 6 dígitos; camarero y barra: 4 a 6. Aplica en alta, restablecimiento, cambio del PIN provisional, promoción a encargado y encargado inicial. Error `400` con la regla | U (tabla de casos en `packages/shared`) + I (cada endpoint) |
 | RS-02 | Reglas de composición de §6.1.2 y lista de PIN prohibidos | U con tabla: 1111, 1234, 9876, 381234, 1212, 123123, 2580, 112233 rechazados; 4831, 739164 aceptados |
 | RS-03 | Bloqueo progresivo 5/10/15/20 de §6.1.3; el contador no se reinicia al expirar el bloqueo; durante el bloqueo no se verifica el PIN | I con reloj inyectable: 25 intentos fallidos → tiempos 5, 15, 60 min y `423 ACCOUNT_LOCKED_MANUAL`; luego PIN correcto sigue rechazado |
 | RS-04 | `managerApproval` fallido suma al contador del encargado; cuenta bloqueada/desactivada/PIN provisional no aprueba; error genérico idéntico en todos los casos | I |
-| RS-05 | 10 fallos/10 min desde una IP → `429` 10 min antes de verificar el hash; 5 aprobaciones fallidas/10 min por sesión → `429` | I (medir que no se llama al hasher) |
+| RS-05 | 10 fallos/10 min desde una IP, sumando login, `managerApproval`, `confirmPin` y `currentPin` → `429` 10 min en todas las rutas de PIN (y en `GET /auth/login-options`) antes de verificar el hash; 5 aprobaciones fallidas/10 min por sesión → `429` | I (medir que no se llama al hasher) |
 | RS-06 | La IP del cliente que usa la app es la que añade Caddy; `X-Forwarded-For` enviado por el cliente se ignora; en TESTING/DEMO/PROD dos dispositivos distintos se ven con IP distinta | D (enviar XFF variable: el límite salta igual) + C (log con dos IP reales) |
 | RS-07 | Usuario inexistente: mismo código, cuerpo y tiempo que PIN erróneo (diferencia de medianas < 50 ms en 100 intentos) | I |
 | RS-08 | argon2id con `m ≥ 19456 KiB, t ≥ 2, p = 1`; *pepper* leído de fichero de secreto; máx. 4 verificaciones simultáneas | U (prefijo del hash) + I (carga: 50 logins simultáneos no superan el límite de memoria del contenedor) |
@@ -537,16 +796,18 @@ contra TESTING/DEMO), **S** estático (SAST/lint/CI), **C** contenedores/host.
 | RS-11 | Token de 256 bits de CSPRNG, nuevo en cada login (una cookie previa enviada por el cliente nunca se reutiliza); en BD solo SHA-256 | I (buscar el token en claro en todas las tablas: 0 resultados) |
 | RS-12 | Inactividad 15 min para camarero y encargado (también si el encargado tiene la cola abierta); exención solo rol `kitchen` con SSE abierto; `ping` y SSE no cuentan como actividad | I con reloj |
 | RS-13 | Caducidad absoluta 12 h para todos los roles; configuración > 12 h → el servidor no arranca | I con reloj + U de `config.ts` |
-| RS-14 | Logout, desactivación, restablecimiento de PIN y cambio de PIN propio (las demás sesiones) → `401` en la siguiente petición y flujo SSE cerrado en ≤ 1 s; cambio de rol → SSE cerrado por el servidor en ≤ 1 s y siguiente petición con el rol nuevo | I |
+| RS-14 | Logout, desactivación, restablecimiento de PIN, cambio obligatorio del PIN provisional (las demás sesiones) y **bloqueo indefinido** (todas las sesiones de la cuenta, sea cual sea el origen de los fallos) → `401` en la siguiente petición y flujo SSE cerrado en ≤ 1 s; una pantalla sin interacción (cola de barra) vuelve al login en ≤ 1 s y no conserva datos en pantalla; cambio de rol → SSE cerrado por el servidor en ≤ 1 s y siguiente petición con el rol nuevo | I + E (cola de barra abierta; 20 logins fallidos con ese usuario desde otro dispositivo → login en ≤ 1 s) |
 | RS-15 | Con `must_change_pin` solo `POST /auth/pin`, `GET /auth/me`, `POST /auth/logout`; el resto, incluido `GET /events`, → `403 PIN_CHANGE_REQUIRED` | I |
 | RS-16 | (Tras SEC-007) anular cobro y acciones de escritura de Personal exigen `confirmPin` del encargado actuante; fallo cuenta para su bloqueo | I |
-| RS-16b | [1.4b, SEC-016] `POST /auth/pin` con `currentPin` erróneo: suma al contador del usuario (escala 5/10/15/20), al límite por IP y al límite de 5 fallos/10 min por sesión (`429`); con la cuenta bloqueada responde `423` sin verificar; al llegar al bloqueo indefinido por fallos desde una sesión propia (`confirmPin`/`currentPin`) se revocan todas las sesiones de la cuenta | I con reloj: 6 `currentPin` erróneos en una sesión → el 6.º recibe `429` sin llamar al hasher; 20 fallos acumulados → `423 ACCOUNT_LOCKED_MANUAL` y la sesión recibe `401` |
+| RS-16b | [1.4b, SEC-016; 1.4c, T-20] `POST /auth/pin` solo con PIN provisional (si no, `403 FORBIDDEN` sin llamar al hasher ni sumar a ningún contador). `currentPin` y `confirmPin` erróneos: `403 PIN_INVALID` / `403 PIN_CONFIRMATION_INVALID`, suman al contador del usuario (escala 5/10/15/20) y al límite por IP; **sin** límite por sesión; con la cuenta bloqueada → `423` sin verificar ni contar; al terminar el bloqueo temporal se puede volver a intentar; al llegar al bloqueo indefinido se revocan todas las sesiones de la cuenta | I con reloj: 5 `currentPin` erróneos → el 5.º `403` y bloqueo de 5 min; 6.º (PIN correcto) → `423 LOCKED` sin llamar al hasher; a los 5 min 1 s, el PIN correcto → `204`. 20 fallos acumulados → `423 ACCOUNT_LOCKED_MANUAL` y la sesión recibe `401`. Sin PIN provisional → `403` y contadores sin cambios |
+| RS-16c | [1.4c, SEC-016] Solo `verifyPin` usa el hasher argon2id | S: test/lint que falla si algún módulo distinto de `auth/verifyPin` importa o recibe el hasher |
+| RS-16d | [1.4c, SEC-025] En `managerApproval`, la respuesta con el encargado bloqueado, inexistente o con PIN erróneo es indistinguible en código, cuerpo y tiempo | I: diferencia de medianas < 50 ms en 100 intentos entre encargado bloqueado y PIN erróneo |
 
 ### Autorización y validación
 | ID | Requisito | Verificación |
 |---|---|---|
 | RS-17 | Denegación por defecto: toda ruta registrada declara un permiso o está en la lista pública (`POST /auth/login`, `GET /auth/login-options`) | S/I: test que recorre las rutas de Fastify y falla si alguna no tiene permiso |
-| RS-18 | Matriz rol × endpoint de `docs/permisos.md` §3 (W, K, M, sin sesión, PIN provisional) | I generado desde `permissions.ts` |
+| RS-18 | Matriz rol × endpoint de `docs/permisos.md` §3 (W, K, M, sin sesión, PIN provisional), incluidas las rutas que no existen (`GET/PATCH /settings` → `404`) | I con la tabla esperada **escrita a mano** desde `docs/permisos.md` §3 (no se importa `permissions.ts`), comprobando que los `403` no tienen efecto; test aparte que compara `permissions.ts` con esa tabla (T-18) |
 | RS-19 | Para el rol `kitchen`, ninguna respuesta REST ni evento SSE contiene claves que casen con `/cents|price|total|amount|tendered|change/i` | I (recorrido recursivo del JSON) |
 | RS-20 | Esquemas zod `.strict()`: campos desconocidos → `400` (p. ej. `unitPriceCents` en líneas, `pinHash`/`failedAttempts`/`lockedUntil` en `PATCH /staff/:id`) | I |
 | RS-21 | UUID de cliente existente con otro dueño o contenido → `409` sin datos del recurso existente | I |
@@ -566,9 +827,10 @@ contra TESTING/DEMO), **S** estático (SAST/lint/CI), **C** contenedores/host.
 ### Logs y auditoría
 | ID | Requisito | Verificación |
 |---|---|---|
-| RS-29 | Ni PIN, ni token, ni cookie en ningún log (`app`, Caddy, `db`, journald): se usa un PIN centinela (p. ej. 908172) en login, aprobación, alta, restablecimiento, cambio propio y peticiones inválidas, y se buscan el centinela y el valor de `sid` en todos los logs → 0 coincidencias. Caddy sin `log_credentials` | I/C |
+| RS-29 | Ni PIN, ni token, ni cookie en ningún log (`app`, Caddy, `db`, journald): se usa un PIN centinela (p. ej. 908172) en login, aprobación, reconfirmación (`confirmPin`), alta, restablecimiento, cambio del PIN provisional (`currentPin` y `newPin`) y peticiones inválidas, y se buscan el centinela y el valor de la cookie `__Host-sid` en todos los logs → 0 coincidencias. Caddy sin `log_credentials` | I/C |
 | RS-29b | El cliente no conserva PIN (propio ni `managerApproval`) en estado, `localStorage` ni `sessionStorage` tras la respuesta | E (inspeccionar almacenamiento) |
-| RS-30 | Eventos de seguridad (sin PIN): `auth.login_failed` (usuario si existe, IP, motivo), `auth.locked` (nivel), `auth.locked_manual`, `auth.unlocked`, `auth.ip_throttled`, `auth.approval_granted`/`auth.approval_failed`, `session.created`/`session.revoked` (motivo), `staff.*`, `payment.voided`, `price.changed` | I |
+| RS-30 | Eventos de seguridad (sin PIN) del catálogo de `docs/logging.md` §3.2, que manda en los nombres: `auth.login.failed`, `auth.verify.locked`, `auth.account.locked` (`lock_kind`, `purpose`), `auth.sessions.revoked`, `auth.verify.rate_limited` (`scope`), `auth.reconfirm.failed`, `auth.pin.change_failed`, `approval.granted`/`approval.failed`, `auth.session.revoked`, `staff.*` (incl. `staff.unlocked`), `payment.voided`, `price.changed` | I |
+| RS-47 | [1.4c, SEC-024] Alertas de §6.1.7: bloqueo de cualquier cuenta de encargado → alerta; ≥ 3 usuarios bloqueados en 1 h → alerta; las series de los contadores de seguridad existen con valor 0 desde el arranque de `app` | I (en `/metrics` tras arrancar, `auth_lockouts_total{kind="manual",…} 0` presente) + D en DEMO (provocar un bloqueo de encargado y uno indefinido tras reiniciar `app`: llegan las dos alertas) |
 | RS-43 | Telemetría (`POST /telemetry`): sesión obligatoria, `Origin`, esquema estricto solo con enums/números, ≤ 16 KiB y ≤ 50 elementos, ≤ 1 petición/30 s por sesión (`429`), no cuenta como actividad, sin importes | I |
 | RS-31 | Los errores de validación de campos `pin`, `currentPin`, `newPin`, `confirmPin`, `managerApproval.pin` no repiten el valor recibido | I |
 
@@ -589,7 +851,7 @@ contra TESTING/DEMO), **S** estático (SAST/lint/CI), **C** contenedores/host.
 | RS-38 | Secretos montados como fichero; `podman inspect` sin secretos en `Env`; `app` no tiene credenciales de `app_owner` ni `postgres`; `migrate` no tiene el *pepper* | C |
 | RS-39 | Trivy o Grype sobre cada imagen: 0 críticas/altas (excepciones solo con aprobación escrita de Cybersecurity en §9); `pnpm audit --prod` sin altas/críticas; `pnpm install --frozen-lockfile` con scripts deshabilitados salvo lista blanca; imágenes base por digest | S/CI |
 | RS-40 | DEV: puertos publicados solo en `127.0.0.1` | C (`ss -ltnp` en el host) |
-| RS-45 | [1.4b, SEC-018] Ningún contenedor de DEV ni de TESTING ve `.secrets/`, ni puede escribir en `.git/` ni en `.claude/` del proyecto | C: `podman-compose exec <svc> ls /workspace/.secrets` vacío o inexistente; `touch /workspace/.git/x` y `touch /workspace/.claude/x` → error en todos los servicios |
+| RS-45 | [1.4b, SEC-018; 1.4c, SEC-023] Ningún contenedor de DEV ni de TESTING ve `.secrets/` (ni vacío por debajo ni copiado: el tmpfs lleva `notmpcopyup`), ni puede escribir en `.git/`, `.claude/`, `CLAUDE.md`, `deploy/`, `docs/`, `tools/`, `.gitignore`, los `compose.*.yaml` ni en ningún fichero que se ejecute en el host (`tests/run.sh` y cualquier otro script de entrada) | C: en cada servicio que monta el proyecto, `ls -la /workspace/.secrets` → denegado o vacío; en `/proc/mounts`, `tmpfs /workspace/.secrets ro,…`; `touch` en cada una de esas rutas y en `tests/run.sh` → error; control: el mismo contenedor sin esos montajes sí lee y escribe. Repetir con las imágenes reales de Playwright/k6/ZAP y con Vite y `pnpm install` reales |
 | RS-46 | [1.4b, SEC-022] El rol `waiter` solo lee cobros y tickets del día de negocio actual; `manager`, de cualquier día | I: `GET /payments/:id` y `/ticket` de un cobro de ayer como W → `404`; como M → `200` |
 | RS-41 | PROD: cortafuegos según §6.2a; SSH solo con clave y sin `root`; `sysctl net.ipv4.ip_unprivileged_port_start` = 80 (o sin tocar si no es host dedicado); usuario de servicio sin `sudo` | C (nmap desde fuera de la red permitida, `sysctl`, `id`) |
 | RS-42 | Copias cifradas (clave pública en el host, privada fuera), fuera del host, restauración probada; *pepper* custodiado aparte de las copias | C (prueba de restauración en DEMO) |
@@ -606,7 +868,7 @@ aún; resultado provisional.
 | 3.1 Motor rootless, `podman-compose`, sin `sudo` ni `docker` | Podman rootless en todos los entornos; Quadlet en PROD | Cumple (verificar RS-36; existe Docker root en la máquina: riesgo T-47) |
 | 3.2 Multi-stage, base mínima por digest, sin secretos en build | `app`: `node:<LTS>-alpine` → distroless; resto, imágenes oficiales por digest | Cumple. Añadir: `pnpm install --frozen-lockfile --ignore-scripts` + reconstrucción explícita solo de `argon2` en la etapa de compilación |
 | 3.2 Escáner sin socket | No especificado | **Requisito:** escanear con Trivy/Grype sobre `podman save` (archivo `.tar` montado en solo lectura) o con el binario en el host; **nunca** montando el socket de Podman en el contenedor del escáner |
-| 3.3 `USER` ≥ 1000 | `app`: distroless `nonroot` (UID 65532, válido); `db` y `proxy`: imágenes oficiales que arrancan como root, se ejecutan con `--user` | Cumple con condiciones: volúmenes `pgdata` y `/data` de Caddy propiedad del UID elegido; Caddy además necesita `/config` escribible (tmpfs o volumen) por el `autosave.json` |
+| 3.3 `USER` ≥ 1000 | `app` y `migrate`: distroless con `USER 1000:1000` numérico (1.3c, SEC-010; no el `nonroot` 65532); `db` y `proxy`: imágenes oficiales que arrancan como root, se ejecutan con `--user 1000:1000` | Cumple con condiciones: volúmenes `pgdata` y `/data` de Caddy propiedad del UID elegido; Caddy además necesita `/config` escribible (tmpfs o volumen) por el `autosave.json` |
 | 3.3 Puertos > 1024 | 3000, 5432, 8080, 8443 | Cumple |
 | 3.3 `HEALTHCHECK` | `app`: exec `node dist/healthcheck.js`. `db` y `proxy`: imágenes oficiales sin `HEALTHCHECK` | **Requisito:** definirlo en compose/Quadlet (`pg_isready` en `db`; petición HTTP local en `proxy`) |
 | 3.4 `cap-drop=ALL`, `no-new-privileges`, solo lectura, límites | Declarado para los tres | Cumple en diseño. **Riesgo a verificar (SEC-009):** el binario de la imagen oficial de Caddy lleva la capacidad de fichero `cap_net_bind_service=+ep`; con `cap-drop=ALL` el `execve` puede fallar con `operation not permitted`. **No** se acepta como arreglo añadir `NET_BIND_SERVICE`; ver SEC-009 |
@@ -637,9 +899,9 @@ aprobar los ficheros de `deploy/` cuando existan.
 | Imágenes por digest | `node`, `postgres` por digest; herramientas locales `pull_policy: never` | `db` y `proxy` por digest; resto por variable obligatoria | Cumple |
 | `HEALTHCHECK` | Containerfile (forma exec) + compose | compose | Cumple |
 | Secretos | ficheros en `/run/secrets`, variables `*_FILE`, ninguno en `environment` | igual, por ejecución | Cumple (SEC-010), **salvo** el montaje del proyecto (SEC-018) |
-| Montaje del proyecto | `./` en `ro` en `api`/`migrate`/`init-manager`, **en `rw` en `web` y `deps`**; incluye `.secrets/`, `.git/` y `.claude/` | `./` en `ro` en los ejecutores; incluye `.secrets/` | **SEC-018 (media)** |
+| Montaje del proyecto | `./` en `ro` en `api`/`migrate`/`init-manager`, **en `rw` en `web` y `deps`**; incluye `.secrets/`, `.git/` y `.claude/` | `./` en `ro` en los ejecutores; incluye `.secrets/` | **SEC-018 (media)**. [1.4c] Corregido y verificado: tmpfs vacío con `notmpcopyup` sobre `.secrets` en los 11 servicios que montan `./`; `.git`, `.claude`, `CLAUDE.md`, `deploy`, `docs`, `tools`, `.gitignore` y compose en `ro` en `web`/`deps`. Queda `tests/` escribible desde `web`/`deps` con `tests/run.sh` ejecutado en el host: **SEC-023 (media)** |
 | Containerfile de DEV | base por digest, `USER 1000:1000`, root solo en construcción, sin secretos | — | Cumple |
-| `10-roles.sh` | sin contraseñas en el log (SEC-015); roles `NOSUPERUSER…`, límites de conexión, `app_backup` | igual | Cumple; **SEC-020 (media)** por `pg_stat_statements` |
+| `10-roles.sh` | sin contraseñas en el log (SEC-015); roles `NOSUPERUSER…`, límites de conexión, `app_backup` | igual | Cumple; **SEC-020 (media)** por `pg_stat_statements`. [1.4c] Corregido y verificado: `SET pg_stat_statements.track_utility = off` en cada bloque y `pg_stat_statements_reset()` al final |
 | `Caddyfile` | — | `admin off`, 8080/8443, RS-26 completo, `-Server`, sin `log_credentials`, `X-Request-Id` propio, 404 a internos, sin `trusted_proxies` | Cumple |
 | Escaneo Trivy/Grype | imagen de herramientas no desplegable | imagen final aún no existe | Pendiente (Etapa 2, RS-39) |
 
@@ -647,6 +909,12 @@ aprobar los ficheros de `deploy/` cuando existan.
 monta el socket ni la red del host. No hay motivo de bloqueo por la regla de
 contenedores. Queda SEC-018 (media) sobre el montaje del proyecto, y el
 escaneo de imágenes sigue pendiente hasta que exista la imagen final.
+
+**Veredicto (1.4c):** igual que en 1.4b sobre los compose actuales (revisados
+servicio a servicio, incluidos los perfiles `setup`, `unit`, `integration`,
+`e2e`, `perf` y `security`). SEC-018 y SEC-020 verificados; queda SEC-023
+(media, `tests/run.sh` escribible). Ningún motivo de bloqueo por la regla de
+contenedores. El escaneo de imágenes (RS-39) sigue pendiente de la Etapa 2.
 
 ---
 
@@ -748,6 +1016,7 @@ escaneo de imágenes sigue pendiente hasta que exista la imagen final.
 - Cómo corregir: `podman secret` con `type=mount` (ficheros en `/run/secrets/`, modo 0400, propiedad del UID del contenedor); variables `*_FILE` con la ruta. Reparto según `docs/permisos.md` §7.
 - Cómo verificar: RS-38.
 - Estado: corregido (1.4b). Secretos como fichero en `/run/secrets` con variables `*_FILE`, ninguno en `environment` (comprobado en `compose.dev.yaml`, `compose.test.yaml` y en la configuración resuelta); reparto por servicio igual que `docs/permisos.md` §7. **Pero** el montaje del proyecto en todos los servicios de DEV y en los ejecutores de TESTING expone `.secrets/dev/` completo a cualquier contenedor (anula el reparto): **SEC-018**. Para PROD (Quadlet), el `uid` del secreto debe ser el UID real del contenedor (la imagen final distroless usa 65532 según `docs/permisos.md` §8.1, mientras §5 de infraestructura pone `uid=1000`): alinear al crear `deploy/app/Containerfile`; nunca resolverlo con modo 0444. Pasa a "verificado" con RS-38 en TESTING.
+  **[1.4c] Resto corregido en diseño:** el SE fija `USER 1000:1000` numérico y `COPY --chown=1000:1000` en la imagen de `app`/`migrate` (ADR-001, `docs/arquitectura.md` §10 y §15), ejecución `--user 1000:1000` / `User=1000`, y secretos `type=mount,uid=1000,gid=1000,mode=0400` (`docs/infraestructura.md` §5); el desajuste con 65532 desaparece y no se usa 0444. La parte de DEV/TESTING (reparto real por contenedor) queda cubierta con SEC-018 verificado. Estado: **corregido**; pasa a verificado con RS-38 en TESTING cuando exista `deploy/app/Containerfile` (Etapa 2): el proceso de `app` lee su secreto y otro UID no.
 
 ## SEC-011: Copias de seguridad y *pepper*
 - Severidad: media
@@ -803,7 +1072,7 @@ escaneo de imágenes sigue pendiente hasta que exista la imagen final.
 - Responsable: software-engineer (ADR-005 revisión (b), `docs/arquitectura.md` §5, §5.1 y §7). Developer en Etapa 2.
 - Cómo corregir: (1) en ADR-005 (b) y arquitectura §7, cambiar "10 fallos (login + aprobaciones + reconfirmaciones)" por "10 fallos de **cualquier verificación de PIN** (login, aprobaciones, reconfirmaciones y `currentPin` de `POST /auth/pin`)", y "Aprobaciones y reconfirmaciones: … 5 fallos por sesión en 10 min" por "Aprobaciones, reconfirmaciones y cambio de PIN propio: mismo contador del usuario cuyo PIN se verifica; 5 fallos por sesión en 10 min → `429`"; (2) en §5.1, fila `POST /auth/pin`, añadir los errores `403 PIN_INVALID` (genérico), `423` y `429`; (3) añadir: "si la cuenta llega a `locked_manual` por fallos desde una sesión propia (`confirmPin`/`currentPin`), se revocan todas sus sesiones". Recomendado: una sola función `verifyPin(user, pin, ctx)` que aplique límite por IP, límite por sesión, bloqueo y contador, y que sea la única forma de llamar al hasher (así una ruta nueva no se olvida del límite).
 - Cómo verificar: Cybersecurity revisa ADR-005 y la arquitectura; en Etapa 2/3, RS-16b.
-- Estado: abierto (**bloquea la puerta de la Etapa 1**; el arreglo es de redacción en dos documentos)
+- Estado: **verificado** (documentos, 1.4c). `docs/arquitectura.md` §5 (aprobaciones, reconfirmación y cambio del PIN provisional por `verifyPin`), §5.1 (`POST /auth/pin` solo con `mustChangePin = true`, si no `403` sin verificar; `403 PIN_INVALID`, `423 LOCKED`, `423 ACCOUNT_LOCKED_MANUAL`, `429`), §7 (función única `verifyPin`, único componente con el hasher; límite por IP de todas las verificaciones; bloqueo sin hash ni conteo; contador del usuario cuyo PIN se verifica; revocación de todas las sesiones al llegar a `locked_manual` por cualquier vía), §13 y §15; ADR-005 revisión (c). Las cuatro propuestas están incorporadas y la revocación se amplió a todo bloqueo indefinido, que se acepta (§6.4). **Ya no bloquea la puerta.** Cambio de coherencia pendiente, no bloqueante: T-20 (opción A, §6.4) en `docs/arquitectura.md` §7 y ADR-005 (software-engineer). Resto aparte: SEC-025 (baja). En Etapa 2/3: RS-16b, RS-16c, RS-16d.
 
 ## SEC-017: `confirmPin` falta en las listas de redacción de logs
 - Severidad: media
@@ -812,7 +1081,7 @@ escaneo de imágenes sigue pendiente hasta que exista la imagen final.
 - Responsable: monitoring (`docs/logging.md` §4.1 y §4.3) y software-engineer (`docs/arquitectura.md` §11)
 - Cómo corregir: añadir `confirmPin` y `*.confirmPin` a la lista de §4.3 y a la tabla de §4.1 de `docs/logging.md`, y `confirmPin` a la lista de §11 de la arquitectura. Regla general recomendada: redactar cualquier clave que case con `/pin/i`.
 - Cómo verificar: RS-29 (el PIN centinela se envía también como `confirmPin` en anular cobro, alta, reset y desbloqueo) y RS-31.
-- Estado: abierto
+- Estado: **verificado** (documentos, 1.4c). `docs/logging.md` §4.1 (prohibido el valor de cualquier clave que case con `/pin/i`, `confirmPin` incluido), §4.3 (a) (`confirmPin` y `*.confirmPin` en las rutas fijas, cookie `__Host-sid`) y (b) (función recursiva por nombre de clave `/pin/i`, a cualquier profundidad, también en `err` y en los *bindings*, sin excepciones; `provisional_credential` en lugar de `must_change_pin`), §4.5 (centinela también como `confirmPin`, test unitario de la regla); `docs/arquitectura.md` §11 con la misma regla y remisión a logging. En Etapa 2/3: RS-29, RS-31 y el test de `docs/logging.md` §4.5.
 
 ## SEC-018: El montaje del proyecto expone `.secrets/` y permite escribir en `.git/` y `.claude/` desde contenedores
 - Severidad: media
@@ -821,7 +1090,7 @@ escaneo de imágenes sigue pendiente hasta que exista la imagen final.
 - Responsable: infrastructure
 - Cómo corregir: en los servicios que montan `./`, ocultar lo que no necesitan, p. ej. añadir después del montaje del proyecto `- type: tmpfs, target: /workspace/.secrets, tmpfs: {size: 1k, mode: 0}` (o un volumen vacío en `ro`), y montar `./.git` y `./.claude` en `ro` encima (`- ./.git:/workspace/.git:ro`, `- ./.claude:/workspace/.claude:ro`) en `web` y `deps`; en los ejecutores de TESTING, ocultar `.secrets/` igual. Alternativa más limpia: montar solo lo necesario (`apps/`, `packages/`, `tests/`, `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig*.json`, `node_modules/`). Documentarlo en `docs/infraestructura.md` §3 y §7.
 - Cómo verificar: RS-45.
-- Estado: abierto
+- Estado: **verificado** (DEV y `runner-unit`, 1.4c). Configuración: los 11 servicios que montan `./` (DEV: `api`, `web`, `deps`, `migrate`, `init-manager`; TESTING: `runner-unit`, `runner-integration`, `runner-security`, `zap`, `runner-e2e`, `runner-perf`) llevan `tmpfs /workspace/.secrets:ro,nosuid,nodev,noexec,size=4k,mode=0000,notmpcopyup`; `web` y `deps` vuelven a montar en `ro` `.git`, `.claude`, `CLAUDE.md`, `deploy/`, `docs/`, `tools/`, `.gitignore` y los dos compose; los ejecutores de TESTING montan el proyecto en `ro`. `notmpcopyup` es **obligatorio** (RS-45): sin él Podman copia al tmpfs el contenido de `.secrets/` que hay debajo y el arreglo anularía su propio objetivo; Infrastructure lo comprobó (la copia falló por falta de espacio). Prueba real de Infrastructure (`docs/infraestructura.md` §15) con control negativo, que acepto como verificación de RS-45. Pendiente: repetir RS-45 con las imágenes reales de Playwright/k6/ZAP y con Vite y `pnpm install` reales (Etapa 2). Resto detectado: **SEC-023** (`tests/` sigue escribible desde `web`/`deps` y `tests/run.sh` se ejecuta en el host).
 
 ## SEC-019: En la topología B el límite "por dispositivo" bloquea a todo el local
 - Severidad: media
@@ -830,7 +1099,7 @@ escaneo de imágenes sigue pendiente hasta que exista la imagen final.
 - Responsable: infrastructure (§12.1)
 - Cómo corregir: en §12.1 B, preferir **WireGuard con un *peer* por dispositivo** (cada tablet con su IP de túnel, que `app` ve como IP de origen); si se usa lista blanca de IP pública sin túnel por dispositivo, documentar que el límite por IP es de todo el local y que eso exige la aprobación expresa del humano en la Etapa 5, con la alerta de `429` ya prevista en §6.1.7. No hace falta cambiar las historias mientras la topología A sea la elegida.
 - Cómo verificar: en DEMO/PROD con la topología B, dos dispositivos aparecen con IP distinta en los logs de `app` (RS-06).
-- Estado: abierto (no aplica si PROD usa la topología A)
+- Estado: **corregido** (diseño, 1.4c). `docs/infraestructura.md` §12.1: B1 (WireGuard con un *peer* y una `/32` por dispositivo, `AllowedIPs` limitado, 80/443 solo desde `wg0`, IP de túnel = dispositivo) es la única variante propuesta para PROD en VM; B2 (IP compartida) solo con aprobación expresa del humano en la Etapa 5, registrada en `docs/estado.md`. Condición añadida: en B1, la clave privada de cada dispositivo no sale de él, y un dispositivo perdido se revoca quitando su *peer* (ya previsto). No aplica si PROD usa la topología A. Pasa a verificado con RS-06 en DEMO/PROD si se elige B.
 
 ## SEC-020: Las sentencias `CREATE ROLE … PASSWORD` pueden quedar en `pg_stat_statements`
 - Severidad: media
@@ -839,7 +1108,7 @@ escaneo de imágenes sigue pendiente hasta que exista la imagen final.
 - Responsable: infrastructure
 - Cómo corregir: añadir `SET pg_stat_statements.track_utility = off;` junto a los otros `SET` al inicio de cada bloque `psql` de `10-roles.sh` (requiere superusuario, que es quien lo ejecuta), o enviar el verificador SCRAM ya calculado en lugar de la contraseña. Ejecutar `SELECT pg_stat_statements_reset();` al final de la inicialización como medida adicional.
 - Cómo verificar: RS-44 sobre un volumen de DEV nuevo.
-- Estado: abierto
+- Estado: **verificado** (1.4c). `deploy/db/initdb/10-roles.sh`: `SET pg_stat_statements.track_utility = off` junto a los `SET log_*` en los dos bloques que llevan `PASSWORD` (antes de leer las contraseñas) y `SELECT pg_stat_statements_reset()` al final. Prueba de Infrastructure con RS-44 en BD efímera: 4 sentencias con contraseña antes, 0 después (también tras reiniciar `db`) y 0 en logs. Resto conocido: el volumen DEV `mi-app-dev_pgdata`, creado antes del arreglo, conserva 3 sentencias con contraseña en `pg_stat_statements`, solo visibles para `postgres` (en DEV no existe el rol `monitoring`); riesgo bajo (secretos solo de DEV). Recomendado: con aprobación del humano (borra datos de DEV), recrear el volumen (`down -v`) o ejecutar `SELECT pg_stat_statements_reset()` como `postgres`, y regenerar las contraseñas de DEV si se quiere descartar cualquier exposición.
 
 ## SEC-021: Nombre de la cookie de sesión sin prefijo `__Host-`
 - Severidad: baja
@@ -848,7 +1117,7 @@ escaneo de imágenes sigue pendiente hasta que exista la imagen final.
 - Responsable: software-engineer
 - Cómo corregir: en ADR-005 y arquitectura §7, cookie `__Host-sid` con `HttpOnly; Secure; SameSite=Strict; Path=/`, sin `Domain` ni `Max-Age`/`Expires`.
 - Cómo verificar: RS-10.
-- Estado: abierto
+- Estado: **verificado** (documentos, 1.4c). ADR-005 (sección "Decisión" y revisión (c)) y `docs/arquitectura.md` §7: `__Host-sid` con `HttpOnly; Secure; SameSite=Strict; Path=/`, sin `Domain` ni `Max-Age`/`Expires`; `docs/logging.md` §4.1 y §4.3 redactan `__Host-sid`. En Etapa 2/3: RS-10.
 
 ## SEC-022: El camarero puede leer cobros y tickets de cualquier día
 - Severidad: baja
@@ -857,11 +1126,58 @@ escaneo de imágenes sigue pendiente hasta que exista la imagen final.
 - Responsable: software-engineer
 - Cómo corregir: en §5.1, para el rol W, `GET /payments/:id` y `GET /payments/:id/ticket` solo devuelven cobros con fecha de negocio de hoy (`404` si no); M sin restricción. Recogido en `docs/permisos.md` §3.2.
 - Cómo verificar: RS-46.
-- Estado: abierto
+- Estado: **verificado** (documentos, 1.4c). `docs/arquitectura.md` §5.1 (`GET /payments/:id` y `/ticket`: W solo si `payments.business_date = businessDate(clock.now())`, si no `404 NOT_FOUND` igual que un id inexistente; M cualquier día) y §7 (matriz); `docs/permisos.md` §3.2. En Etapa 2/3: RS-46.
+
+## SEC-023: `tests/run.sh` y otros ficheros que se ejecutan en el host siguen siendo escribibles desde `web` y `deps`
+- Severidad: media
+- Ubicación: compose.dev.yaml:207 (`web`, `./:/workspace:rw`) y :248 (`deps`, ídem); docs/infraestructura.md §7, excepción 2 ("riesgo residual aceptado: … `tests/` sigue siendo escribible"); docs/testing.md:150 y :871 (`tests/run.sh`, punto de entrada que se ejecuta en el host)
+- Descripción: SEC-018 vuelve a montar en `ro` lo que se ejecuta en el host (`.git`, `.claude`, `deploy/`, `tools/`…), pero `tests/` queda escribible desde `web` y `deps`, y `tests/run.sh` será el punto de entrada de todas las suites que el Orquestador y Testing ejecutan **en el host** (`docs/testing.md` §7.3). Código de terceros dentro de `deps` (scripts de instalación permitidos) o de `web` (plugins de Vite) puede modificar `tests/run.sh` y conseguir ejecución en la cuenta del usuario fuera del contenedor, que es la misma salida del aislamiento que cerró SEC-018 para `.git/hooks`. El argumento de la excepción ("no se ejecuta solo en el host y se ve en `git diff`") no vale para `run.sh`: se ejecuta antes de que nadie mire el diff, y un cambio en un fichero que se modifica a menudo pasa desapercibido. Lo mismo vale para cualquier fichero nuevo en la raíz que una herramienta del host ejecute al abrir el directorio (p. ej. `.envrc` de direnv, `.vscode/tasks.json`). Impacto limitado a la máquina de desarrollo (amenaza T-20 de §5.2, actor X8), de ahí media.
+- Responsable: infrastructure (compose y `docs/infraestructura.md` §7) y testing (ubicación de `run.sh`)
+- Cómo corregir: (1) que todo script que se ejecute en el host esté en una ruta que `web`/`deps` montan en `ro`: mover el punto de entrada a `tools/` (p. ej. `tools/run-tests.sh`, ya en `ro`), o montar `./tests/run.sh:/workspace/tests/run.sh:ro` en `web` y `deps` en cuanto exista el fichero (si no existe, `podman-compose` crearía un directorio); (2) añadir a `docs/infraestructura.md` §7 la regla "ningún fichero que se ejecute en el host queda escribible desde un contenedor" y aplicarla a cada script nuevo; (3) recomendado: montar en `web`/`deps` solo lo que necesitan (`apps/`, `packages/`, `tests/` salvo sus scripts de host, `node_modules/`, `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig*.json`) en lugar de `./` entero, para que un fichero nuevo en la raíz no quede escribible por defecto.
+- Cómo verificar: RS-45 ampliado (`touch /workspace/tests/run.sh` o el script que se elija → error en `web` y `deps`).
+- Estado: abierto (media, no bloquea; debe estar corregido antes de crear `tests/run.sh` en la Etapa 2)
+
+## SEC-024: Alertas de seguridad que no cumplen §6.1.7
+- Severidad: media
+- Ubicación: docs/logging.md §7.4 (línea 950, `LockoutSpray` en 15 min; falta alerta de bloqueo de encargado), §6.3 (línea 604, `auth_lockouts_total` sin etiqueta de rol), §7.4 (línea 949, `AccountLockedManual` con `increase()`); docs/historias/HU-01-iniciar-sesion-por-rol.md CA-N05
+- Descripción: (a) §6.1.7 y HU-01/CA-N05 exigen una alerta en **cualquier bloqueo de una cuenta de encargado** (el objetivo valioso de T-01); no hay ninguna regla que la produzca y la métrica `auth_lockouts_total` no permite distinguir el rol. Hoy el primer bloqueo de 5 min del encargado solo avisaría si se repite en 24 h. (b) `LockoutSpray` usa una ventana de 15 min y §6.1.7 pide 1 h: con el límite de 10 fallos/10 min por IP, bloquear a 3 usuarios desde un mismo dispositivo exige 15 fallos y más de 10 min, de modo que un rociado desde una sola tablet puede no caer nunca en la ventana. (c) Las alertas con `increase(contador[5m]) > 0` no saltan con el **primer** incremento de una serie que no existía (Prometheus no ve el paso de "sin serie" a 1); tras cada reinicio de `app` el primer bloqueo indefinido, el primer `429` por sesión o el primer rechazo CSRF pasarían sin alerta.
+- Responsable: monitoring (`docs/logging.md` §6.3 y §7.4); developer en la Etapa 2 (inicializar las series)
+- Cómo corregir: (a) añadir la etiqueta `target_role` (`waiter` \| `kitchen` \| `manager`) a `auth_lockouts_total` y la alerta `ManagerLocked`: `increase(auth_lockouts_total{target_role="manager"}[5m]) > 0`, crítica **[24h]** (o la misma condición en Loki sobre `auth.account.locked` con `target_role`); (b) `LockoutSpray` con ventana de **1 h**; (c) en `docs/logging.md` §6, regla: todos los contadores usados en alertas se crean con valor 0 al arrancar `app` para cada combinación de etiquetas de enum (`auth_lockouts_total`, `auth_verifications_total`, `csrf_rejected_total`, `staff_privilege_changes_total`, `auth_pin_change_rejected_total`), y Testing lo comprueba leyendo `/metrics` tras el arranque. Además, ajustar el texto de `SessionPinProbing` al dictamen T-20 (solo `purpose="approval"`).
+- Cómo verificar: RS-47.
+- Estado: abierto (media, no bloquea)
+
+## SEC-025: Diferencia de tiempo que revela que el encargado elegido está bloqueado
+- Severidad: baja
+- Ubicación: docs/arquitectura.md:705-710 (`verifyPin` paso 3: cuenta bloqueada → sin calcular el hash; en `managerApproval`, error genérico) y :504-507; ADR-005 revisión (c), paso 3
+- Descripción: en una aprobación de HU-06 con el encargado bloqueado, `verifyPin` responde el error genérico `403 MANAGER_APPROVAL_INVALID` sin calcular el hash (~0 ms), mientras que un PIN erróneo tarda 100–250 ms. El camarero puede saber así si el encargado está bloqueado y cuándo termina el bloqueo, aunque HU-06/CA-F18 y la arquitectura quieren no revelarlo. El impacto es bajo (lo sabría quien provocó el bloqueo y el contador no se reinicia), pero contradice el propio diseño y RS-07. No se debe resolver calculando un hash real durante el bloqueo, porque esos intentos no cuentan y se convertirían en una forma de gastar CPU sin límite (T-36).
+- Responsable: software-engineer (`docs/arquitectura.md` §7 y ADR-005) y developer (Etapa 2)
+- Cómo corregir: para `purpose = "approval"` con la cuenta bloqueada, igualar el tiempo de respuesta sin calcular el hash (esperar hasta la duración típica de una verificación, medida al arrancar, más una variación aleatoria pequeña), y lo mismo en el caso "acierto + encargado desactivado o con PIN provisional" si su tiempo difiere. Para `confirm`/`change` no hace falta: el `423` ya es explícito para el titular.
+- Cómo verificar: RS-16d.
+- Estado: abierto (baja, no bloquea)
 
 ---
 
-### Resumen para la puerta de la Etapa 1 (revisión 1.4b, 2026-11-23)
+### Resumen para la puerta de la Etapa 1 (revisión 1.4c, 2026-11-23)
+- **Altos o críticos abiertos: ninguno.** SEC-016 (alta) **verificado**:
+  `verifyPin` única con límite por IP, bloqueo y revocación, y `POST /auth/pin`
+  solo para el PIN provisional. SEC-001 (alta) verificado y SEC-002 (alta)
+  corregido en diseño (se verifica con RS-41 en DEMO/PROD).
+- Verificados en 1.4c: SEC-016, SEC-017, SEC-018 (DEV y `runner-unit`),
+  SEC-020, SEC-021, SEC-022. Corregidos en diseño (pasan a verificado en un
+  entorno posterior): SEC-010 (RS-38 en TESTING), SEC-019 (RS-06 si PROD usa
+  la topología B).
+- Abiertos que no bloquean: SEC-003 (media), **SEC-023** (media, infrastructure
+  + testing), **SEC-024** (media, monitoring), **SEC-025** (baja,
+  software-engineer).
+- Dictámenes de §6.4: SEC-016 (revocación ampliada, `403 PIN_INVALID`, solo PIN
+  provisional, `423` sin contar), T-20 (opción A), HU-01/CA-F13 (tres puntos
+  confirmados), T-14, T-18, umbrales de §7.4, comandos del temporizador,
+  `NoNewPrivileges`, `alert-egress` con nftables, telemetría previa a la
+  sesión y `caddy-data` en TESTING.
+- Contenedores: ningún contenedor como root, `--privileged`, socket montado ni
+  red del host (§8.1, veredicto 1.4c). Escaneo de imágenes: Etapa 2.
+
+### Resumen para la puerta de la Etapa 1 (revisión 1.4b, 2026-11-23; histórico, sustituido por el de 1.4c)
 - **Altos abiertos (bloquean la puerta):** **SEC-016** (`currentPin` sin
   límite; responsable software-engineer; arreglo de redacción en ADR-005 y
   `docs/arquitectura.md` §5/§5.1/§7).

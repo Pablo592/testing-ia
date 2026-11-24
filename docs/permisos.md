@@ -2,17 +2,20 @@
 
 > Responsables: Cybersecurity (con Developer). Versión de Etapa 1, 2026-11-21;
 > revisión 1.4b, 2026-11-23 (rutas de la revisión 1.3b del SE, §3.4; HU-09
-> fuera del MVP por decisión del humano).
+> fuera del MVP por decisión del humano); revisión 1.4c, 2026-11-23 (ajuste a
+> la revisión 1.3c del SE: `verifyPin`, `POST /auth/pin` solo para el PIN
+> provisional, sin tabla ni eventos de ajustes, UID 1000:1000; T-20).
 > Fuentes: `docs/historias/` (HU-01..HU-08), `docs/arquitectura.md` §5 y §7,
 > ADR-003, ADR-005, `docs/seguridad.md` (decisiones §6 y hallazgos SEC-xxx).
 > **Pendiente:** revisión conjunta con Developer al empezar la Etapa 2. La
 > fuente ejecutable será `packages/shared/permissions.ts`; si difiere de este
 > documento, manda este documento hasta que ambos se corrijan.
 >
-> Los elementos marcados **[SEC-xxx]** dependen de un hallazgo abierto que aún
-> no está incorporado a historias/arquitectura. En 1.4b quedan abiertos
-> SEC-016 (`currentPin`) y SEC-022 (cobros del día para el camarero); SEC-001,
-> SEC-005 y SEC-007 ya están incorporados y se quitan sus marcas.
+> Los elementos marcados **[SEC-xxx]** o **[T-xx]** dependen de un cambio que aún
+> no está en historias/arquitectura. En 1.4c SEC-016, SEC-021 y SEC-022 ya
+> están incorporados (se quitan sus marcas). Queda **[T-20]**: el límite por
+> sesión solo para aprobaciones (`docs/seguridad.md` §6.3, dictamen T-20),
+> pendiente de que el SE lo pase a `docs/arquitectura.md` §7 y ADR-005.
 
 ## 1. Roles
 
@@ -20,7 +23,7 @@
 |---|---|---|---|
 | `waiter` — Camarero/cajero | Lucía | Tomar, modificar, cancelar (en "Pendiente") y cobrar pedidos; marcar agotados | Tablet 10", TPV |
 | `kitchen` — Barra/cocina | Javi | Ver la cola y cambiar el estado de preparación. **No ve importes** | Pantalla fija 15"+ |
-| `manager` — Encargado | Marta | Todo lo anterior + menú, personal, anulaciones, aprobaciones, ajustes y resumen | Cualquiera, PC |
+| `manager` — Encargado | Marta | Todo lo anterior + menú, personal, anulaciones, aprobaciones y resumen (los ajustes de HU-09 no están en el MVP) | Cualquiera, PC |
 | `system` (no es un rol de usuario) | Operador del host | Comandos `create-initial-manager` y `unlock-user`; actor en auditoría | Host, `podman exec` sin root |
 
 Estados de cuenta que **restringen** cualquier rol (se evalúan antes del RBAC):
@@ -29,7 +32,8 @@ Estados de cuenta que **restringen** cualquier rol (se evalúan antes del RBAC):
 |---|---|
 | Sin sesión | Solo rutas públicas (§3.1) |
 | `active = false` | No puede iniciar sesión (`403 USER_DISABLED` solo con PIN correcto); sesiones revocadas |
-| Bloqueada (`locked_until` o bloqueo indefinido) | No puede iniciar sesión ni aprobar (`423`) |
+| Bloqueo temporal (`locked_until > now`) | No puede iniciar sesión (`423 LOCKED`) ni aprobar (error genérico `403 MANAGER_APPROVAL_INVALID`). Una sesión ya abierta sigue (HU-01/CA-F12), pero su `confirmPin`/`currentPin` recibe `423 LOCKED {retryAfterSeconds}` sin verificar ni contar |
+| Bloqueo indefinido (`locked_manual`) | Igual que el anterior con `423 ACCOUNT_LOCKED_MANUAL`; además, al llegar a él **se revocan todas las sesiones de la cuenta**, venga el fallo de donde venga (HU-01/CA-F13) |
 | `must_change_pin = true` | Solo `POST /auth/pin`, `GET /auth/me`, `POST /auth/logout` (`403 PIN_CHANGE_REQUIRED` en el resto, incluido SSE) |
 
 ## 2. Principios
@@ -38,8 +42,8 @@ Estados de cuenta que **restringen** cualquier rol (se evalúan antes del RBAC):
    (test RS-17). La lista pública es cerrada (§3.1).
 2. **Autoridad en el servidor:** la UI usa la matriz solo para ocultar opciones.
 3. **Mínimo privilegio:** `kitchen` no tiene ningún permiso de pedidos fuera de
-   la preparación ni recibe importes; `waiter` no gestiona menú, personal,
-   ajustes ni informes; las acciones que mueven dinero hacia atrás (anular) o
+   la preparación ni recibe importes; `waiter` no gestiona menú, personal
+   ni informes; las acciones que mueven dinero hacia atrás (anular) o
    cambian identidades solo las hace `manager`, con PIN reconfirmado (SEC-007).
 4. **Separación de funciones:** acciones de riesgo de un `waiter` sobre pedidos
    ya en preparación exigen la aprobación presencial de un `manager`
@@ -70,11 +74,11 @@ Caddy responde `404` a los tres y el 9464 no se publica ni se enruta.
 | Permiso | Ruta(s) | W | K | M | Historia | Condiciones |
 |---|---|---|---|---|---|---|
 | `session:self` | `POST /auth/logout`, `GET /auth/me` | ✓ | ✓ | ✓ | HU-01 | Permitidas también con PIN provisional |
-| `session:self` | `POST /auth/pin` | ✓ | ✓ | ✓ | HU-07 | Exige `currentPin`; regla de PIN por rol; revoca las demás sesiones del usuario. **[SEC-016]** Los fallos de `currentPin` cuentan para el bloqueo del usuario, el límite por IP y el de 5 fallos/10 min por sesión |
+| `session:self` | `POST /auth/pin` | ✓ (solo con PIN provisional) | ✓ (ídem) | ✓ (ídem) | HU-07/CA-F04, CA-F09 | **Solo el cambio obligatorio del PIN provisional** (`must_change_pin = true`); sin PIN provisional → `403 FORBIDDEN` sin verificar nada ni sumar a ningún contador. Exige `currentPin` (pasa por `verifyPin`: contador del usuario y límite por IP; `403 PIN_INVALID`, `423 LOCKED`, `423 ACCOUNT_LOCKED_MANUAL`, `429`); regla de PIN por rol; revoca las demás sesiones del usuario. No hay cambio voluntario del PIN en el MVP |
 | `session:self` | `POST /session/activity` | ✓ | ✓ | ✓ | HU-01 | Máx. 1/min |
 | `events:subscribe` | `GET /events` | ✓ | ✓ (K) | ✓ | HU-03, HU-05 | Máx. 2 flujos por sesión |
 | `menu:read` | `GET /menu` | ✓ | ✓ (K, sin precios) | ✓ | HU-02, HU-05 | |
-| (sin permiso propio) | `GET /auth/me` → `localConfig` y evento `settings.updated` | W `{tableCount}` | K `{delayThresholdMinutes}` | ambos | HU-02, HU-03 | Cada rol recibe solo el valor que usa (1.4b) |
+| (sin permiso propio) | `GET /auth/me` → `localConfig` (configuración de instalación de solo lectura: `TABLE_COUNT`, `DELAY_THRESHOLD_MINUTES`) | W `{tableCount}` | K `{delayThresholdMinutes}` | ambos | HU-02, HU-03 | Cada rol recibe solo el valor que usa. Barra lo recibe además en `GET /kitchen/queue`. No hay evento SSE de ajustes (cambian solo con un reinicio de `app`) |
 | `product:set_availability` | `PATCH /products/:id/availability` | ✓ | ✗ | ✓ | HU-05 | Solo el campo `available` |
 | `menu:manage` | `POST/PATCH/DELETE /categories…`, `POST/PATCH /products…`, `PUT /menu/order` | ✗ | ✗ | ✓ | HU-05 | Cambio de precio auditado |
 | `order:read` | `GET /orders/floor`, `GET /orders/:id`, `GET /tables/:n/open-orders` | ✓ | ✗ | ✓ | HU-02, HU-03, HU-04 | Todos los pedidos del local (no solo los propios): es un requisito de sala (supuesto 19). Serializador `toStaffDto` (con importes): nunca para `kitchen` |
@@ -88,25 +92,29 @@ Caddy responde `404` a los tres y el 9464 no se publica ni se enruta.
 | `kitchen:read` | `GET /kitchen/queue` | ✗ | ✓ (K) | ✓ (K) | HU-03 | Sin importes para nadie en esta ruta |
 | `kitchen:transition` | `POST /orders/:id/prep` (`action: start \| ready \| undo`), `POST /orders/:id/kitchen-ack` | ✗ | ✓ | ✓ | HU-03 | Transición validada en servidor; `undo` solo deshace la última transición `start`/`ready` de ese pedido y en ≤ 30 s (reloj del servidor); auditado |
 | `payment:create` | `POST /payments` | ✓ | ✗ | ✓ | HU-04 | Importe del servidor; `expectedTotalCents` |
-| `payment:read` | `GET /payments/today`, `GET /payments/:id`, `GET /payments/:id/ticket` | ✓ (solo cobros del día de negocio actual **[SEC-022]**) | ✗ | ✓ | HU-04 | Para W, un cobro de otro día → `404` |
+| `payment:read` | `GET /payments/today`, `GET /payments/:id`, `GET /payments/:id/ticket` | ✓ (solo cobros del día de negocio actual, SEC-022) | ✗ | ✓ | HU-04 | Para W, un cobro de otro día → `404 NOT_FOUND`, la misma respuesta que un id inexistente (RS-46) |
 | `payment:void` | `POST /payments/:id/void` | ✗ | ✗ | ✓ **P** | HU-04 | Motivo ≥ 5 caracteres; cobro completo |
 | `staff:read` | `GET /staff` | ✗ | ✗ | ✓ | HU-07 | Nunca devuelve `pin_hash`, `failed_attempts` ni datos de sesión |
 | `staff:manage` | `POST /staff`, `PATCH /staff/:id` (nombre, rol, activo) | ✗ | ✗ | ✓ **P** | HU-07 | `409 LAST_MANAGER`; promoción a encargado con PIN < 6 → `must_change_pin`. `PATCH` **sin** `confirmPin` solo si el cuerpo contiene únicamente `name` (si trae `role` o `active`, aunque no cambien, lo exige); cambio de nombre auditado con valor anterior y nuevo |
 | `staff:manage` | `POST /staff/:id/reset-pin` | ✗ | ✗ | ✓ **P** | HU-07 | Revoca sesiones del usuario; reinicia contador y bloqueo |
 | `staff:unlock` | `POST /staff/:id/unlock` | ✗ | ✗ | ✓ **P** | HU-07 | Pone el contador a 0 y quita `locked_until`/`locked_manual`; auditado |
 | `approval:request` | `GET /staff/managers` | ✓ | ✗ | ✓ | HU-06 | Solo `[{id, name}]` de encargados **activos** (no filtra por bloqueo ni PIN provisional, para no revelar ese estado; el servidor rechaza con el error genérico) |
-| `settings:read`, `settings:manage` | `GET /settings`, `PATCH /settings` | ✗ | ✗ | (✓) | HU-09 | **No se registran en el MVP** (HU-09 fuera, decisión del humano 2026-11-23): `404`. Si HU-09 vuelve: solo M, sin `confirmPin` (`docs/seguridad.md` §6.3) |
 | `reports:read` | `GET /reports/daily` | ✗ | ✗ | ✓ | HU-08 | Últimos 90 días |
 | `reports:close` | `POST /reports/daily/:date/closing` | ✗ | ✗ | ✓ | HU-08 | Inmutable; `409` si ya cerrado |
 | `telemetry:write` (M-03) | `POST /telemetry` | ✓ | ✓ | ✓ | — | Condiciones de `docs/seguridad.md` §6.3 (RS-43); no cuenta como actividad |
-| `approval:grant` | (campo `managerApproval` en las rutas marcadas **A**) | ✗ | ✗ | ✓ | HU-06 | Cuenta para el bloqueo del encargado |
+| `approval:grant` | (campo `managerApproval` en las rutas marcadas **A**) | ✗ | ✗ | ✓ | HU-06 | Cuenta para el bloqueo del encargado elegido, el límite por IP y el de 5 fallos/10 min de la sesión que pide la aprobación |
+
+Rutas que **no existen** en el MVP (denegación por defecto, `404`):
+`GET /settings`, `PATCH /settings` (HU-09 fuera, decisión del humano
+2026-11-23). No hay permisos `settings:*` ni tabla `settings`. Si HU-09
+vuelve en otra versión: solo M, sin `confirmPin` (`docs/seguridad.md` §6.3).
 
 **Cambio respecto a `docs/arquitectura.md` §7:** se separan `staff:read`,
-`staff:unlock`, `reports:close`, `settings:read`, `session:self`,
-`events:subscribe` y `telemetry:write` para que cada ruta tenga un permiso explícito (necesario
+`staff:unlock`, `reports:close`, `session:self`, `events:subscribe` y
+`telemetry:write` para que cada ruta tenga un permiso explícito (necesario
 para RS-17). La matriz de la arquitectura queda como resumen; tras la revisión
-1.3b del SE ambas coinciden salvo SEC-016, SEC-022 y que `settings:*` no se
-registra en el MVP.
+1.3c del SE ambas coinciden. La tabla esperada de RS-18 se escribe **a mano**
+desde esta §3, no desde `permissions.ts` (T-18, `docs/seguridad.md` §6.3).
 
 ### 3.4 Revisión 1.4b: diferencias reportadas por el SE (`docs/estado.md`)
 
@@ -117,7 +125,7 @@ registra en el MVP.
 | 1c | `GET /payments/today` y `GET /payments/:id` (`payment:read`) | **Aceptado con condición** (SEC-022) | HU-04 da a W "Cobrados hoy"; por mínimo privilegio W solo lee cobros del día actual |
 | 1d | `GET /staff/managers` con permiso nuevo `approval:request` (W, M) | **Aceptado** | Necesario para elegir encargado (supuesto 22); solo `id` y `name`, nombres que ya muestra la rejilla de login; K no pide aprobaciones |
 | 2 | `POST /orders/:id/prep` con `action: "undo"` en lugar de `undo_ready` | **Aceptado** | HU-03 permite deshacer "Empezar" y "Listo"; una acción genérica limitada a la última transición y a 30 s no amplía permisos |
-| 3 | `GET /settings` solo M; W y K reciben su valor en `/auth/me` y `settings.updated` | **Aceptado** (y además, sin HU-09 en el MVP, `GET/PATCH /settings` no se registran) | Mínimo privilegio: cada rol recibe solo el dato que usa |
+| 3 | `GET /settings` solo M; W y K reciben su valor en `/auth/me` y `settings.updated` | **Aceptado**; **superado en 1.3c**: sin HU-09 no existen `GET/PATCH /settings`, `settings.updated` ni la tabla `settings`; queda `localConfig` filtrado por rol | Mínimo privilegio: cada rol recibe solo el dato que usa |
 | 4 | Quitar/reducir y cancelar con **A** también con preparación `served` | **Aceptado** | Coincide con HU-06/CA-F03 y CA-F05: "Servido" se trata como "Listo" |
 | 5 | `PATCH /staff/:id` sin `confirmPin` si solo cambia el nombre | **Aceptado con condición** | Coincide con HU-07/CA-N04. Renombrar no cambia rol, estado ni PIN; un renombrado malicioso solo obliga a corregirlo y queda auditado. Condición: la exención la decide el servidor por los campos presentes en el cuerpo (solo `name`), no por si su valor cambia |
 
@@ -153,15 +161,15 @@ sesión afectada.
 | Almacenamiento | argon2id (`m ≥ 19 MiB, t ≥ 2, p = 1`) con *pepper* fuera de la BD |
 | PIN provisional | Tras alta, restablecimiento o promoción a encargado con PIN corto; obliga a cambiarlo |
 | Bloqueo por usuario | 5 → 5 min; 10 → 15 min; 15 → 60 min; 20 → indefinido (desbloquea un encargado o `unlock-user`). El contador solo se reinicia con un acceso correcto o desbloqueo |
-| Límite por origen | 10 fallos/10 min por IP → `429` 10 min; 5 aprobaciones fallidas/10 min por sesión → `429` |
+| Límite por origen | 10 fallos/10 min por IP de **cualquier verificación de PIN** (login, `managerApproval`, `confirmPin` y `currentPin`) → `429` 10 min para cualquier usuario y ruta de PIN desde esa IP, antes del hash. Por sesión: 5 aprobaciones (`managerApproval`) fallidas/10 min → `429`. **[T-20]** `confirmPin` y `currentPin` (PIN del propio titular de la sesión) no tienen límite por sesión: los acota el bloqueo de su cuenta, que se comprueba antes y responde `423` (HU-01/CA-F12) |
 | MFA | No en el MVP (ver `docs/seguridad.md` §6.1.8); compensado por red restringida, bloqueo y reconfirmación de PIN |
 | Token de sesión | 256 bits CSPRNG; cookie `__Host-sid`, `HttpOnly; Secure; SameSite=Strict; Path=/`, sin caducidad persistente; en BD solo SHA-256 |
 | Inactividad | 15 min (camarero, encargado). Rol `kitchen`: sin caducidad por inactividad mientras el SSE está abierto |
 | Caducidad absoluta | 12 h para todos; configurable solo a la baja |
-| Revocación | Logout, desactivación, restablecimiento de PIN, cambio de PIN propio (resto de sesiones), caducidad. Cambio de rol: cierra SSE, no revoca |
-| Reautenticación | `confirmPin` en anular cobro y escrituras de Personal (salvo cambio solo de nombre). No en HU-06 con sesión propia de encargado ni en ajustes |
-| Verificaciones de PIN | Todas (login, `managerApproval`, `confirmPin`, `currentPin`) cuentan para el mismo contador del usuario cuyo PIN se verifica y para el límite por IP; las tres últimas, además, 5 fallos/10 min por sesión **[SEC-016]** |
-| Rotación del PIN | No se fuerza caducidad periódica (no aporta con bloqueo + red restringida). Cambio obligatorio si se sospecha que se ha visto y al dar de baja a un empleado que pudo conocer el PIN del encargado |
+| Revocación | Logout, desactivación, restablecimiento de PIN, cambio obligatorio del PIN provisional (el resto de sesiones del usuario), **bloqueo indefinido** (todas las sesiones de la cuenta, venga el fallo de login, aprobación, `confirmPin` o `currentPin`; HU-01/CA-F13), caducidad. Toda revocación cierra el flujo SSE y la pantalla vuelve al login en ≤ 1 s (RS-14). Cambio de rol: cierra SSE, no revoca |
+| Reautenticación | `confirmPin` en anular cobro y escrituras de Personal (salvo cambio solo de nombre). No en HU-06 con sesión propia de encargado |
+| Verificaciones de PIN | Todas pasan por la función única `verifyPin` (login, `managerApproval`, `confirmPin`, `currentPin`): cuentan para el mismo contador del usuario cuyo PIN se verifica (escala 5/10/15/20) y para el límite por IP; `managerApproval`, además, para el límite por sesión. Con la cuenta bloqueada no se calcula el hash ni se cuenta el intento |
+| Rotación del PIN | No se fuerza caducidad periódica (no aporta con bloqueo + red restringida). Si se sospecha que un PIN se ha visto, o al dar de baja a un empleado que pudo conocer el PIN del encargado, el encargado lo **restablece** (`reset-pin`) y el titular elige uno nuevo con el cambio obligatorio del PIN provisional (no hay cambio voluntario en el MVP) |
 
 ## 6. Usuarios de base de datos
 
@@ -186,7 +194,6 @@ Privilegios de `app_rw` (además de `USAGE` en el esquema y en las secuencias):
 |---|---|---|---|---|
 | `users` | ✓ | ✓ | ✓ | ✗ (no se borran) |
 | `sessions` | ✓ | ✓ | ✓ | ✓ (solo para purgar sesiones caducadas hace > 30 días) |
-| `settings` | ✓ | ✗ | ✓ | ✗ |
 | `categories`, `products` | ✓ | ✓ | ✓ | ✗ (se archivan/desactivan) |
 | `daily_counters` | ✓ | ✓ | ✓ | ✗ |
 | `orders`, `order_lines` | ✓ | ✓ | ✓ | ✗ (cancelar/eliminar = marcar) |
@@ -217,10 +224,12 @@ imagen, el repositorio o `docs/`.
 | Clave pública de cifrado de copias | ✗ | ✗ | ✗ | ✗ | ✓ (la privada, fuera del host) |
 
 El `uid` del secreto montado es el UID real del contenedor que lo recibe
-(nunca se arregla un desajuste con modo 0444). **[SEC-018]** En DEV y TESTING
-el reparto solo se cumple si los contenedores que montan el proyecto no ven
-`.secrets/` (hoy lo ven todos por `keep-id`); tampoco deben poder escribir en
-`.git/` ni en `.claude/`.
+(nunca se arregla un desajuste con modo 0444): en `app` y `migrate`,
+`uid=1000,gid=1000,mode=0400` (SEC-010). En DEV y TESTING los contenedores que
+montan el proyecto llevan un tmpfs vacío con `notmpcopyup` sobre
+`/workspace/.secrets` y `web`/`deps` no pueden escribir en `.git/`, `.claude/`
+ni en lo que se ejecuta en el host (SEC-018, verificado; SEC-023 para
+`tests/run.sh`).
 
 ## 8. Contenedores y host
 
@@ -229,8 +238,8 @@ el reparto solo se cumple si los contenedores que montan el proyecto no ven
 | Servicio | Usuario | Capacidades | Raíz | Montajes | Red | Puertos publicados |
 |---|---|---|---|---|---|---|
 | `proxy` | UID ≥ 1000 | ninguna (`cap-drop=ALL`, `no-new-privileges`; SEC-009 verificado: `CapEff` = 0) | solo lectura | `Caddyfile` (ro), volumen `/data` (rw, 0700), `/config` tmpfs o volumen | `edge` + `internal` | 8080, 8443 (o 80/443 en PROD, §6.2d de seguridad) |
-| `app` | `nonroot` (65532) | ninguna | solo lectura, `/tmp` tmpfs | solo secretos | `internal` | ninguno |
-| `migrate` | `nonroot` (65532) | ninguna | solo lectura | solo su secreto | `internal` | ninguno |
+| `app` | `1000:1000` numérico (`USER 1000:1000` en la imagen, `--user 1000:1000` / `User=1000` en Quadlet; no el `nonroot` 65532 de distroless) | ninguna | solo lectura, `/tmp` tmpfs | solo secretos (`uid=1000,gid=1000,mode=0400`) | `internal` | ninguno |
+| `migrate` | `1000:1000` (misma imagen que `app`) | ninguna | solo lectura | solo su secreto (`uid=1000,gid=1000,mode=0400`) | `internal` | ninguno |
 | `db` | UID ≥ 1000 | ninguna | solo lectura; tmpfs `/var/run/postgresql`, `/tmp` | volumen `pgdata` (rw, dueño ese UID), secretos | `internal` | ninguno |
 
 Para todos: límites de memoria y CPU; prohibidos `--privileged`, el socket de
