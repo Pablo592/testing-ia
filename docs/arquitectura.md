@@ -25,6 +25,11 @@
 > `tableNumber` (T-19), `managerApproval` en sesión de encargado (T-21), tiempo
 > igualado con encargado bloqueado (SEC-025), `expiresAt` en `GET /auth/me` y
 > `403 PIN_CHANGE_REQUIRED` (preguntas de UX). Registro en la §16.
+>
+> Revisión 2026-11-24 (tarea 1.7h): resumen de un día cerrado como
+> **instantánea** guardada al cerrar, sección "Cambios tras el cierre"
+> (cancelaciones, anulaciones y cobros posteriores, HU-08/CA-F05, CA-F15),
+> cerrojo de cierre e índices para HU-08/CA-N02 (§4.4). Registro en la §16.
 
 ## 1. Visión general
 
@@ -297,7 +302,9 @@ concurrencia; los cancelados conservan su número). `$businessDate` viene del
 Índices: `(status) WHERE status = 'open'` (por cobrar y lista de sala),
 `(queued_at) WHERE prep_status IN ('pending','in_progress')` (cola),
 `(business_date, status)` (lista de sala del día y HU-08),
-`(table_number) WHERE status = 'open'` (aviso de mesa ocupada).
+`(table_number) WHERE status = 'open'` (aviso de mesa ocupada),
+`(cancelled_at) WHERE status = 'cancelled'` (cancelados por día de
+cancelación y tras el cierre, HU-08, §4.4).
 
 **order_lines**
 | Columna | Tipo | Notas |
@@ -311,6 +318,8 @@ concurrencia; los cancelados conservan su número). `$businessDate` viene del
 | note | varchar(100) null | |
 | added_at | timestamptz null | null = línea del envío original; con valor = añadida después (HU-06) |
 | removed_at, removed_by, removal_authorized_by | null | línea "ELIMINADO" (se conserva, no se borra) |
+
+Índice: `(order_id)` (líneas de un pedido; productos vendidos de HU-08).
 
 Etiquetas en barra: una línea se marca **"AÑADIDO"** si `added_at >= queued_at`
 y **"ELIMINADO"** si `removed_at >= queued_at` (cambios del ciclo de cola
@@ -329,17 +338,22 @@ confunda lo ya servido con lo nuevo. La vista de sala muestra todo el historial.
 | paid_at, paid_by | | |
 | voided_at, voided_by, void_reason | null | anulación por encargado (motivo ≥ 5 caracteres); `CHECK` todos nulos o todos con valor |
 
-**payment_orders**: `payment_id`, `order_id`, `voided boolean`. Índice único
+Índice: `(business_date)` ("Cobrados hoy" y todas las consultas de HU-08, §4.4).
+
+**payment_orders**: `payment_id`, `order_id`, `voided boolean`;
+`PRIMARY KEY (payment_id, order_id)`. Índice único
 parcial `UNIQUE (order_id) WHERE NOT voided` → **la BD impide cobrar dos veces**
 el mismo pedido aunque falle la lógica de aplicación. "Cobrar mesa" = un
 `payment` con varias filas aquí. La anulación marca `voided = true` en **todas**
 las filas del cobro a la vez (no existe operación para anular una sola).
 
 **cash_closings** (HU-08): `business_date PK`, `expected_cash_cents`,
-`counted_cash_cents`, `difference_cents`, `summary jsonb` (cifras congeladas),
-`closed_by`, `closed_at`. Inmutable. Los cobros de un día cerrado anulados
-después se detectan con `payments.voided_at > cash_closings.closed_at` y se
-muestran aparte, sin tocar el cierre.
+`counted_cash_cents`, `difference_cents`, `summary jsonb` (**instantánea** de
+las cifras, el desglose CA-F13 y los productos vendidos al guardar el cierre;
+esquema en §4.4), `closed_by`, `closed_at`. Inmutable. Lo ocurrido en ese día
+después del cierre (cancelaciones, anulaciones y cobros) no toca el cierre: se
+calcula al consultar comparando con `closed_at` y se muestra en la sección
+aparte "Cambios tras el cierre" (§4.4).
 
 **audit_log** (HU-04, HU-05, HU-06, HU-07): `id bigserial`, `at`,
 `actor_id`, `authorized_by null` (encargado que autorizó), `action` (p. ej.
@@ -464,6 +478,123 @@ pocos cientos de MB como mucho. La conservación legal la decide el humano
 (pregunta 10 del README). Las copias de seguridad (`pg_dump` diario) son tarea
 de Infrastructure. La validación de la ventana (`today − 90 ≤ date ≤ today`) se
 hace en servidor con el `Clock`.
+
+### 4.4 Resumen del día y cierre de caja (HU-08) [1.7h]
+
+**Decisión: un día cerrado se lee de la instantánea guardada al cerrar
+(`cash_closings.summary`), no se recalcula con un corte en la hora del
+cierre.** Criterio del humano (2026-11-23): la opción de menor carga.
+
+| Opción | Carga | Problema |
+|---|---|---|
+| A. Recalcular al consultar con corte en `closed_at` | Cada consulta necesita condiciones "en el pasado" en todas las cifras, también en productos | Las líneas **no tienen historial de cantidad**: `PATCH /orders/:id/lines` cambia `quantity` en el sitio (HU-06). Un cobro anulado tras el cierre reabre sus pedidos, que se pueden modificar; el corte daría productos distintos de los del cierre (incumple CA-F05, CA-F15 b). Arreglarlo exigiría versionar las líneas: más tablas, más tests |
+| **B. Instantánea al cerrar (elegida)** | Un único cálculo, el del día abierto, que se ejecuta también al cerrar y se guarda; leer un día cerrado es una lectura por clave primaria | Duplica unos pocos KB por día; el esquema del `jsonb` se versiona |
+
+Consecuencias de B: CA-F05, CA-F13 (desglose del cierre), CA-F14 (las filas
+suman los totales: se calculan en la misma transacción) y CA-F15 (b) se cumplen
+por construcción, porque nada cambia la instantánea (tabla inmutable, §4.1).
+Un día cerrado **no** vuelve a ejecutar las consultas del día abierto. Ya era el
+modelo de la revisión 1.3b (`summary jsonb`); aquí se fija su contenido.
+
+**Parámetros (T-10).** El servicio recibe `date` (validada en
+`[today − 90, today]`, `today = businessDate(clock.now())`) y calcula con la
+función pura `businessDayBounds(date)` de `packages/shared` los instantes UTC
+`dayStart` y `dayEnd` (`[dayStart, dayEnd)`, 23 o 25 h en los cambios de hora).
+Ni las consultas ni la lógica usan `now()` de SQL.
+
+**Cálculo del día (función `computeDailySummary(tx, date, bounds, cutoff?)`).**
+Se usa para un día sin cerrar (sin `cutoff`) y al guardar el cierre (con
+`cutoff = closed_at`); con `cutoff`, "antes del cierre" es `< cutoff`:
+
+| Cifra | Filas |
+|---|---|
+| Cobros vigentes (CA-F01, CA-F07, CA-F08, CA-F10) | `payments` con `business_date = $date`, `paid_at < $cutoff` y (`voided_at IS NULL` OR `voided_at >= $cutoff`); pedidos cobrados = filas de `payment_orders` de esos cobros; totales por `method` con `SUM(amount_cents)` |
+| Cobros anulados (CA-F09) | `business_date = $date` y `voided_at < $cutoff` (sin `cutoff`: `voided_at IS NOT NULL`); por `voided_by` |
+| Pedidos cancelados (CA-F11) | `status = 'cancelled'` y `cancelled_at` en `[dayStart, min(dayEnd, cutoff))`; importe `total_cents`; por (`cancelled_by`, `cancel_authorized_by`) |
+| Productos vendidos (CA-F02) | `order_lines` sin `removed_at` de los pedidos de los cobros vigentes (unión por `payment_orders.payment_id`, no por `payment_orders.voided`, para que el corte valga también con un cobro anulado justo después); por `product_id`, `SUM(quantity)` y `SUM(quantity * unit_price_cents)`, de mayor a menor importe |
+| Pedidos sin cobrar (CA-F03) | `status = 'open'` en el momento de la consulta (no forma parte de la instantánea; I-15, T-25) |
+
+Sin `cutoff` las condiciones con `$cutoff` desaparecen. Con un día pasado que
+se cierra más tarde, `cutoff > dayEnd` y el corte no cambia nada.
+
+**Instantánea `summary` (esquema zod `DailySummarySnapshotV1` en
+`packages/shared`, validado al escribir y al leer):**
+`{schemaVersion: 1, figures, byUser, products}` con la misma forma que la
+respuesta (§5.1, `GET /reports/daily`), guardando ids de usuario (no
+nombres). Los nombres se resuelven al leer con una consulta a `users` (≤ 15
+filas), como en el día abierto y en la sección aparte: si un empleado cambia de
+nombre (HU-07), todo el resumen muestra el nombre actual. `expected_cash_cents`
+= `figures.cashCents`.
+
+**Cerrojo del cierre (sin huecos ni dobles conteos; T-23, I-13).** Para que
+todo lo que no entra en la instantánea salga en la sección aparte, el reparto
+es **solo por hora**: antes del cierre (`< closed_at`) en la instantánea; a
+partir del cierre (`>= closed_at`) en la sección. **Regla del instante igual:**
+un cobro, anulación o cancelación con la misma marca de tiempo que el cierre
+cuenta como **posterior** (sección), lo haya confirmado la BD antes o después
+del cierre. Es la única regla con la que el cerrojo de abajo garantiza el
+reparto exacto sin ajustar marcas de tiempo: con `<=` en la instantánea, una
+escritura que espera al cerrojo y lee el mismo milisegundo que `closed_at`
+quedaría fuera de los dos sitios. Con un reloj en milisegundos, el empate solo
+se da en la práctica en los tests (`FakeClock` sin avanzar). Para que ningún
+cobro, anulación o cancelación con hora anterior al cierre se confirme después
+de calcular la instantánea:
+- `POST /payments`, `POST /payments/:id/void` y `POST /orders/:id/cancel`
+  abren su transacción con `pg_advisory_xact_lock_shared(CASH_CLOSING_LOCK)` y
+  **después** leen `clock.now()` para `paid_at` / `voided_at` /
+  `cancelled_at` (y la `business_date` del cobro). Entre ellas no se bloquean.
+- `POST /reports/daily/:date/closing` abre su transacción con
+  `pg_advisory_xact_lock(CASH_CLOSING_LOCK)` (exclusivo), lee
+  `closed_at = clock.now()`, ejecuta `computeDailySummary(…, cutoff =
+  closed_at)` e inserta la fila (`INSERT`; si ya existe → `409
+  DAY_ALREADY_CLOSED`).
+- `CASH_CLOSING_LOCK` es una constante de `apps/api/src/db/locks.ts`. Se toma
+  antes de cualquier `FOR UPDATE`, así que no hay interbloqueos. El cierre se
+  guarda una vez al día y tarda milisegundos: la espera de los cobros es
+  despreciable. Lo demás (líneas, preparación) no toma el cerrojo: solo cambia
+  pedidos abiertos, que no están en la instantánea.
+
+**Sección "Cambios tras el cierre" (CA-F05, CA-F13, CA-F15).** Solo con el día
+cerrado. Parámetros: `$date`, `$closedAt` (de `cash_closings`) y `$dayEnd`.
+Tres consultas agregadas:
+
+| Columna | Filas | "Hecho por" | "Autorizado por" |
+|---|---|---|---|
+| Pedidos cancelados | `orders.status = 'cancelled'` y `cancelled_at` en `[$closedAt, $dayEnd)`, sea cual sea el día del pedido (I-16, T-24); una cancelación de un día posterior cuenta en ese día (CA-F11) | `cancelled_by` | `cancel_authorized_by` o `none` ("Sin autorización") |
+| Cobros anulados | `payments.business_date = $date` y `voided_at >= $closedAt` (cualquier día; CA-F09 la imputa al día del cobro original). Incluye los cobros posteriores al cierre que luego se anulan (CA-F15 d) | `voided_by` | `not_applicable` ("No aplica (encargado)") |
+| Cobros tras el cierre | `payments.business_date = $date`, `paid_at >= $closedAt` y `voided_at IS NULL` (CA-F15 c). Un cobro de un pedido de ese día registrado otro día tiene otra `business_date` y no sale aquí | `paid_by` | `none` ("Sin autorización") |
+
+La función pura `mergeAfterClosingRows` une las tres en filas por
+(`doneBy`, `authorizedBy`) con las tres columnas `{count, amountCents}` (ceros
+si no hay), ordenadas de mayor a menor importe total y, a igual importe, por
+nombre (orden de UX), y calcula los totales de la sección. Número = cobros o
+pedidos (un "Cobrar mesa" es un cobro). Un cobro tras el cierre que se vuelve a
+cobrar tras anularse (CA-F10) aparece una vez en "Cobros anulados" y el nuevo en
+"Cobros tras el cierre".
+
+**Productos vendidos de un día cerrado (punto aclarado).** Son siempre los de
+la instantánea: una anulación posterior al cierre **no** resta de ellos y un
+cobro posterior al cierre **no** suma (CA-F05, CA-F15 b). Los productos de lo
+ocurrido tras el cierre no se muestran en ninguna parte (la sección solo lleva
+número e importe). La misma regla vale para las cifras: CA-F09 ("no suma en los
+productos vendidos de su día") se aplica al día abierto y al calcular la
+instantánea; en un día cerrado manda CA-F05.
+
+**Rendimiento (CA-N02, ≤ 2 s p95 con 500 pedidos).**
+- Día cerrado: 1 lectura por PK de `cash_closings` + 3 agregados de la sección
+  (normalmente 0 filas) + nombres de usuarios. Milisegundos.
+- Día abierto (y el cálculo al cerrar): con 500 pedidos, ~500 cobros y unas
+  2 500 líneas, cinco agregados sobre los índices `payments (business_date)`,
+  `payment_orders` PK `(payment_id, order_id)`, `order_lines (order_id)` y
+  `orders (cancelled_at) WHERE status = 'cancelled'` (§4.1). Del orden de
+  decenas de ms en el servidor del supuesto 12, independiente del tamaño
+  histórico (sin índices, `order_lines` crecería ~1 M filas/año y las lecturas
+  por escaneo completo serían el riesgo).
+- Las consultas van en una sola petición (`GET /reports/daily`) y en una
+  transacción de solo lectura `REPEATABLE READ`, para que totales y desglose
+  salgan de la misma foto de la BD (CA-F14) aunque entre un cobro a la vez; el
+  presupuesto de 2 s lo consume sobre todo la red y el pintado. Testing lo mide con 500 pedidos y con 90 días de datos sembrados
+  (`docs/testing.md`).
 
 ## 5. API principal
 
@@ -608,12 +739,46 @@ Permisos: **W** = camarero/cajero, **K** = barra/cocina, **M** = encargado
 | `POST /staff` · `PATCH /staff/:id` | M (`staff:manage`) + `confirmPin` | HU-07 | alta `{name, role, pin, confirmPin}` (PIN de encargado: 6 dígitos); `PATCH` cambia nombre/rol/activo (`confirmPin` obligatorio salvo si solo cambia el nombre); promoción a encargado con PIN < 6 → `must_change_pin`; `409 LAST_MANAGER` |
 | `POST /staff/:id/reset-pin` | M (`staff:manage`) + `confirmPin` | HU-07 | `{pin, confirmPin}` provisional; reinicia el contador y el bloqueo; revoca sesiones del usuario |
 | `POST /staff/:id/unlock` | M (`staff:unlock`) + `confirmPin` | HU-07 | `{confirmPin}`; `failed_attempts = 0`, quita `locked_until` y `locked_manual`; auditado (SEC-001) |
-| `GET /reports/daily?date=YYYY-MM-DD` | M | HU-08 | fecha en `[today − 90, today]`; totales (sin anulados), productos, cancelados (por día de cancelación), anulados (por día del cobro original), abiertos, cierre guardado y anulados posteriores al cierre |
-| `POST /reports/daily/:date/closing` | M (`reports:close`) | HU-08 | `{countedCashCents}`; `409` si ya está cerrado |
+| `GET /reports/daily?date=YYYY-MM-DD` | M | HU-08 | fecha en `[today − 90, today]` (fuera → `422 DATE_OUT_OF_RANGE`); cálculo en §4.4. Respuesta: ver "Forma de `GET /reports/daily`" bajo esta tabla |
+| `POST /reports/daily/:date/closing` | M (`reports:close`) | HU-08 | `{countedCashCents}` → `201` con la misma forma que `GET /reports/daily` (ya cerrado); misma ventana de fechas que la lectura (`422 DATE_OUT_OF_RANGE`); calcula y guarda la instantánea bajo el cerrojo de cierre (§4.4); `409 DAY_ALREADY_CLOSED` si ya está cerrado |
 | `POST /telemetry` | sesión (`telemetry:write`) | M-03 | lote de métricas del cliente (§11); `204`; `413` si supera el tamaño, `429` si supera la frecuencia |
 | `GET /healthz` | interno | — | **liveness** (M-01): proceso y bucle de eventos; no consulta la BD. Lo usa el `HEALTHCHECK` |
 | `GET /readyz` | interno | — | **readiness**: `SELECT 1` (timeout 1 s), migraciones al día, secretos cargados. Sin versiones ni mensajes de error |
 | `GET /metrics` (puerto 9464) | interno | — | Prometheus (M-02); no es parte de `/api/v1` |
+
+**Forma de `GET /reports/daily` [1.7h]** (esquema zod en `packages/shared`;
+`Amount = {count, amountCents}`; `UserRef = {id, name}`;
+`AuthorizedBy = {type: "user", user: UserRef} | {type: "none"} | {type: "not_applicable"}`,
+que la UI muestra como el nombre, "Sin autorización" o "No aplica
+(encargado)"):
+
+```json
+{
+  "serverTime": "…", "businessDate": "2026-11-24", "date": "2026-11-20",
+  "status": "open | closed",
+  "figures": { "paidOrders": 0, "totalCents": 0, "cashCents": 0, "cardCents": 0,
+               "cancelled": Amount, "voided": Amount },
+  "byUser": [ { "doneBy": UserRef, "authorizedBy": AuthorizedBy,
+                "cancelled": Amount, "voided": Amount } ],
+  "products": [ { "productId": "…", "name": "…", "units": 0, "amountCents": 0 } ],
+  "openOrders": { "count": 0 },
+  "closing": null | { "closedAt": "…", "closedBy": UserRef, "expectedCashCents": 0,
+                      "countedCashCents": 0, "differenceCents": 0 },
+  "afterClosing": null | {
+    "rows": [ { "doneBy": UserRef, "authorizedBy": AuthorizedBy,
+                "cancelled": Amount, "voided": Amount, "paid": Amount } ],
+    "totals": { "cancelled": Amount, "voided": Amount, "paid": Amount } }
+}
+```
+
+- `status = "open"`: `figures`, `byUser` y `products` calculados al momento;
+  `closing` y `afterClosing` son `null`.
+- `status = "closed"`: `figures`, `byUser` y `products` salen de la
+  instantánea (§4.4); `afterClosing` siempre presente (con `rows: []` si no
+  hubo cambios, para el texto de día sin cambios del wireframe P-11). `paid` =
+  "Cobros tras el cierre" (CA-F15).
+- `products[].name`: nombre de la línea (snapshot de HU-02) del producto.
+- `openOrders` siempre es el estado actual (CA-F03).
 
 `/healthz` y `/readyz` no requieren sesión, no generan `http.request` y Caddy
 responde `404` a ambos (no se enrutan). El puerto 9464 no se publica ni lo
@@ -869,8 +1034,9 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
 - Total = Σ (`unit_price_cents` × `quantity`) de líneas no eliminadas, en
   servidor; cambio = `tendered − amount`. Sin divisiones → sin redondeos.
 - Formato en pantalla con una única función `formatCents` (es-ES, "1.234,50 €").
-- Los agregados de HU-08 usan `SUM()` sobre enteros en SQL, filtrando
-  `voided_at IS NULL` → coinciden al céntimo con los cobros vigentes.
+- Los agregados de HU-08 usan `SUM()` sobre enteros en SQL, filtrando los
+  cobros vigentes (en un día cerrado, vigentes al guardar el cierre, §4.4) →
+  coinciden al céntimo con los cobros vigentes (CA-F07).
 
 ## 9. Concurrencia, idempotencia y fiabilidad (ADR-008)
 
@@ -900,6 +1066,11 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
 - **Anulación:** una transacción: `FOR UPDATE` del cobro (si `voided_at` no es
   nulo → `409`) y de sus pedidos; marca el cobro y **todas** sus filas de
   `payment_orders`; pone los pedidos en `open` y sube su `version`.
+- **Cierre de caja (HU-08) [1.7h]:** cerrojo consultivo de transacción
+  `CASH_CLOSING_LOCK`, exclusivo en el cierre y compartido en cobro, anulación
+  y cancelación, que leen la hora del `Clock` **después** de tomarlo. Así el
+  reparto entre la instantánea (`< closed_at`) y "Cambios tras el cierre"
+  (`>= closed_at`) no deja nada fuera ni lo cuenta dos veces (§4.4).
 
 ## 10. Despliegue con contenedores rootless
 
@@ -1069,3 +1240,23 @@ ajustes por la §15 (HU-09 fuera del MVP).
 | SEC-022 | **Aceptado.** W solo lee `GET /payments/:id` y `/ticket` de cobros con `business_date` de hoy; si no, `404` igual que inexistente. M sin restricción | §5.1, §7 |
 | SEC-010 (resto) | **Decidido:** imagen de `app`/`migrate` con `USER 1000:1000` numérico y `COPY --chown=1000:1000` (no 65532); ejecución `--user 1000:1000`; secretos `uid=1000,gid=1000,mode=0400` | §10, ADR-001 |
 | HU-09 fuera del MVP | Sin tabla `settings`, sin `GET/PATCH /settings`, sin `settings.updated`, sin auditoría de ajustes ni permisos `settings:*`. Mesas (20) y umbral (10 min) son configuración de instalación de solo lectura (`TABLE_COUNT`, `DELAY_THRESHOLD_MINUTES` en `config.ts`, con rangos). Se **mantiene** `localConfig` en `GET /auth/me` (y `delayThresholdMinutes` en `/kitchen/queue`): el cliente necesita los valores y no hace falta una ruta más | §3, §4.1, §5, §5.1, §6, §7, §9, §10, ADR-001, ADR-003, ADR-004, ADR-008 |
+
+## 16. Registro de decisiones de la ronda de cierre (1.7a y 1.7h)
+
+Nota (1.7h): la cabecera ya remitía a esta sección para la revisión 1.7a, pero
+la sección no existía. Las filas de 1.7a se reconstruyen a partir del resumen
+de la cabecera; el detalle está en las secciones citadas.
+
+| Origen | Decisión | Dónde |
+|---|---|---|
+| T-19 (1.7a) | Códigos de `tableNumber` en `POST /orders` y `GET /tables/:n/open-orders`: `400` fuera de 1–99 o no entero; `422 TABLE_OUT_OF_RANGE` por encima de `TABLE_COUNT` | §4.1, §5.1 |
+| T-20 (1.7a, opción A) | Límite por sesión solo en aprobaciones; en `confirmPin`/`currentPin`, el bloqueo de la cuenta se comprueba antes que la sesión | §5, §7 |
+| T-21 (1.7a) | `managerApproval` en sesión de encargado | §5, §7 |
+| SEC-025 (1.7a) | Tiempo de respuesta igualado con encargado bloqueado | §7 |
+| Preguntas de UX (1.7a) | `session.expiresAt` en `GET /auth/me`; `403 PIN_CHANGE_REQUIRED` | §5, §5.1 |
+| HU-08/CA-F05, CA-F07, CA-F15 (1.7f), criterio "menor carga" (1.7h) | Día cerrado = **instantánea** `cash_closings.summary` (cifras, desglose CA-F13, productos) calculada al cerrar con la misma función que el día abierto; no se recalcula con corte. Motivo: menos código y tests, lectura por PK, y las líneas no guardan historial de cantidad | §4.1, §4.4, §5.1 |
+| T-23 (Testing, media) (1.7h) | **Resuelto.** Reparto exacto por hora (`< closed_at` instantánea, `>= closed_at` sección) con cerrojo consultivo `CASH_CLOSING_LOCK` (exclusivo en el cierre, compartido en cobro, anulación y cancelación, que leen el `Clock` después de tomarlo). Instante igual = posterior al cierre (afecta a I-13) | §4.4, §9 |
+| Sección "Cambios tras el cierre" (1.7h) | `afterClosing.rows` por (`doneBy`, `authorizedBy`) con `cancelled`, `voided` y `paid` (`{count, amountCents}`) y totales; anulados por `voided_at >= closed_at` de cobros del día (incluye los cobros tras el cierre anulados luego, CA-F15 d); cancelados por `cancelled_at` en `[closed_at, dayEnd)` (I-16) | §4.4, §5.1 |
+| Productos de un día cerrado (1.7h) | Los de la instantánea: una anulación o un cobro posteriores al cierre no los cambian (CA-F05, CA-F15 b) | §4.4 |
+| HU-08/CA-N02 (1.7h) | Índices `payments (business_date)`, `order_lines (order_id)`, `orders (cancelled_at) WHERE status = 'cancelled'` y PK de `payment_orders`; lectura en una transacción `REPEATABLE READ` de solo lectura | §4.1, §4.4 |
+| HU-08/CA-F03 en día cerrado (1.7h) | El aviso de pedidos sin cobrar se calcula al consultar, no es parte de la instantánea (coincide con I-15) | §4.4, §5.1 |
