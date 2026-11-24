@@ -21,6 +21,15 @@
 > - M-06: opción **B** sin excepción a §3.4 (§5.1, §5.2, §5.3, §5.5, §6.5).
 > - SEC-017: `confirmPin` y cualquier clave que case con `/pin/i` se redactan
 >   (§3.2, §4.1, §4.3, §4.5).
+>
+> **Revisión 1.6e (2026-11-23)**, tras la 1.3c (`docs/arquitectura.md` §15):
+> - HU-09 fuera del MVP: se quita `settings.changed`; `TABLE_COUNT` y
+>   `DELAY_THRESHOLD_MINUTES` (solo lectura) se registran en `app.started` (§3.1).
+> - SEC-021: la cookie es `__Host-sid` (§3.2, §4.1, §4.3, §4.5).
+> - SEC-016 y ronda 1.1f: eventos y métricas de `verifyPin` con su `purpose`,
+>   límite por sesión, `423` sin contar, escala 5/10/15/20 con bloqueo
+>   indefinido que revoca todas las sesiones (`auth.sessions.revoked`) y
+>   `POST /auth/pin` solo con PIN provisional (§3.2, §6.3, §7.4).
 
 ---
 
@@ -139,10 +148,10 @@ Ningún evento lleva campos que no estén aquí sin actualizar este documento
 | `http.request.unhandled_error` | `error` | `route`, `err` |
 | `http.validation.failed` (`400`) | `info` | `route`, `issues: [{path, code}]` (**sin** valores recibidos, §4.4). Alimenta la métrica de errores de formulario (§6.4) |
 | `http.rate_limited` (`429`) | `warn` | `route`, `client_ip`, `limit` |
-| `app.started` | `info` | `node_version`, `log_level`, `listen_port`, `metrics_port`, `config_keys` (nombres de las variables cargadas, **nunca valores**) |
+| `app.started` | `info` | `node_version`, `log_level`, `listen_port`, `metrics_port`, `config_keys` (nombres de las variables cargadas, **nunca valores**), `table_count` y `delay_threshold_minutes` (valores de `TABLE_COUNT` y `DELAY_THRESHOLD_MINUTES`: configuración de instalación de solo lectura, no secreta; únicos valores de configuración que se registran, para saber con qué rejilla y umbral se arrancó tras un cambio de soporte) |
 | `app.ready` | `info` | `startup_ms` |
 | `app.stopping` | `info` | `signal`, `open_sse_connections` |
-| `app.start.failed` / `config.invalid` | `error` | `missing_keys` o `invalid_keys` (nombres, nunca valores) |
+| `app.start.failed` / `config.invalid` | `error` | `missing_keys` o `invalid_keys` (nombres, nunca valores; p. ej. `TABLE_COUNT` fuera de 1–99) |
 | `eventloop.lag` | `warn` | `lag_ms` (cuando el p99 de 10 s supera 200 ms; muestreado) |
 | `db.query.slow` | `warn` | `query` (nombre de la consulta en el repositorio, p. ej. `orders.findOpen`), `duration_ms` (umbral 200 ms). **Nunca** SQL con valores ni parámetros |
 | `db.query.failed` | `error` | `query`, `err` (con `code` SQLSTATE, sin `detail`/`parameters`) |
@@ -156,32 +165,55 @@ Ningún evento lleva campos que no estén aquí sin actualizar este documento
 Todos llevan `client_ip` y `ua_family`. Cybersecurity puede añadir eventos en
 `docs/seguridad.md`; se incorporan aquí.
 
+**Verificaciones de PIN (`verifyPin`, SEC-016).** Toda comprobación de PIN
+pasa por `verifyPin` (`docs/arquitectura.md` §7) y sus eventos llevan
+`purpose` = `login` \| `approval` \| `confirm` \| `change` (el mismo valor
+que `ctx.purpose`). Reglas comunes:
+- `failed_attempts` es siempre el contador **del usuario cuyo PIN se
+  verificaba** (el encargado elegido en una aprobación; el de la sesión en
+  `confirm` y `change`), tras el fallo.
+- Un rechazo por cuenta bloqueada (`423`, o el `403` genérico en
+  `approval`) **no cuenta** como fallo: va en su propio evento
+  (`auth.verify.locked`) y con `result="locked"` en las métricas, nunca como
+  `bad_pin`, para que las alertas de fuerza bruta no lo sumen.
+- Los `429` de `verifyPin` (límite por IP o por sesión, antes del hash) se
+  registran con `auth.verify.rate_limited` y **no** con `http.rate_limited`
+  (una sola línea por rechazo).
+- Ningún campo tiene `pin` en su nombre (§4.3 b): los valores de enum sí
+  pueden contenerlo (`bad_pin`, `pin_reset`).
+
 | Evento | Nivel | Campos específicos |
 |---|---|---|
 | `auth.login.succeeded` | `info` | `user_id`, `role`, `session_id`, `provisional_credential` (bool: entra con PIN provisional; el nombre evita la subcadena `pin`, que se redacta siempre, §4.3) |
 | `auth.login.failed` | `warn` | `reason`: `bad_pin` \| `unknown_user`; `target_user_id` (solo si el usuario existe), `failed_attempts` (contador tras este fallo). **Nunca** el nombre tecleado ni el PIN (§4.1) |
-| `auth.login.locked` (intento con la cuenta bloqueada, `423`) | `warn` | `target_user_id`, `retry_after_s` |
-| `auth.account.locked` (5.º fallo, se activa el bloqueo) | `warn` | `target_user_id`, `locked_until`, `lockouts_24h` (bloqueos de ese usuario en 24 h) |
+| `auth.verify.locked` (intento con la cuenta ya bloqueada: `423 LOCKED` / `423 ACCOUNT_LOCKED_MANUAL`, o `403 MANAGER_APPROVAL_INVALID` en `approval`; **sin hash y sin contar**) | `warn` | `purpose`, `target_user_id`, `lock_kind`: `temporary` \| `manual`, `retry_after_s` (solo `temporary`) |
+| `auth.account.locked` (un fallo alcanza la escala 5/10/15/20 y se activa el bloqueo) | `warn`; `error` si `lock_kind = manual` | `purpose` (uso en el que se produjo el fallo que bloquea), `target_user_id`, `lock_kind`: `temporary` \| `manual`, `failed_attempts` (5, 10, 15 o 20), `locked_until` (solo `temporary`), `lockouts_24h` (bloqueos de ese usuario en 24 h), `sessions_revoked` (solo `manual`) |
+| `auth.sessions.revoked` (revocación de **todas** las sesiones de una cuenta por el bloqueo indefinido, en la misma transacción, HU-01/CA-F13) | `warn` | `target_user_id`, `reason`: `account_locked_manual`, `purpose`, `sessions_revoked` (número), `sse_closed` (flujos SSE cerrados tras el `COMMIT`), `from_own_session` (bool: la petición venía de una sesión de esa cuenta y respondió `423 ACCOUNT_LOCKED_MANUAL`). Sustituye a las líneas `auth.session.revoked` individuales de ese caso |
 | `auth.login.disabled_user` (`403 USER_DISABLED`) | `warn` | `target_user_id` |
-| `auth.login.ip_rate_limited` | `warn` | `client_ip`, `attempts_window` |
+| `auth.verify.rate_limited` (`429 TOO_MANY_ATTEMPTS`, antes del hash; también `GET /auth/login-options` con la IP limitada) | `warn` | `purpose` (o `login_options`), `scope`: `ip` \| `session`, `retry_after_s`, `session_id` (solo `scope = session`). Un `scope = session` es una sesión abierta probando PIN (aprobaciones, reconfirmación o cambio) |
 | `auth.logout` | `info` | `user_id`, `session_id` |
 | `auth.session.expired` | `info` | `user_id`, `session_id`, `reason`: `idle` \| `absolute` |
-| `auth.session.revoked` | `info` | `user_id` (afectado), `session_id`, `reason`: `logout` \| `user_disabled` \| `pin_reset` \| `pin_changed`, `by_user_id` |
-| `auth.session.invalid` (cookie `sid` que no corresponde a ninguna sesión válida) | `info`; `warn` si > 5 por IP en 1 min | `reason`: `not_found` \| `revoked` \| `expired` |
-| `auth.pin.changed` | `info` | `user_id`, `was_provisional` |
-| `auth.pin.change_failed` | `warn` | `user_id`, `reason`: `wrong_current` \| `rule_violation` (código de regla, sin el PIN) |
+| `auth.session.revoked` | `info` | `user_id` (afectado), `session_id`, `reason`: `logout` \| `user_disabled` \| `pin_reset` \| `pin_changed` (las **demás** sesiones del usuario al cambiar el PIN provisional), `by_user_id`. El bloqueo indefinido usa `auth.sessions.revoked` |
+| `auth.session.invalid` (cookie `__Host-sid` que no corresponde a ninguna sesión válida) | `info`; `warn` si > 5 por IP en 1 min | `reason`: `not_found` \| `revoked` \| `expired` |
+| `auth.pin.changed` (cambio obligatorio del PIN provisional, `POST /auth/pin`; no hay cambio voluntario en el MVP) | `info` | `user_id`, `sessions_revoked` (las demás sesiones del usuario) |
+| `auth.pin.change_failed` | `warn` | `user_id`, `reason`: `wrong_current` (`403 PIN_INVALID`, cuenta en `verifyPin`) \| `rule_violation` (`400`, código de regla, sin el PIN) \| `not_provisional` (`403 FORBIDDEN` con `mustChangePin = false`: no verifica nada ni suma a ningún contador; si se repite, cliente manipulado o fallo de la UI), `failed_attempts` (solo `wrong_current`) |
 | `auth.must_change_pin.blocked` (ruta no permitida con PIN provisional) | `info` | `route` |
 | `authz.denied` (`403 FORBIDDEN`) | `warn` | `route`, `method`, `permission` |
 | `csrf.origin_rejected` | `warn` | `route`, `origin_host` (solo el host de la cabecera `Origin`) |
 | `approval.granted` (PIN de encargado, HU-06) | `info` | `approver_id`, `action` (`order.lines_modified` \| `order.cancelled`), `order_id` |
-| `approval.failed` | `warn` | `reason`: `bad_pin` \| `unknown_user` \| `not_manager` \| `locked` \| `disabled`; `approver_id` (si existe), `action`, `order_id` |
+| `approval.failed` (`403 MANAGER_APPROVAL_INVALID`; `purpose = approval`) | `warn` | `reason`: `bad_pin` \| `unknown_user` \| `not_manager` \| `locked` \| `disabled` \| `provisional_credential` (el encargado tiene PIN provisional; se comprueba tras el acierto); `approver_id` (si existe), `action`, `order_id`, `failed_attempts` (solo `bad_pin`). El `429` va en `auth.verify.rate_limited` y `locked` además en `auth.verify.locked` |
+| `auth.reconfirm.failed` (`403 PIN_CONFIRMATION_INVALID` o `PIN_CONFIRMATION_REQUIRED`, SEC-007; `purpose = confirm`) | `warn` | `user_id`, `action` (`payment.voided` \| `staff.created` \| `staff.role_changed` \| `staff.deactivated` \| `staff.reactivated` \| `staff.pin_reset` \| `staff.unlocked`), `reason`: `bad_pin` \| `missing`, `failed_attempts` (solo `bad_pin`) |
 | `staff.created` | `info` | `target_user_id`, `role` |
 | `staff.role_changed` | `warn` (un cambio de privilegios siempre se mira) | `target_user_id`, `old_role`, `new_role` |
 | `staff.deactivated` / `staff.reactivated` | `info` | `target_user_id`, `sessions_revoked` |
 | `staff.pin_reset` | `info` | `target_user_id`, `sessions_revoked` |
 | `staff.last_manager_blocked` (`409 LAST_MANAGER`) | `info` | `target_user_id` |
 | `staff.initial_manager.created` (comando `create-initial-manager`) | `warn` | `target_user_id` (se espera una sola vez en la vida del sistema) |
-| `settings.changed` | `info` | `keys_changed` + valores anterior/nuevo (son números de configuración, no datos personales) |
+| `staff.unlocked` (`POST /staff/:id/unlock` o comando `unlock-user`) | `info` | `target_user_id`, `was_lock_kind`: `temporary` \| `manual`, `by_user_id` (o `system` en el comando) |
+
+Los ajustes de HU-09 quedan fuera del MVP: no hay evento de cambio de
+configuración. Mesas y umbral solo cambian con un reinicio de `app` y quedan
+en `app.started`.
 
 ### 3.3 Negocio: pedidos y cobros (`category: business`)
 
@@ -245,7 +277,7 @@ no como líneas de log (§6.4).
 | PIN (`pin`, `currentPin`, `newPin`, `confirmPin`, `managerApproval.pin`, PIN provisional de alta/restablecimiento) y, en general, **el valor de cualquier clave cuyo nombre case con `/pin/i`** (SEC-017) | HU-01, HU-06, HU-07; `confirmPin` es el PIN de 6 dígitos del encargado al anular cobros y en Personal (SEC-007) | nunca; ni truncado ni enmascarado parcialmente (4–6 dígitos: cualquier dígito revela demasiado) |
 | Hash del PIN (`pin_hash`) y parámetros de argon2 de un usuario | permite ataque offline | nunca |
 | *Pepper* y cualquier secreto (`podman secret`: contraseñas de BD, datos del encargado inicial) | ADR-005, §3.7 de reglas | nunca; `app.started` lista solo los **nombres** de las claves |
-| Cookie `sid`, token de sesión, `token_hash`, cabeceras `Cookie`, `Set-Cookie`, `Authorization`, `Proxy-Authorization` | secuestro de sesión | nunca; las sesiones se identifican con `session_id` |
+| Cookie `__Host-sid`, token de sesión, `token_hash`, cabeceras `Cookie`, `Set-Cookie`, `Authorization`, `Proxy-Authorization` | secuestro de sesión | nunca; las sesiones se identifican con `session_id` |
 | Nombre de usuario **tecleado** en un login fallido | puede ser un PIN escrito en el campo equivocado o el nombre de una persona | nunca; se registra `target_user_id` solo si existe |
 | Nombre de los empleados | dato personal; el `user_id` basta | nunca en logs; sí en la BD |
 | `customer_ref` (nombre del cliente en pedidos de mostrador) | dato personal de un tercero | nunca |
@@ -283,20 +315,22 @@ se note si algo se intentó registrar).
 ```
 # cabeceras
 req.headers.cookie, req.headers.authorization, req.headers["proxy-authorization"],
-res.headers["set-cookie"],
+res.headers["set-cookie"], req.cookies["__Host-sid"],
 # primer nivel del objeto registrado
 pin, currentPin, newPin, confirmPin, managerApproval, pinHash, pin_hash, pepper,
-token, tokenHash, token_hash, sid, password, customerRef, customer_ref, note,
+token, tokenHash, token_hash, sid, ["__Host-sid"], password, customerRef, customer_ref, note,
 reasonText, reason_text, body,
 # segundo nivel (comodín de pino: obj.<cualquiera>.campo)
 *.pin, *.currentPin, *.newPin, *.confirmPin, *.managerApproval, *.pinHash,
-*.pin_hash, *.pepper, *.token, *.tokenHash, *.token_hash, *.sid, *.password,
+*.pin_hash, *.pepper, *.token, *.tokenHash, *.token_hash, *.sid, *["__Host-sid"], *.password,
 *.customerRef, *.customer_ref, *.note, *.reasonText, *.reason_text, *.body
 ```
 
 En pino, `*.campo` solo cubre el segundo nivel y no hay comodín recursivo: el
 Developer añade las rutas anidadas reales que existan (p. ej.
-`*.lines[*].note`) y Testing las comprueba (§4.5).
+`*.lines[*].note`) y Testing las comprueba (§4.5). La cookie de sesión es
+`__Host-sid` (SEC-021); como el nombre lleva `-`, en pino va entre corchetes;
+`sid` se mantiene por si algún objeto interno usa ese nombre.
 
 **(b) Regla general por nombre de clave: `/pin/i` (SEC-017).** `redact` no
 admite expresiones regulares, así que se añade una función de redacción
@@ -348,7 +382,7 @@ nunca texto del usuario, y por eso no se redacta.
   restablecimiento de PIN, aprobación de encargado, pedido con nota y
   `customerRef`, cancelación con texto y anulación con motivo; se captura todo
   el stdout de `app` y se comprueba que **no** aparece ningún PIN usado en el
-  test, ni el pepper de test, ni el valor de la cookie `sid`, ni el nombre del
+  test, ni el pepper de test, ni el valor de la cookie `__Host-sid`, ni el nombre del
   usuario, ni el texto de las notas/motivos. Debe fallar el build si aparecen.
 - SEC-017 (RS-29, RS-31 de `docs/seguridad.md`): el PIN centinela se envía
   también como `confirmPin` (anular cobro, alta, restablecimiento y
@@ -356,6 +390,13 @@ nunca texto del usuario, y por eso no se redacta.
   `{confirmPin, a: {b: {c: {userPin}}}, list: [{pin}]}`, un `logger.child`
   con una clave `pin` y un error con una propiedad `pin`; ninguno de los
   valores aparece en la salida y todos quedan como `"[REDACTED]"`.
+- SEC-016: el test incluye un `423` (cuenta en bloqueo temporal con
+  `confirmPin`), un `429` por sesión, un `POST /auth/pin` sin PIN provisional
+  y un bloqueo indefinido; el PIN centinela no aparece y se comprueban los
+  eventos `auth.verify.locked`, `auth.verify.rate_limited`
+  (`scope: "session"`), `auth.pin.change_failed` (`not_provisional`) y
+  `auth.sessions.revoked`. Ningún nombre de campo de las líneas emitidas
+  casa con `/pin/i` salvo los que se redactan.
 - Mismo test sobre los logs de `proxy` y `db` en TESTING.
 - Toda línea de stdout de `app` es JSON válido y tiene los campos obligatorios
   de §2.1 (validación con un esquema JSON en el test).
@@ -544,7 +585,7 @@ Percentiles p50/p95/p99 con `histogram_quantile` sobre las ventanas de §7.
 | `orders_created_total` | counter | `order_type` | |
 | `orders_open` | gauge | — | se calcula al hacer *scrape* (consulta con índice) |
 | `orders_in_queue` | gauge | `prep_status` | ídem |
-| `orders_delayed` | gauge | — | pedidos en `pending`/`in_progress` con espera > `delay_threshold_minutes` (HU-03) |
+| `orders_delayed` | gauge | — | pedidos en `pending`/`in_progress` con espera > `DELAY_THRESHOLD_MINUTES` (HU-03; constante leída al arrancar) |
 | `order_wait_seconds` | histogram, buckets 60..1800 | — | de `sent_at` a `ready_at` |
 | `orders_cancelled_total` | counter | `reason_code`, `prep_status` | |
 | `order_version_conflicts_total` | counter | — | HU-06 |
@@ -558,11 +599,14 @@ Percentiles p50/p95/p99 con `histogram_quantile` sobre las ventanas de §7.
 
 | Métrica | Tipo | Etiquetas |
 |---|---|---|
-| `auth_login_attempts_total` | counter | `result` = `success` \| `bad_pin` \| `unknown_user` \| `locked` \| `disabled` \| `ip_rate_limited` |
-| `auth_lockouts_total` | counter | — |
-| `auth_users_locked` | gauge | — |
+| `auth_login_attempts_total` | counter | `result` = `success` \| `bad_pin` \| `unknown_user` \| `locked` \| `disabled` \| `ip_rate_limited` (solo `POST /auth/login`; `locked` no es un fallo contado) |
+| `auth_verifications_total` | counter | `purpose` = `login` \| `approval` \| `confirm` \| `change`; `result` = `success` \| `invalid` \| `locked` \| `rate_limited_ip` \| `rate_limited_session`. Una muestra por llamada a `verifyPin`; `locked` y `rate_limited_*` no calculan el hash ni cuentan |
+| `auth_lockouts_total` | counter | `kind` = `temporary` \| `manual`, `purpose` |
+| `auth_users_locked` | gauge | `kind` = `temporary` \| `manual` |
+| `auth_sessions_revoked_on_lock_total` | counter | — (sesiones revocadas por bloqueo indefinido) |
 | `auth_sessions_active` | gauge | `role` |
-| `auth_sessions_ended_total` | counter | `reason` = `logout` \| `idle` \| `absolute` \| `user_disabled` \| `pin_reset` \| `pin_changed` |
+| `auth_sessions_ended_total` | counter | `reason` = `logout` \| `idle` \| `absolute` \| `user_disabled` \| `pin_reset` \| `pin_changed` \| `account_locked_manual` |
+| `auth_pin_change_rejected_total` | counter | `reason` = `wrong_current` \| `rule_violation` \| `not_provisional` |
 | `auth_invalid_session_total` | counter | `reason` |
 | `authz_denied_total` | counter | `permission` |
 | `csrf_rejected_total` | counter | — |
@@ -833,7 +877,8 @@ receivers:
 
 Alertas **[24h]** (llevan la etiqueta `after_hours="notify"`):
 `LoginFailuresHigh` (aviso y crítica), `LockoutRepeated`, `LockoutSpray`,
-`LoginIpRateLimited`, `ManagerApprovalFailures`, `AuthzDeniedBurst`,
+`AccountLockedManual`, `LoginIpRateLimited`, `SessionPinProbing`,
+`ManagerApprovalFailures`, `AuthzDeniedBurst`,
 `CsrfRejected`, `InvalidSessionBurst`, `PrivilegeChange` (solo la de
 `new_role="manager"` o `initial_manager`), `LoginOutsideHours`,
 `TrafficSpike`, `DiskFilling` (solo la crítica, > 90 %).
@@ -900,10 +945,13 @@ Umbrales iniciales a validar por Cybersecurity en `docs/seguridad.md`.
 | Alerta | Condición | Severidad | Acción sugerida | Responsable |
 |---|---|---|---|---|
 | `LoginFailuresHigh` | `increase(auth_login_attempts_total{result=~"bad_pin\|unknown_user"}[5m]) > 10`; > 30 crítica | aviso / crítica **[24h]** | en Loki, agrupar `auth.login.failed` por `client_ip` y `target_user_id` | cybersecurity |
-| `LockoutRepeated` | ≥ 3 `auth.account.locked` del mismo `target_user_id` en 24 h (Loki) | crítica **[24h]** | posible ataque de fuerza bruta a un PIN de 4 dígitos (riesgo de §13 de arquitectura); restablecer PIN y revisar el dispositivo de origen | cybersecurity |
-| `LockoutSpray` | ≥ 3 usuarios distintos bloqueados en 15 min | crítica **[24h]** | rociado de un PIN común contra todos los usuarios | cybersecurity |
-| `LoginIpRateLimited` | `increase(auth_login_attempts_total{result="ip_rate_limited"}[15m]) > 0` | aviso **[24h]** | identificar el dispositivo por `client_ip` | cybersecurity |
-| `ManagerApprovalFailures` | `increase(manager_approvals_total{result="failed"}[15m]) >= 3` | aviso **[24h]** | alguien prueba el PIN del encargado desde un dispositivo de sala | cybersecurity |
+| `LockoutRepeated` | ≥ 2 `auth.account.locked` con `lock_kind="temporary"` del mismo `target_user_id` en 24 h (Loki; con la escala 5/10/15/20, el 2.º bloqueo son ≥ 10 fallos) | crítica **[24h]** | posible fuerza bruta a un PIN de 4 dígitos (riesgo de §13 de arquitectura). El texto de la alerta incluye `purpose` de cada bloqueo: `login` → revisar `client_ip`; `approval` → un dispositivo de sala prueba el PIN del encargado; `confirm`/`change` → sesión propia desatendida. Restablecer el PIN si procede | cybersecurity |
+| `AccountLockedManual` | `increase(auth_lockouts_total{kind="manual"}[5m]) > 0` | crítica **[24h]** | 20 fallos: bloqueo indefinido y **todas** las sesiones de la cuenta ya revocadas (`auth.sessions.revoked`). El texto incluye `purpose` (motivo del último fallo), `client_ip` y `sessions_revoked`. Confirmar con el empleado, restablecer el PIN y desbloquear desde Personal o `unlock-user` | cybersecurity (informar al humano) |
+| `LockoutSpray` | ≥ 3 usuarios distintos bloqueados (`auth.account.locked`, cualquier `lock_kind`) en 15 min | crítica **[24h]** | rociado de un PIN común contra todos los usuarios; agrupar por `client_ip` y `purpose` | cybersecurity |
+| `LoginIpRateLimited` | `increase(auth_verifications_total{result="rate_limited_ip"}[15m]) > 0` (el límite por IP es común a todas las rutas de PIN) | aviso **[24h]** | identificar el dispositivo por `client_ip` en `auth.verify.rate_limited`; `purpose` indica la ruta | cybersecurity |
+| `SessionPinProbing` | `increase(auth_verifications_total{result="rate_limited_session"}[15m]) > 0` | aviso **[24h]** | una sesión abierta acumula 5 fallos de PIN en 10 min (aprobación, reconfirmación o cambio): `session_id`, `user_id` y `purpose` en `auth.verify.rate_limited` | cybersecurity |
+| `ManagerApprovalFailures` | `increase(auth_verifications_total{purpose="approval",result="invalid"}[15m]) >= 3` | aviso **[24h]** | alguien prueba el PIN del encargado desde un dispositivo de sala | cybersecurity |
+| `ProvisionalChangeMisuse` | `increase(auth_pin_change_rejected_total{reason="not_provisional"}[1h]) > 3` | info | `POST /auth/pin` sin PIN provisional: la UI no debería ofrecerlo; cliente manipulado o fallo de la UI | developer (cybersecurity si se repite) |
 | `AuthzDeniedBurst` | `increase(authz_denied_total[10m]) > 10`, o > 5 de una misma sesión (Loki) | aviso **[24h]** | sondeo de rutas o fallo de la UI que muestra opciones no permitidas | cybersecurity (developer si es la UI) |
 | `CsrfRejected` | `increase(csrf_rejected_total[10m]) > 0` | aviso **[24h]** | origen ajeno intentando modificar datos | cybersecurity |
 | `InvalidSessionBurst` | > 20 `auth.session.invalid` de una IP en 10 min | aviso **[24h]** | posible reutilización o fuerza bruta de cookies | cybersecurity |
