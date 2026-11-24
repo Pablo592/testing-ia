@@ -29,7 +29,7 @@ historias las propone el Product Owner sin entrevista al cliente real).
 | 1.6d | testing | Cubrir las rondas 1.1f, 1.3c y 1.6c en `docs/testing.md` (incluido `422 TABLE_OUT_OF_RANGE`) | Hecho (206 criterios trazados; T-14..T-17 e I-01..I-10 verificados; casos de `verifyPin`, configuración fija, logs y códigos de error; T-19..T-22 nuevos) |
 | 1.6e | monitoring | Restos de la 1.3c en `docs/logging.md` (`settings.changed`, `__Host-sid`) | Hecho (sin `settings.changed`; `app.started` registra mesas y umbral; `__Host-sid` en la redacción; eventos `auth.verify.*`, `auth.sessions.revoked`, `auth.reconfirm.failed`, `staff.unlocked`; métrica `auth_verifications_total`; alertas `AccountLockedManual`, `SessionPinProbing`) |
 | 1.1f | product-owner | T-14..T-17 e interpretaciones I-01..I-10 de Testing | Hecho (HU-01/CA-F12 bloqueo temporal y CA-F13 bloqueo indefinido; T-15, T-16 (solo valor mínimo) y T-17 (lista cerrada) aceptados; I-01..I-10 confirmadas salvo I-06, corregida) |
-| 1.7a | software-engineer | Ronda de cierre: T-19, T-20 (opción A), T-21, SEC-025 y preguntas de UX (`expires_at`, cambio obligatorio de PIN) | En curso |
+| 1.7a | software-engineer | Ronda de cierre: T-19, T-20 (opción A), T-21, SEC-025 y preguntas de UX (`expires_at`, cambio obligatorio de PIN) | Hecho (`docs/arquitectura.md`: T-19, T-20 opción A, T-21, SEC-025, `expires_at` y cambio obligatorio de PIN; revisión 1.7a registrada) |
 | 1.7b | monitoring | Ronda de cierre: SEC-024, telemetría `pre_session` (condiciones de Cybersecurity), `screen` P-01..P-11 y flujos de `flujos.md` §10, T-22 | En curso |
 | 1.7c | infrastructure | Ronda de cierre: SEC-023, duración de DEMO (T-22), `mkdir .secrets` en `run.sh`, CA y pantalla completa en barra para el manual | En curso |
 | 1.7d | product-owner | Ronda de cierre: interpretaciones de HU-08/CA-F13 propuestas por UX | Hecho (las dos interpretaciones de UX confirmadas en HU-08/CA-F13). Cancelaciones posteriores al cierre: se tratan como las anulaciones posteriores (criterio de menor carga) |
@@ -48,6 +48,7 @@ Orquestador lo aplica así (el humano puede corregir cualquier punto):
 - **M-07:** alertas por **correo**; horario de alertas 07:00–21:00; retención de logs 30 días (90 los de seguridad); se informa a los empleados del registro de actividad (texto breve en la documentación, sin desarrollo).
 
 ## Bloqueos
+- **Push pendiente (2026-11-24):** `git push`/`git fetch` fallan con `Permission denied (publickey)`; los commits quedan en local hasta que el humano cargue la clave SSH.
 - Puerta de la Etapa 1: **sin hallazgos críticos ni altos abiertos** (Cybersecurity 1.4c). Quedan hallazgos medios/bajos (ronda 1.7) y la aprobación final del humano.
 
 ## Hallazgos reportados a otros agentes

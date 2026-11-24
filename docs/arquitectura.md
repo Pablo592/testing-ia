@@ -19,6 +19,12 @@
 > (SEC-021), cobros del día para el camarero (SEC-022), UID 1000 en la imagen
 > de `app` (SEC-010) y retirada de los ajustes editables (HU-09 fuera del MVP).
 > Registro en la §15.
+>
+> Revisión 2026-11-23 (tarea 1.7a): límite por sesión solo en aprobaciones y
+> bloqueo antes que la sesión para `confirmPin`/`currentPin` (T-20), códigos de
+> `tableNumber` (T-19), `managerApproval` en sesión de encargado (T-21), tiempo
+> igualado con encargado bloqueado (SEC-025), `expiresAt` en `GET /auth/me` y
+> `403 PIN_CHANGE_REQUIRED` (preguntas de UX). Registro en la §16.
 
 ## 1. Visión general
 
@@ -234,7 +240,7 @@ entorno no secretas y **no arranca** si están fuera de rango:
 
 | Variable | Rango | Valor por defecto | Uso |
 |---|---|---|---|
-| `TABLE_COUNT` | 1–99 | 20 (supuestos 1 y 20) | rejilla de mesas (HU-02/CA-F01); `POST /orders` rechaza mesas > N con `422 TABLE_OUT_OF_RANGE` |
+| `TABLE_COUNT` | 1–99 | 20 (supuestos 1 y 20) | rejilla de mesas (HU-02/CA-F01); `POST /orders` rechaza mesas entre N + 1 y 99 con `422 TABLE_OUT_OF_RANGE` (fuera de 1–99 → `400`, §5.1) |
 | `DELAY_THRESHOLD_MINUTES` | 1–60 | 10 (supuesto 24) | "RETRASADO" en la cola (HU-03/CA-F06) |
 
 - Solo los cambia soporte técnico (variable del despliegue + reinicio de
@@ -271,7 +277,7 @@ concurrencia; los cancelados conservan su número). `$businessDate` viene del
 | business_date | date | del envío; **no cambia** aunque se modifique o cobre otro día |
 | daily_number | int | `UNIQUE (business_date, daily_number)` |
 | type | enum `table` \| `counter` | Mesa / Mostrador-Para llevar |
-| table_number | smallint null | `CHECK` coherente con `type` y `BETWEEN 1 AND 99`; ≤ `TABLE_COUNT` al crear (validado en servicio) |
+| table_number | smallint null | `CHECK` coherente con `type` y `BETWEEN 1 AND 99`; ≤ `TABLE_COUNT` al crear (validado en servicio). Códigos de la API en §5.1 (`POST /orders`, T-19) |
 | customer_ref | varchar(30) null | |
 | status | enum `open` \| `paid` \| `cancelled` | **dimensión de cobro** (Abierto / Cobrado / Cancelado) |
 | prep_status | enum `pending` \| `in_progress` \| `ready` \| `served` | **dimensión de preparación** (Pendiente / En preparación / Listo / Servido) |
@@ -493,18 +499,27 @@ requieren aceptan en el cuerpo
   (ni token ni "modo autorizado"). La siguiente acción la vuelve a necesitar.
   El cliente vacía el PIN tras la respuesta (éxito o error) y nunca lo guarda
   en el borrador ni en `localStorage`.
-- Si la sesión es de un encargado, se omite y `authorized_by = actor`. Si
-  Cybersecurity exige reautenticación, el campo pasa a ser obligatorio también
-  para el rol M sin cambiar el contrato.
+- Si la sesión es de un encargado, se omite y `authorized_by = actor`. **Si una
+  sesión de encargado lo envía igualmente (T-21 (b))**, se **ignora**: no se
+  llama a `verifyPin`, no suma a ningún contador (cuenta, IP ni sesión), no
+  cambia la respuesta y `authorized_by = actor`. Es la opción más simple y no
+  abre un oráculo, porque el PIN recibido no se compara con nada (un `400`
+  exigiría además que la UI nunca lo mande, sin ganar seguridad). El esquema de
+  la petición sigue siendo el mismo para W y M. Si Cybersecurity exige
+  reautenticación, el campo pasa a ser obligatorio también para el rol M sin
+  cambiar el contrato.
 - Errores: `403 MANAGER_APPROVAL_REQUIRED` (falta), `403 MANAGER_APPROVAL_INVALID`
   ("PIN de encargado incorrecto"; la misma respuesta si el id no es un encargado
   activo, para no revelar nada; también si el encargado está bloqueado,
-  desactivado o con PIN provisional), `429` (5 fallos por sesión en 10 min, o
-  límite por IP). El cambio pendiente no se aplica y el cliente lo conserva.
-- Se verifica con `verifyPin` (§7): los fallos cuentan en el contador de
-  bloqueo del encargado elegido (misma escala que el login,
-  `docs/seguridad.md` §6.1), en el límite por IP y en el de la sesión del
-  camarero. PIN de encargado: 6 dígitos.
+  desactivado o con PIN provisional, **indistinguible en código, cuerpo y
+  tiempo**, SEC-025, §7 paso 3), `429` (5 aprobaciones fallidas por sesión en
+  10 min, o límite por IP). El cambio pendiente no se aplica y el cliente lo
+  conserva.
+- Se verifica con `verifyPin` (§7, `purpose: 'approval'`): los fallos cuentan
+  en el contador de bloqueo del encargado elegido (misma escala que el login,
+  `docs/seguridad.md` §6.1), en el límite por IP y en el **límite por sesión**
+  del camarero, que solo existe para las aprobaciones (T-20). PIN de
+  encargado: 6 dígitos.
 
 **Reconfirmación del encargado (SEC-007).** Anular un cobro, crear un usuario,
 cambiar su rol, activarlo/desactivarlo, restablecer su PIN o desbloquearlo
@@ -513,19 +528,45 @@ sesión), aunque la sesión ya sea de encargado. Se verifica con `verifyPin`
 (§7) sobre el usuario de la sesión, sin estado en servidor. Errores:
 `403 PIN_CONFIRMATION_REQUIRED`, `403 PIN_CONFIRMATION_INVALID`,
 `423 LOCKED {retryAfterSeconds}` / `423 ACCOUNT_LOCKED_MANUAL` (en este caso la
-sesión ya está revocada), `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}`.
+sesión ya está revocada), `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}` (solo
+por el límite de la IP: la reconfirmación **no** tiene límite por sesión, T-20).
 Cambiar solo el nombre de un usuario no la exige.
 
 Durante un **bloqueo temporal** de la cuenta del encargado (HU-01/CA-F12), la
 reconfirmación se rechaza **sin comprobar el PIN** con
 `423 LOCKED {retryAfterSeconds}` (la UI muestra "Cuenta bloqueada. Espera X
-min") y ese rechazo **no cuenta como fallo** (paso 3 de `verifyPin`, §7).
+min") y ese rechazo **no cuenta como fallo** (paso 2 de `verifyPin` para
+`confirm`/`change`, §7). Como el bloqueo se comprueba antes que cualquier otro
+límite salvo el de la IP, el 5.º fallo seguido da el mensaje normal de PIN
+incorrecto, los siguientes intentos reciben `423` mientras dure el bloqueo y,
+al terminar, se puede volver a intentar (CA-F12 (b), (c) y (d)).
 
 **Cambio obligatorio del PIN provisional (SEC-016).** `POST /auth/pin` solo
 existe para el PIN provisional (`mustChangePin = true`, HU-07/CA-F04, CA-F09);
 no hay cambio voluntario del PIN en el MVP. Su `currentPin` es una
-verificación de PIN más: pasa por `verifyPin` (§7) sobre el usuario de la
-sesión, con los mismos contadores y límites que `confirmPin`.
+verificación de PIN más: pasa por `verifyPin` (§7, `purpose: 'change'`) sobre
+el usuario de la sesión, con los mismos contadores y límites que `confirmPin`
+(cuenta e IP; sin límite por sesión, T-20).
+
+**Sesión con PIN provisional: `403 PIN_CHANGE_REQUIRED` (HU-07/CA-F04, CA-F09;
+RS-15).** Mientras `users.must_change_pin = true`, cualquier petición con
+sesión salvo `GET /auth/me`, `POST /auth/pin` y `POST /auth/logout` (incluidos
+`GET /events` y `POST /telemetry`) recibe
+```json
+{ "error": { "code": "PIN_CHANGE_REQUIRED", "message": "Tienes que cambiar tu PIN", "requestId": "…" } }
+```
+con estado `403` y sin ejecutar nada. Lo aplica un middleware **después** de
+resolver la sesión (sin sesión → `401`) y **antes** del de permisos (para que
+la app reciba siempre el mismo código, tenga o no permiso para la ruta). Como
+la sesión y el usuario se leen en cada petición (§7), una promoción a
+encargado con PIN corto (HU-07/CA-F09) surte efecto **en la siguiente
+acción**: la app, al recibir `PIN_CHANGE_REQUIRED` en cualquier respuesta,
+abre la pantalla "Cambio obligatorio del PIN" (el cambio que se intentaba no
+se aplica). Además, la promoción envía `session.updated` y cierra el flujo SSE
+de esa sesión (§6): la app recarga `GET /auth/me`, ve `mustChangePin = true` y
+abre la pantalla aunque nadie toque nada (p. ej. un encargado con la cola de
+barra abierta). Tras el `204` de `POST /auth/pin` la app vuelve a cargar
+`GET /auth/me` y reconecta el flujo.
 
 ### 5.1 Endpoints
 
@@ -537,8 +578,8 @@ Permisos: **W** = camarero/cajero, **K** = barra/cocina, **M** = encargado
 | `GET /auth/login-options` | público | HU-01 | rejilla de P-01 (SEC-005): solo `[{name, role}]` de usuarios **activos**, sin `id`, bloqueo ni `mustChangePin`; `Cache-Control: no-store`; mismo límite por IP que el login |
 | `POST /auth/login` | público | HU-01 | `{name, pin}` → `200 {user:{id,name,role,mustChangePin}}` + cookie; `401 INVALID_CREDENTIALS`; `423 LOCKED {retryAfterSeconds}`; `423 ACCOUNT_LOCKED_MANUAL`; `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}` (por IP, antes del hash); `403 USER_DISABLED` (solo si el PIN es correcto) |
 | `POST /auth/logout` | sesión | HU-01 | revoca la sesión |
-| `GET /auth/me` | sesión | HU-01 | usuario, rol, permisos efectivos, `serverTime`, `businessDate`, `localConfig` (configuración de instalación, §4.1) filtrado por rol: W `{tableCount}`, K `{delayThresholdMinutes}`, M ambos |
-| `POST /auth/pin` | sesión **con `mustChangePin = true`** | HU-07/CA-F04, CA-F09 | **Solo el cambio obligatorio del PIN provisional** (ronda 1.1f: ninguna historia pide el cambio voluntario; un PIN que se sospecha visto lo restablece el encargado con `reset-pin`). Con `mustChangePin = false` → `403 FORBIDDEN` sin verificar nada (no suma a ningún contador). `{currentPin, newPin}` → `204`; pone `must_change_pin = false`; revoca las demás sesiones del usuario; única ruta (con `/auth/me` y logout) permitida con `mustChangePin`. `currentPin` pasa por `verifyPin` (SEC-016): `403 PIN_INVALID` (incorrecto; no `401`, la sesión sigue válida); `423 LOCKED {retryAfterSeconds}`; `423 ACCOUNT_LOCKED_MANUAL` (al llegar a 20 fallos: todas las sesiones del usuario, incluida esta, quedan revocadas); `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}` (por IP o por sesión, antes del hash); `400` si `newPin` incumple las reglas de PIN |
+| `GET /auth/me` | sesión (permitida con `mustChangePin`) | HU-01, HU-07 | `{user:{id, name, role, mustChangePin}, permissions:[…], session:{expiresAt}, serverTime, businessDate, localConfig}`. `session.expiresAt` = `sessions.expires_at` (caducidad absoluta de 12 h, ISO 8601 UTC): la app avisa 15 min antes (HU-01/CA-N06, aviso de barra) calculando con su desfase respecto a `serverTime`, no con el reloj de la tablet. No se expone la caducidad por inactividad (la lleva el cliente con su temporizador de 15 min). `localConfig` (configuración de instalación, §4.1) filtrado por rol: W `{tableCount}`, K `{delayThresholdMinutes}`, M ambos |
+| `POST /auth/pin` | sesión **con `mustChangePin = true`** | HU-07/CA-F04, CA-F09 | **Solo el cambio obligatorio del PIN provisional** (ronda 1.1f: ninguna historia pide el cambio voluntario; un PIN que se sospecha visto lo restablece el encargado con `reset-pin`). Con `mustChangePin = false` → `403 FORBIDDEN` sin verificar nada (no suma a ningún contador). `{currentPin, newPin}` → `204`; pone `must_change_pin = false`; revoca las demás sesiones del usuario; única ruta (con `/auth/me` y logout) permitida con `mustChangePin`. `currentPin` pasa por `verifyPin` (SEC-016): `403 PIN_INVALID` (incorrecto; no `401`, la sesión sigue válida); `423 LOCKED {retryAfterSeconds}`; `423 ACCOUNT_LOCKED_MANUAL` (al llegar a 20 fallos: todas las sesiones del usuario, incluida esta, quedan revocadas); `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}` (solo por IP, antes del hash; sin límite por sesión, T-20); `400` si `newPin` incumple las reglas de PIN. El resto de rutas con `mustChangePin` → `403 PIN_CHANGE_REQUIRED` (§5) |
 | `POST /session/activity` | sesión | HU-01 | latido de interacción (como mucho 1/min si hay toques sin otras peticiones) |
 | `GET /events` | sesión | HU-02..HU-06 | flujo SSE (§6) |
 | `GET /menu` | W, K, M | HU-02, HU-05 | categorías y productos activos ordenados, con `available` (K sin precio) |
@@ -546,8 +587,8 @@ Permisos: **W** = camarero/cajero, **K** = barra/cocina, **M** = encargado
 | `POST /categories` · `PATCH /categories/:id` · `DELETE /categories/:id` | M | HU-05 | `DELETE` archiva; `409 CATEGORY_HAS_ACTIVE_PRODUCTS {count}` |
 | `POST /products` · `PATCH /products/:id` | M | HU-05 | precio en `priceCents`; cambio de precio auditado; `active:false` desactiva |
 | `PUT /menu/order` | M | HU-05 | `{categories:[id…], products:{categoryId:[id…]}}` |
-| `GET /tables/:n/open-orders` | W, M | HU-02 | aviso "La mesa X ya tiene un pedido abierto" (`status = 'open'`) |
-| `POST /orders` | W, M | HU-02 | `{id, type, tableNumber?, customerRef?, lines:[{id, productId, quantity, note?}]}` → `201` pedido con número del día, `businessDate` y precios del servidor; `422 TABLE_OUT_OF_RANGE`; `422 ORDER_TOO_MANY_LINES` (> 100); `quantity` 1–99; mismo `id` del mismo usuario → `200` con el mismo pedido; `id` de otro usuario → `409` sin datos |
+| `GET /tables/:n/open-orders` | W, M | HU-02 | aviso "La mesa X ya tiene un pedido abierto" (`status = 'open'`); `:n` con la misma regla que `tableNumber` de `POST /orders` (`400` fuera de 1–99 o no entero, `422 TABLE_OUT_OF_RANGE` por encima de `TABLE_COUNT`) |
+| `POST /orders` | W, M | HU-02 | `{id, type, tableNumber?, customerRef?, lines:[{id, productId, quantity, note?}]}` → `201` pedido con número del día, `businessDate` y precios del servidor. **`tableNumber` (T-19):** con `type = "table"` es obligatorio y debe ser un entero JSON (no cadena, sin coerción) entre 1 y 99; si falta, es 0, negativo, > 99, no entero o no numérico → `400` de validación con `path: ["tableNumber"]`; con `type = "counter"` no se admite (presente, aunque sea `null`, → `400` con `path: ["tableNumber"]`). Entero entre 1 y 99 pero > `TABLE_COUNT` (21–99 con 20 mesas) → `422 TABLE_OUT_OF_RANGE {tableCount}`. Ninguno crea pedido ni consume número del día; `422 ORDER_TOO_MANY_LINES` (> 100); `quantity` 1–99; mismo `id` del mismo usuario → `200` con el mismo pedido; `id` de otro usuario → `409` sin datos |
 | `GET /orders/floor` | W, M | HU-02, HU-03, HU-04 | **lista de sala** (§4.2): `{serverTime, businessDate, orders:[staffDto]}`; incluye abiertos, cobrados sin servir del día y "Listos para servir" |
 | `GET /orders/:id` | W, M | HU-04, HU-06 | detalle con importes, líneas con historial y `version` |
 | `POST /orders/:id/serve` | W, M (`order:serve`) | HU-03 | marca "Servido"; `409 INVALID_TRANSITION` si no está "Listo"; K → `403` |
@@ -621,7 +662,7 @@ AÑADIDO/ELIMINADO). La ruta y el hub SSE eligen por el rol de la sesión. Así
 | `product.updated` | disponibilidad/precio/activo | ✓ | ✓ (sin precio) | ✓ | HU-05 |
 | `menu.changed` | estructura/orden → recarga `GET /menu` | ✓ | ✓ | ✓ | HU-05 |
 | `session.revoked` (y se cierra el flujo) | — | sesión afectada | sesión afectada | sesión afectada | HU-01, HU-07 |
-| `session.updated` (cambio de rol → recarga `/auth/me` y reconecta) | — | sesión afectada | sesión afectada | sesión afectada | HU-07 |
+| `session.updated` (cambio de rol → recarga `/auth/me` y reconecta; si la promoción a encargado deja `mustChangePin`, el servidor cierra el flujo tras el evento y la app abre el cambio obligatorio del PIN, §5) | — | sesión afectada | sesión afectada | sesión afectada | HU-07 |
 | `ping` cada 2 s | `serverTime`, `businessDate` | ✓ | ✓ | ✓ | latido |
 
 - **Cambio de día:** no hay temporizador en servidor. El `ping` lleva
@@ -695,19 +736,56 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
   (ningún otro servicio ni ruta puede llamarlo; una ruta nueva no puede
   saltarse los límites). Cada ruta traduce `reason` a su error público
   (`401 INVALID_CREDENTIALS`, `403 MANAGER_APPROVAL_INVALID`,
-  `403 PIN_CONFIRMATION_INVALID`, `403 PIN_INVALID`, `423`, `429`). Orden:
-  1. **Límite por IP**: si la IP de `ctx.ip` tiene 10 fallos en los últimos
-     10 min → `rate_limited` (`429` durante 10 min, para cualquier usuario y
-     cualquier ruta de PIN). **Antes** del hash.
-  2. **Límite por sesión** (solo si hay `ctx.sessionId`, es decir, aprobación,
-     reconfirmación y cambio de PIN): 5 fallos de la sesión en 10 min, sumando
-     los tres usos → `rate_limited` (`429`). **Antes** del hash.
+  `403 PIN_CONFIRMATION_INVALID`, `403 PIN_INVALID`, `423`, `429`). El
+  **orden depende de `purpose`** (T-20, opción A decidida por Cybersecurity,
+  `docs/seguridad.md` §6.4):
+
+  | Paso | `login` | `confirm` / `change` (PIN del titular de la sesión) | `approval` (PIN de otro usuario) |
+  |---|---|---|---|
+  | 1 | Límite por IP | Límite por IP | Límite por IP |
+  | 2 | Bloqueo → `423` | Bloqueo → `423` | Límite por sesión (5/10 min) |
+  | 3 | Hash | Hash | Bloqueo → error genérico con tiempo igualado |
+  | 4 | Fallo / acierto | Fallo / acierto | Hash, fallo / acierto |
+
+  1. **Límite por IP** (todos los usos): si la IP de `ctx.ip` tiene 10 fallos
+     en los últimos 10 min → `rate_limited` (`429` durante 10 min, para
+     cualquier usuario y cualquier ruta de PIN). **Antes** del hash.
+  2. **Límite por sesión, solo `purpose = 'approval'`**: 5 aprobaciones
+     fallidas de la sesión en 10 min → `rate_limited` (`429`). **Antes** del
+     hash y antes de mirar el bloqueo del encargado elegido. Existe para que
+     una tablet de sala no pueda dedicarse a probar y bloquear el PIN de un
+     encargado (`docs/seguridad.md` §6.3). **No se aplica** a `confirm` ni a
+     `change` (T-20): el PIN es del propio titular de la sesión y ya lo acotan
+     el bloqueo de su cuenta (más estricto: 5 fallos, sin reinicio al expirar,
+     tope de 20 con revocación) y el límite por IP; con el límite de sesión el
+     titular recibiría `429` en vez del `423` de HU-01/CA-F12 (c) y seguiría
+     rechazado después del bloqueo, contra CA-F12 (d). El login no tiene
+     sesión. Con un solo uso por sesión ya no hay suma de usos (T-21 (a)
+     queda sin objeto; ver la nota tras la lista).
   3. **Bloqueo de la cuenta** (`locked_until > now` o `locked_manual`) →
-     `locked` / `locked_manual` sin calcular el hash ni contar el intento
-     (tampoco en IP ni sesión). Vale para todos los usos: en `confirmPin` y
-     `currentPin` la respuesta es `423 LOCKED {retryAfterSeconds}`
-     ("Cuenta bloqueada. Espera X min", HU-01/CA-F12); en `managerApproval`,
-     el error genérico `403 MANAGER_APPROVAL_INVALID`.
+     `locked` / `locked_manual` **sin calcular el hash** (en `login`,
+     `confirm` y `change` es el paso 2; en `approval`, el 3):
+     - `login`, `confirm`, `change`: no cuenta el intento en ningún contador
+       (cuenta, IP ni sesión). `confirmPin` y `currentPin` responden
+       `423 LOCKED {retryAfterSeconds}` ("Cuenta bloqueada. Espera X min",
+       HU-01/CA-F12) o `423 ACCOUNT_LOCKED_MANUAL`; el login, como en la §5.1.
+       La diferencia de tiempo no importa: el `423` ya es explícito.
+     - `approval` (**SEC-025**, RS-16d): responde el error genérico
+       `403 MANAGER_APPROVAL_INVALID`, **indistinguible** de un PIN erróneo:
+       (a) **tiempo igualado sin calcular un hash**: se espera sin usar CPU
+       (`setTimeout`) hasta que, contado desde la entrada en `verifyPin`, haya
+       pasado la duración de referencia de una verificación más una variación
+       aleatoria de 0–20 ms. La referencia (`pinVerifyReferenceMs`) es la
+       mediana de 5 verificaciones contra el hash ficticio hechas al arrancar
+       `app` (en el arranque, no por petición) y se guarda en memoria. Nunca
+       se calcula un hash real durante el bloqueo: esos intentos no cuentan en
+       la cuenta y serían CPU gratis para un atacante (T-36). (b) **Mismos
+       contadores visibles**: el intento suma en el contador de la IP y en el
+       de la sesión (no en el de la cuenta, que está bloqueada); así el `429`
+       por sesión llega tras 5 intentos igual que con un PIN erróneo, y los
+       intentos durante el bloqueo no son ilimitados ni dejan peticiones en
+       espera sin tope. El log interno sí distingue el motivo
+       (`reason = locked`), que el camarero no ve.
   4. **Hash** argon2id(pin + pepper); si `target` es `null` (usuario
      inexistente o, en aprobaciones, id que no es un encargado activo), contra
      un hash ficticio, en tiempo constante.
@@ -715,7 +793,7 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
      se verificaba (el encargado elegido en una aprobación; el de la sesión en
      `confirmPin` y `currentPin`) y se aplica la escala 5/10/15/20 → 5 min /
      15 min / 60 min / `locked_manual`; además suman el contador de la IP y,
-     si hay, el de la sesión. **Al llegar a `locked_manual` se revocan todas
+     solo en aprobaciones, el de la sesión. **Al llegar a `locked_manual` se revocan todas
      las sesiones de esa cuenta** en la misma transacción (y, tras el
      `COMMIT`, `session.revoked` y cierre de sus flujos SSE): sea por login,
      por aprobaciones o desde una sesión propia (HU-01/CA-F13), a los 20 fallos alguien está
@@ -724,7 +802,19 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
      `423 ACCOUNT_LOCKED_MANUAL` y la siguiente petición recibe `401`.
   6. **Acierto**: `failed_attempts = 0` (y limpia `locked_until`). En
      aprobaciones, las reglas de "no aprueba" (desactivado, PIN provisional)
-     se comprueban después y devuelven el mismo error genérico.
+     se comprueban después y devuelven el mismo error genérico; ese rechazo
+     suma en los contadores de IP y sesión como un fallo (no en el de la
+     cuenta, porque el PIN era correcto) y no necesita espera: ya ha pasado
+     por el hash, así que su tiempo es el de una verificación (SEC-025).
+
+  **Nota (T-21 (a)).** Hasta la 1.7a el límite por sesión sumaba aprobación,
+  reconfirmación y cambio de PIN; por la API cada tipo de sesión solo alcanza
+  uno de esos usos (W: aprobaciones; M: reconfirmaciones, porque su
+  `managerApproval` se ignora; PIN provisional: solo `POST /auth/pin`). Tras
+  T-20 el límite por sesión solo cuenta aprobaciones, así que no hay suma que
+  probar. Que `confirm` y `change` **no** consulten ni sumen el contador de
+  sesión se prueba en unitario sobre `verifyPin` (con `FakeClock`) y, por la
+  API, con el caso P-6 de `docs/testing.md` §5.2.1 (6.º intento → `423`).
 - **Escala y reinicio (SEC-001):** `failed_attempts` cuenta fallos
   consecutivos acumulados y no se reinicia al expirar un bloqueo. Durante un
   bloqueo no se verifica el PIN ni cuenta el intento. Lo reinician un acierto
