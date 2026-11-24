@@ -1,6 +1,8 @@
 # Permisos — Roles, RBAC y mínimo privilegio
 
-> Responsables: Cybersecurity (con Developer). Versión de Etapa 1, 2026-11-21.
+> Responsables: Cybersecurity (con Developer). Versión de Etapa 1, 2026-11-21;
+> revisión 1.4b, 2026-11-23 (rutas de la revisión 1.3b del SE, §3.4; HU-09
+> fuera del MVP por decisión del humano).
 > Fuentes: `docs/historias/` (HU-01..HU-08), `docs/arquitectura.md` §5 y §7,
 > ADR-003, ADR-005, `docs/seguridad.md` (decisiones §6 y hallazgos SEC-xxx).
 > **Pendiente:** revisión conjunta con Developer al empezar la Etapa 2. La
@@ -8,7 +10,9 @@
 > documento, manda este documento hasta que ambos se corrijan.
 >
 > Los elementos marcados **[SEC-xxx]** dependen de un hallazgo abierto que aún
-> no está incorporado a historias/arquitectura.
+> no está incorporado a historias/arquitectura. En 1.4b quedan abiertos
+> SEC-016 (`currentPin`) y SEC-022 (cobros del día para el camarero); SEC-001,
+> SEC-005 y SEC-007 ya están incorporados y se quitan sus marcas.
 
 ## 1. Roles
 
@@ -36,7 +40,7 @@ Estados de cuenta que **restringen** cualquier rol (se evalúan antes del RBAC):
 3. **Mínimo privilegio:** `kitchen` no tiene ningún permiso de pedidos fuera de
    la preparación ni recibe importes; `waiter` no gestiona menú, personal,
    ajustes ni informes; las acciones que mueven dinero hacia atrás (anular) o
-   cambian identidades solo las hace `manager`, con PIN reconfirmado [SEC-007].
+   cambian identidades solo las hace `manager`, con PIN reconfirmado (SEC-007).
 4. **Separación de funciones:** acciones de riesgo de un `waiter` sobre pedidos
    ya en preparación exigen la aprobación presencial de un `manager`
    (`managerApproval`), registrada en `authorized_by`.
@@ -49,47 +53,49 @@ Estados de cuenta que **restringen** cualquier rol (se evalúan antes del RBAC):
 
 Leyenda: ✓ permitido · ✗ `403 FORBIDDEN` · **A** solo con `managerApproval`
 de un encargado activo, no bloqueado y sin PIN provisional · **P** exige
-`confirmPin` del propio encargado [SEC-007] · (K) respuesta con serializador
+`confirmPin` del propio encargado (SEC-007) · (K) respuesta con serializador
 sin importes.
 
 ### 3.1 Rutas públicas (sin sesión)
 | Ruta | Notas |
 |---|---|
 | `POST /auth/login` | Límite por IP y bloqueo por usuario (`docs/seguridad.md` §6.1). Exige `Origin` correcto |
-| `GET /auth/login-options` [SEC-005] | Solo `[{name, role}]` de usuarios activos; `no-store`; límite por IP |
+| `GET /auth/login-options` | Solo `[{name, role}]` de usuarios activos; `no-store`; comparte el límite por IP |
 
-`GET /healthz` no es público: solo lo usa el `HEALTHCHECK` dentro del
-contenedor y Caddy no lo reenvía.
+`GET /healthz`, `GET /readyz` y `GET /metrics` (puerto 9464) no son públicos:
+Caddy responde `404` a los tres y el 9464 no se publica ni se enruta.
 
 ### 3.2 Rutas con sesión
 
 | Permiso | Ruta(s) | W | K | M | Historia | Condiciones |
 |---|---|---|---|---|---|---|
 | `session:self` | `POST /auth/logout`, `GET /auth/me` | ✓ | ✓ | ✓ | HU-01 | Permitidas también con PIN provisional |
-| `session:self` | `POST /auth/pin` | ✓ | ✓ | ✓ | HU-07 | Exige `currentPin`; regla de PIN por rol; revoca las demás sesiones del usuario |
+| `session:self` | `POST /auth/pin` | ✓ | ✓ | ✓ | HU-07 | Exige `currentPin`; regla de PIN por rol; revoca las demás sesiones del usuario. **[SEC-016]** Los fallos de `currentPin` cuentan para el bloqueo del usuario, el límite por IP y el de 5 fallos/10 min por sesión |
 | `session:self` | `POST /session/activity` | ✓ | ✓ | ✓ | HU-01 | Máx. 1/min |
 | `events:subscribe` | `GET /events` | ✓ | ✓ (K) | ✓ | HU-03, HU-05 | Máx. 2 flujos por sesión |
 | `menu:read` | `GET /menu` | ✓ | ✓ (K, sin precios) | ✓ | HU-02, HU-05 | |
-| `settings:read` | `GET /settings` | ✓ | ✓ | ✓ | HU-02, HU-03 | Sin datos sensibles |
+| (sin permiso propio) | `GET /auth/me` → `localConfig` y evento `settings.updated` | W `{tableCount}` | K `{delayThresholdMinutes}` | ambos | HU-02, HU-03 | Cada rol recibe solo el valor que usa (1.4b) |
 | `product:set_availability` | `PATCH /products/:id/availability` | ✓ | ✗ | ✓ | HU-05 | Solo el campo `available` |
 | `menu:manage` | `POST/PATCH/DELETE /categories…`, `POST/PATCH /products…`, `PUT /menu/order` | ✗ | ✗ | ✓ | HU-05 | Cambio de precio auditado |
-| `order:read` | `GET /orders?status=open`, `GET /orders/:id`, `GET /tables/:n/open-orders` | ✓ | ✗ | ✓ | HU-02, HU-04 | Todos los pedidos del local (no solo los propios): es un requisito de sala |
+| `order:read` | `GET /orders/floor`, `GET /orders/:id`, `GET /tables/:n/open-orders` | ✓ | ✗ | ✓ | HU-02, HU-03, HU-04 | Todos los pedidos del local (no solo los propios): es un requisito de sala (supuesto 19). Serializador `toStaffDto` (con importes): nunca para `kitchen` |
+| `order:serve` | `POST /orders/:id/serve`, `POST /orders/:id/serve/undo` | ✓ | ✗ | ✓ | HU-03 (supuesto 18) | Solo desde "Listo"; deshacer ≤ 30 s (reloj del servidor), solo la última acción y solo el usuario que la hizo; auditado |
 | `order:create` | `POST /orders` | ✓ | ✗ | ✓ | HU-02 | Precios del servidor; `id` de otro dueño → `409` sin datos |
 | `order:modify` (añadir) | `PATCH /orders/:id/lines` `add` | ✓ | ✗ | ✓ | HU-06 | Solo `status = open` |
 | `order:modify` (quitar/reducir, `prep = pending`) | `PATCH /orders/:id/lines` `remove/change` | ✓ | ✗ | ✓ | HU-06 | |
-| `order:modify` (quitar/reducir, `prep ∈ in_progress, ready`) | ídem | **A** | ✗ | ✓ | HU-06 | El encargado con sesión propia no necesita aprobación |
+| `order:modify` (quitar/reducir, `prep ∈ in_progress, ready, served`) | ídem | **A** | ✗ | ✓ | HU-06 | El encargado con sesión propia no necesita aprobación (HU-06/CA-F15) |
 | `order:cancel` (`prep = pending`) | `POST /orders/:id/cancel` | ✓ | ✗ | ✓ | HU-06 | Motivo obligatorio |
-| `order:cancel` (`prep ∈ in_progress, ready`) | ídem | **A** | ✗ | ✓ | HU-06 | |
+| `order:cancel` (`prep ∈ in_progress, ready, served`) | ídem | **A** | ✗ | ✓ | HU-06 | |
 | `kitchen:read` | `GET /kitchen/queue` | ✗ | ✓ (K) | ✓ (K) | HU-03 | Sin importes para nadie en esta ruta |
-| `kitchen:transition` | `POST /orders/:id/prep`, `POST /orders/:id/kitchen-ack` | ✗ | ✓ | ✓ | HU-03 | Transición validada; `undo_ready` ≤ 30 s |
+| `kitchen:transition` | `POST /orders/:id/prep` (`action: start \| ready \| undo`), `POST /orders/:id/kitchen-ack` | ✗ | ✓ | ✓ | HU-03 | Transición validada en servidor; `undo` solo deshace la última transición `start`/`ready` de ese pedido y en ≤ 30 s (reloj del servidor); auditado |
 | `payment:create` | `POST /payments` | ✓ | ✗ | ✓ | HU-04 | Importe del servidor; `expectedTotalCents` |
-| `payment:read` | `GET /payments/:id/ticket` | ✓ | ✗ | ✓ | HU-04 | |
+| `payment:read` | `GET /payments/today`, `GET /payments/:id`, `GET /payments/:id/ticket` | ✓ (solo cobros del día de negocio actual **[SEC-022]**) | ✗ | ✓ | HU-04 | Para W, un cobro de otro día → `404` |
 | `payment:void` | `POST /payments/:id/void` | ✗ | ✗ | ✓ **P** | HU-04 | Motivo ≥ 5 caracteres; cobro completo |
 | `staff:read` | `GET /staff` | ✗ | ✗ | ✓ | HU-07 | Nunca devuelve `pin_hash`, `failed_attempts` ni datos de sesión |
-| `staff:manage` | `POST /staff`, `PATCH /staff/:id` (nombre, rol, activo) | ✗ | ✗ | ✓ **P** | HU-07 | `409 LAST_MANAGER`; promoción a encargado con PIN < 6 → `must_change_pin` |
-| `staff:manage` | `POST /staff/:id/reset-pin` | ✗ | ✗ | ✓ **P** | HU-07 | Revoca sesiones del usuario |
-| `staff:unlock` [SEC-001] | `POST /staff/:id/unlock` | ✗ | ✗ | ✓ **P** | HU-07 | Pone el contador a 0; auditado |
-| `settings:manage` | `PATCH /settings` | ✗ | ✗ | ✓ | HU-02, HU-03 | |
+| `staff:manage` | `POST /staff`, `PATCH /staff/:id` (nombre, rol, activo) | ✗ | ✗ | ✓ **P** | HU-07 | `409 LAST_MANAGER`; promoción a encargado con PIN < 6 → `must_change_pin`. `PATCH` **sin** `confirmPin` solo si el cuerpo contiene únicamente `name` (si trae `role` o `active`, aunque no cambien, lo exige); cambio de nombre auditado con valor anterior y nuevo |
+| `staff:manage` | `POST /staff/:id/reset-pin` | ✗ | ✗ | ✓ **P** | HU-07 | Revoca sesiones del usuario; reinicia contador y bloqueo |
+| `staff:unlock` | `POST /staff/:id/unlock` | ✗ | ✗ | ✓ **P** | HU-07 | Pone el contador a 0 y quita `locked_until`/`locked_manual`; auditado |
+| `approval:request` | `GET /staff/managers` | ✓ | ✗ | ✓ | HU-06 | Solo `[{id, name}]` de encargados **activos** (no filtra por bloqueo ni PIN provisional, para no revelar ese estado; el servidor rechaza con el error genérico) |
+| `settings:read`, `settings:manage` | `GET /settings`, `PATCH /settings` | ✗ | ✗ | (✓) | HU-09 | **No se registran en el MVP** (HU-09 fuera, decisión del humano 2026-11-23): `404`. Si HU-09 vuelve: solo M, sin `confirmPin` (`docs/seguridad.md` §6.3) |
 | `reports:read` | `GET /reports/daily` | ✗ | ✗ | ✓ | HU-08 | Últimos 90 días |
 | `reports:close` | `POST /reports/daily/:date/closing` | ✗ | ✗ | ✓ | HU-08 | Inmutable; `409` si ya cerrado |
 | `telemetry:write` (M-03) | `POST /telemetry` | ✓ | ✓ | ✓ | — | Condiciones de `docs/seguridad.md` §6.3 (RS-43); no cuenta como actividad |
@@ -98,13 +104,28 @@ contenedor y Caddy no lo reenvía.
 **Cambio respecto a `docs/arquitectura.md` §7:** se separan `staff:read`,
 `staff:unlock`, `reports:close`, `settings:read`, `session:self`,
 `events:subscribe` y `telemetry:write` para que cada ruta tenga un permiso explícito (necesario
-para RS-17). La matriz de la arquitectura queda como resumen.
+para RS-17). La matriz de la arquitectura queda como resumen; tras la revisión
+1.3b del SE ambas coinciden salvo SEC-016, SEC-022 y que `settings:*` no se
+registra en el MVP.
+
+### 3.4 Revisión 1.4b: diferencias reportadas por el SE (`docs/estado.md`)
+
+| # | Cambio propuesto | Dictamen | Motivo |
+|---|---|---|---|
+| 1a | `GET /orders/floor` sustituye a `GET /orders?status=open` (`order:read`, W y M) | **Aceptado** | Mismo permiso y mismos datos de sala; K sigue sin acceso porque la respuesta lleva importes |
+| 1b | `POST /orders/:id/serve` y `/serve/undo` con permiso nuevo `order:serve` (W, M; K → 403) | **Aceptado** con condiciones de la tabla §3.2 | Supuesto 18: sala entrega, barra no; deshacer limitado a 30 s, última acción y mismo usuario |
+| 1c | `GET /payments/today` y `GET /payments/:id` (`payment:read`) | **Aceptado con condición** (SEC-022) | HU-04 da a W "Cobrados hoy"; por mínimo privilegio W solo lee cobros del día actual |
+| 1d | `GET /staff/managers` con permiso nuevo `approval:request` (W, M) | **Aceptado** | Necesario para elegir encargado (supuesto 22); solo `id` y `name`, nombres que ya muestra la rejilla de login; K no pide aprobaciones |
+| 2 | `POST /orders/:id/prep` con `action: "undo"` en lugar de `undo_ready` | **Aceptado** | HU-03 permite deshacer "Empezar" y "Listo"; una acción genérica limitada a la última transición y a 30 s no amplía permisos |
+| 3 | `GET /settings` solo M; W y K reciben su valor en `/auth/me` y `settings.updated` | **Aceptado** (y además, sin HU-09 en el MVP, `GET/PATCH /settings` no se registran) | Mínimo privilegio: cada rol recibe solo el dato que usa |
+| 4 | Quitar/reducir y cancelar con **A** también con preparación `served` | **Aceptado** | Coincide con HU-06/CA-F03 y CA-F05: "Servido" se trata como "Listo" |
+| 5 | `PATCH /staff/:id` sin `confirmPin` si solo cambia el nombre | **Aceptado con condición** | Coincide con HU-07/CA-N04. Renombrar no cambia rol, estado ni PIN; un renombrado malicioso solo obliga a corregirlo y queda auditado. Condición: la exención la decide el servidor por los campos presentes en el cuerpo (solo `name`), no por si su valor cambia |
 
 ### 3.3 Comandos de host (`system`)
 | Comando | Quién | Condiciones |
 |---|---|---|
 | `create-initial-manager` | Operador del host | Solo si no hay ningún encargado; PIN provisional de 6 dígitos; el secreto se borra después |
-| `unlock-user <nombre>` [SEC-001] | Operador del host | Para el caso de que el único encargado esté bloqueado; auditado como `system` |
+| `unlock-user <nombre>` | Operador del host | Para el caso de que el único encargado esté bloqueado; auditado como `system` |
 
 ## 4. Visibilidad de datos por rol
 
@@ -138,7 +159,8 @@ sesión afectada.
 | Inactividad | 15 min (camarero, encargado). Rol `kitchen`: sin caducidad por inactividad mientras el SSE está abierto |
 | Caducidad absoluta | 12 h para todos; configurable solo a la baja |
 | Revocación | Logout, desactivación, restablecimiento de PIN, cambio de PIN propio (resto de sesiones), caducidad. Cambio de rol: cierra SSE, no revoca |
-| Reautenticación | `confirmPin` en anular cobro y escrituras de Personal [SEC-007] |
+| Reautenticación | `confirmPin` en anular cobro y escrituras de Personal (salvo cambio solo de nombre). No en HU-06 con sesión propia de encargado ni en ajustes |
+| Verificaciones de PIN | Todas (login, `managerApproval`, `confirmPin`, `currentPin`) cuentan para el mismo contador del usuario cuyo PIN se verifica y para el límite por IP; las tres últimas, además, 5 fallos/10 min por sesión **[SEC-016]** |
 | Rotación del PIN | No se fuerza caducidad periódica (no aporta con bloqueo + red restringida). Cambio obligatorio si se sospecha que se ha visto y al dar de baja a un empleado que pudo conocer el PIN del encargado |
 
 ## 6. Usuarios de base de datos
@@ -194,13 +216,19 @@ imagen, el repositorio o `docs/`.
 | Encargado inicial (nombre + PIN provisional) | ✗ | ✗ | ✓ (solo el comando; se borra después) | ✗ | ✗ |
 | Clave pública de cifrado de copias | ✗ | ✗ | ✗ | ✗ | ✓ (la privada, fuera del host) |
 
+El `uid` del secreto montado es el UID real del contenedor que lo recibe
+(nunca se arregla un desajuste con modo 0444). **[SEC-018]** En DEV y TESTING
+el reparto solo se cumple si los contenedores que montan el proyecto no ven
+`.secrets/` (hoy lo ven todos por `keep-id`); tampoco deben poder escribir en
+`.git/` ni en `.claude/`.
+
 ## 8. Contenedores y host
 
 ### 8.1 Contenedores (`docs/reglas-equipo.md` §3)
 
 | Servicio | Usuario | Capacidades | Raíz | Montajes | Red | Puertos publicados |
 |---|---|---|---|---|---|---|
-| `proxy` | UID ≥ 1000 | ninguna (`cap-drop=ALL`, `no-new-privileges`) [SEC-009] | solo lectura | `Caddyfile` (ro), volumen `/data` (rw, 0700), `/config` tmpfs o volumen | `edge` + `internal` | 8080, 8443 (o 80/443 en PROD, §6.2d de seguridad) |
+| `proxy` | UID ≥ 1000 | ninguna (`cap-drop=ALL`, `no-new-privileges`; SEC-009 verificado: `CapEff` = 0) | solo lectura | `Caddyfile` (ro), volumen `/data` (rw, 0700), `/config` tmpfs o volumen | `edge` + `internal` | 8080, 8443 (o 80/443 en PROD, §6.2d de seguridad) |
 | `app` | `nonroot` (65532) | ninguna | solo lectura, `/tmp` tmpfs | solo secretos | `internal` | ninguno |
 | `migrate` | `nonroot` (65532) | ninguna | solo lectura | solo su secreto | `internal` | ninguno |
 | `db` | UID ≥ 1000 | ninguna | solo lectura; tmpfs `/var/run/postgresql`, `/tmp` | volumen `pgdata` (rw, dueño ese UID), secretos | `internal` | ninguno |
