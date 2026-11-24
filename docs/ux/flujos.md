@@ -1,8 +1,9 @@
 # Flujos de usuario
 
-Autor: UX/UI Designer · Etapa 1, tareas 1.2 y 1.2b · Fecha: 2026-11-21
-Entradas: `docs/historias/` (HU-01..HU-09, supuestos 1-22), `docs/seguridad.md` §6.1 y §6.3 (PIN, bloqueo, SEC-007). Estado: **propuesta, pendiente de aprobación humana**.
+Autor: UX/UI Designer · Etapa 1, tareas 1.2, 1.2b y 1.2c · Fecha: 2026-11-23
+Entradas: `docs/historias/` (HU-01..HU-08 tras las rondas 1.1d, 1.1e y 1.1f; supuestos 1-24; HU-09 fuera del MVP), `docs/seguridad.md` §6.1 y §6.3 (PIN, bloqueo, SEC-007). Estado: **propuesta, pendiente de aprobación humana**.
 Cambios de la tarea 1.2b: estado "Servido" y "Cobrados hoy" (§4, §5), "Deshacer" de "Empezar" (§4), autorización y reconfirmación del encargado (§6, §7), bloqueos (§1) y Ajustes vinculados a HU-09 (§9).
+Cambios de la tarea 1.2c: HU-09 y P-12 fuera del MVP (§0, §9), cambio obligatorio del PIN y sesiones bloqueadas o revocadas (§1, HU-01/CA-F12, CA-F13), sonido y pantalla encendida en barra (§4), desglose por usuario del resumen (§8, SEC-008) y flujos y pasos de la telemetría del cliente (§10, M-03).
 
 Convenciones:
 - **Toque** = una pulsación en pantalla. Escribir texto o un importe se cuenta aparte, como indica cada historia.
@@ -24,7 +25,7 @@ Convenciones:
 | P-09 | Gestión del menú | no | no | sí | `06-gestion-menu.md` |
 | P-10 | Personal | no | no | sí | `08-personal.md` |
 | P-11 | Resumen del día | no | no | sí | `09-resumen-dia.md` |
-| P-12 | Ajustes (mesas, umbral de retraso), **solo si se aprueba HU-09** | no | no | sí | `06-gestion-menu.md` (§ P-12) |
+| ~~P-12~~ | ~~Ajustes~~: **fuera del MVP** (HU-09 descartada el 2026-11-23). 20 mesas y 10 min fijos en la instalación (supuesto 20) | — | — | — | (solo referencia al final de `06-gestion-menu.md`) |
 
 ```mermaid
 flowchart LR
@@ -40,14 +41,13 @@ flowchart LR
   G --> M[P-09 Menú]
   G --> S[P-10 Personal]
   G --> R[P-11 Resumen del día]
-  G -. si se aprueba HU-09 .-> A[P-12 Ajustes]
   G --> C
 ```
 
 Pasos en texto:
 - Camarero: P-01 -> P-02 Pedidos. Desde ahí crea (P-03 -> P-04), cobra (P-06) y abre el detalle (P-08).
 - Barra: P-01 -> P-05 Cola. No tiene otra navegación (HU-01: no puede crear, cobrar ni cancelar).
-- Encargado: P-01 -> P-02 Pedidos + botón "Gestión" en la barra superior (Menú, Personal, Resumen del día, Ajustes si HU-09 se aprueba, Cola de barra).
+- Encargado: P-01 -> P-02 Pedidos + botón "Gestión" en la barra superior (Cola de barra, Menú, Personal y Resumen del día). No hay opción "Ajustes" [1.2c].
 - P-02 tiene dos pestañas: "Pedidos activos" y "Cobrados hoy" (1 toque, HU-04).
 - **Todas las pantallas** llevan la barra superior con "Nombre · Rol" y "Cerrar sesión" (HU-01).
 
@@ -65,12 +65,12 @@ flowchart TD
   V -->|correcto, barra| C[P-05 Cola]
   V -->|incorrecto| E[Mensaje bajo el PIN: Usuario o PIN incorrectos. El PIN se vacía]
   E --> B
-  V -->|5, 10 o 15 fallos seguidos: 423| K[Demasiados intentos fallidos. Podrás volver a intentarlo en 4:59 / 15 / 60 min. Teclado deshabilitado]
+  V -->|5, 10 o 15 fallos seguidos: 423| K[Demasiados intentos fallidos. Podrás volver a intentarlo en 5 / 15 / 60 min. Teclado deshabilitado]
   V -->|20 fallos seguidos: 423 manual| KM[Cuenta bloqueada. Pide al encargado que la desbloquee]
   KM -.-> UL[Encargado: P-10 Desbloquear + su PIN]
   V -->|10 fallos del dispositivo en 10 min: 429| KD[Demasiados intentos desde este dispositivo. Espera X min. También en el paso 1]
   V -->|usuario desactivado| X[Usuario desactivado, contacta con el encargado]
-  V -->|PIN provisional HU-07| Q[Cambiar PIN: nuevo + repetir] --> P
+  V -->|PIN provisional o promoción a encargado, HU-07| Q[Cambio obligatorio: PIN actual + nuevo + repetir] --> P
 ```
 
 Pasos:
@@ -78,7 +78,14 @@ Pasos:
 2. **Paso 2:** escribir el PIN en el teclado en pantalla y tocar "Entrar".
 3. Resultado según el rol: camarero/encargado -> P-02; barra -> P-05.
 
-Ramas: error (mensaje junto al campo, en texto, PIN vaciado), bloqueo progresivo 5/15/60 min con cuenta atrás, bloqueo indefinido hasta que un encargado desbloquee, bloqueo del dispositivo (`429`), usuario desactivado (textos exactos en `wireframes/01-login.md`, "Mensajes de bloqueo"), PIN provisional, cierre de sesión (vuelve a P-01) y cierre automático por inactividad. A los 14 min, aviso "Tu sesión se cerrará en 60 s por inactividad · Seguir conectado"; a los 15 min, P-01 con el mensaje "Sesión cerrada por inactividad". La cola de barra no caduca.
+Ramas: error (mensaje junto al campo, en texto, PIN vaciado), bloqueo progresivo 5/15/60 min con cuenta atrás, bloqueo indefinido hasta que un encargado desbloquee, bloqueo del dispositivo (`429`), usuario desactivado (textos exactos en `wireframes/01-login.md`, "Mensajes de bloqueo"), PIN provisional, cierre de sesión (vuelve a P-01) y cierre automático por inactividad. A los 14 min, aviso "Tu sesión se cerrará en 60 s por inactividad · Seguir conectado"; a los 15 min, P-01 con el mensaje "Sesión cerrada por inactividad". La sesión de rol barra no caduca por inactividad con la cola abierta; la del encargado sí, aunque tenga la cola abierta (HU-01/CA-F09). Todas caducan a las 12 h (HU-01/CA-N06) [1.2c].
+
+**[1.2c] Cambio obligatorio del PIN** (HU-07/CA-F04, CA-F09): no existe el cambio voluntario en el MVP. Con `mustChangePin`, tras el login o en la siguiente acción si el rol cambia a encargado con un PIN corto: PIN actual (1) -> PIN nuevo (2) -> repetir (3) -> "Guardar PIN". Mensajes de `403`, `423` y `429` en `wireframes/01-login.md`.
+
+**[1.2c] Cuenta bloqueada con la sesión abierta** (ronda 1.1f):
+- Bloqueo temporal (HU-01/CA-F12): la sesión sigue. Las acciones que piden su propio PIN (anular un cobro, escrituras de Personal) muestran "Cuenta bloqueada. Espera X min" junto al PIN, no se hacen y conservan lo escrito; el resto de funciones siguen disponibles.
+- Bloqueo indefinido (HU-01/CA-F13): todas sus sesiones se revocan; cada dispositivo vuelve a P-01 (en <= 1 s si la pantalla está abierta), lo escrito se pierde y el login muestra "Cuenta bloqueada. Pide al encargado que la desbloquee".
+- Motivos de vuelta a P-01 y sus textos: `wireframes/01-login.md`, "Vuelta al inicio de sesión".
 
 Criterios UX cubiertos: <= 2 pasos; teclado de 72 px (>= 44); error en texto junto al campo y PIN vaciado; nombre y rol en la barra superior de todas las pantallas.
 
@@ -127,7 +134,8 @@ flowchart TD
 Recuento del criterio "<= 6 toques": Nuevo pedido (1) · Mesa 7 (2) · producto (3) · producto (4) · producto (5) · Enviar a barra (6). **Cumple con 6**, siempre que:
 - la elección de tipo y de mesa sea **un único toque** (P-03 muestra mesas y "Mostrador" en la misma rejilla, sin paso previo de "tipo");
 - los 3 productos estén en la categoría que se abre por defecto (la primera según el orden de HU-05). Si están en otra categoría, cada cambio suma 1 toque (ya recogido en HU-02).
-- la mesa se elija sin desplazar: P-03 adapta el tamaño de los botones al número de mesas (1-99) (`wireframes/03-toma-pedido.md`).
+- la mesa se elija sin desplazar: con las 20 mesas fijas (supuesto 20), la rejilla de 120x88 px cabe en 1280x800 y en 800x1280 (`wireframes/03-toma-pedido.md`) [1.2c].
+- con 20 categorías (HU-05/CA-N03), las pestañas pasan a varias filas: siguen visibles, cambiar de categoría es 1 toque y no hay desplazamiento horizontal (HU-02/CA-N05) [1.2c].
 
 Otros pasos:
 - Tocar el mismo producto otra vez sube la cantidad. En el ticket, "+" y "-" (48 px); al llegar a 0 la línea desaparece y aparece un toast "Café con leche quitado · Deshacer".
@@ -159,8 +167,8 @@ stateDiagram-v2
   Servido --> Cancelado: HU-06 + autorización
   note right of EnPreparacion
     Retrasado = modificador visual
-    si espera > umbral (10 min por defecto,
-    HU-09 o supuesto 20)
+    si espera >= 10 min desde la entrada
+    en la cola (fijo, supuesto 20)
   end note
 ```
 El cobro (Abierto / Cobrado / Cancelado) es independiente y ningún cambio de este diagrama lo modifica (supuesto 14).
@@ -172,7 +180,9 @@ Pasos en barra (P-05; cada cambio de estado = **1 toque**, botón de 72 px):
 4. "Deshacer" (1 toque, <= 30 s) vuelve al estado anterior. Solo se puede deshacer la última acción de la pantalla; si sala ya ha marcado "Servido" el pedido, se avisa "Pedido 42 ya servido: no se puede deshacer".
 5. Pedido modificado o cancelado: la tarjeta muestra la franja "✎ MODIFICADO" o "✕ CANCELADO" y el botón pasa a "Entendido" (1 toque), que hay que pulsar antes de seguir. En una cancelación, "Entendido" quita la tarjeta.
 6. Sin conexión: banner "Sin conexión. Reintentando…" en <= 5 s; los botones de estado se deshabilitan con el texto "Sin conexión". Al reconectar se resincroniza sola.
-7. Si el navegador bloquea el audio tras recargar: botón "Activar sonido" en la barra superior (1 toque).
+7. Sonido [1.2c] (HU-03/CA-F09, CA-F14): activado la primera vez en el dispositivo; la preferencia se guarda en el dispositivo. Si está activado y el navegador bloquea el audio, en <= 1 s aparece "Sonido bloqueado" + "Activar sonido" (1 toque) en la barra superior, sin tapar pedidos, hasta que se pulse. Si barra lo desactivó, no aparece.
+8. Pantalla encendida [1.2c] (HU-03/CA-N05): la cola pide Wake Lock al abrirse y al volver a ser visible; si no lo consigue, aviso "La pantalla puede apagarse".
+9. Caducidad de 12 h [1.2c] (HU-01/CA-N06): 15 min antes, aviso "La sesión caduca a las hh:mm · Volver a entrar".
 
 Pasos en sala (P-02):
 1. Un pedido pasa a LISTO: entra en "Listos para servir" (arriba) con el aviso "Pedido 42 (Mesa 7) está listo" (toast 5 s, `aria-live`), en <= 2 s.
@@ -258,8 +268,80 @@ Desbloquear (`seguridad.md` §6.1.6): fila bloqueada -> "Desbloquear" (1) -> di�
 
 ## 8. HU-08 — Resumen del día (Could)
 
-Gestión -> **Resumen del día** (1 toque, abre hoy) -> cifras + aviso "Hay 3 pedidos sin cobrar · Ver pedidos" -> "Efectivo contado" (teclado de importe) -> diferencia ("Falta 2,50 €" / "Sobra 1,00 €" / "Cuadra") -> "Guardar cierre" -> diálogo "El cierre no se podrá modificar" -> "Guardar cierre". Selector de fecha (últimos 90 días) arriba.
+Gestión -> **Resumen del día** (1 toque, abre hoy) -> cifras + aviso "Hay 3 pedidos sin cobrar · Ver pedidos" + [1.2c] tabla "Cancelaciones y anulaciones por usuario" (hecho por, autorizado por o "Sin autorización", número e importe, fila Total igual a los totales; HU-08/CA-F13, CA-F14) -> "Efectivo contado" (teclado de importe) -> diferencia ("Falta 2,50 €" / "Sobra 1,00 €" / "Cuadra") -> "Guardar cierre" -> diálogo "El cierre no se podrá modificar" -> "Guardar cierre". Selector de fecha (últimos 90 días) arriba.
 
-## 9. HU-09 — Ajustes del local (PROPUESTA, pendiente de aprobación humana) [1.2b]
+## 9. ~~HU-09 — Ajustes del local~~: FUERA DEL MVP [1.2c]
 
-Gestión -> **Ajustes** (1 toque) -> formulario con 2 campos: "Número de mesas" (1-99, por defecto 20) y "Aviso de pedido retrasado" (1-60 min, por defecto 10) -> "Guardar ajustes" -> toast "Ajustes guardados". Errores junto a su campo, con el rango (textos de HU-09). Reducir mesas con pedidos sin cobrar en una mesa mayor que N -> error que cita la mesa + "Ver pedidos". Los cambios llegan a P-03 en <= 5 s y a P-05 en <= 60 s. Si HU-09 no se aprueba, la opción no existe y los valores se fijan en la instalación (supuesto 20).
+El humano descartó HU-09 el 2026-11-23. No hay flujo, ni opción "Ajustes" en el menú de gestión, ni pantalla P-12. El número de mesas (20) y el umbral de "retrasado" (10 min) son valores fijos de instalación; solo cambian reinstalando o por soporte técnico (supuesto 20). El diseño de la tarea 1.2b se conserva como referencia al final de `wireframes/06-gestion-menu.md`.
+
+---
+
+## 10. Telemetría del cliente: flujos, pasos y pantallas [1.2c] (M-03)
+
+Define las **listas cerradas** (enums) que usan las métricas UX de `docs/logging.md` §6.4 y los eventos `client.*` de §3.5, enviadas por `POST /api/v1/telemetry` con las condiciones de RS-43 (`docs/seguridad.md` §6.3) y de `docs/arquitectura.md` §11. Si un valor no está en estas tablas, el esquema zod `.strict()` lo rechaza.
+
+### 10.1 Reglas de datos (RS-43, `docs/logging.md` §4)
+- **Solo enums y números acotados.** Ningún texto libre (salvo `client.js_error`, filtrado según `docs/logging.md` §4.4, que no es un paso de flujo).
+- **Nunca se envía:** nombres de usuario o de cliente, IDs de usuario, PIN (ni su longitud ni sus dígitos), números de pedido o de mesa, productos, categorías, notas, motivos escritos, importes (total, entregado, cambio, efectivo contado, diferencia de caja), método de pago combinado con importe, ni la hora de un pedido. Las etiquetas de las métricas no llevan nada que identifique a una persona.
+- **Números permitidos:** duraciones (`ux_flow_duration_seconds`, `offline_ms`), contadores y la propagación (`order_propagation_seconds`, en las pantallas que reciben eventos). Cualquier número tiene un máximo en el esquema (p. ej. duraciones <= 3600 s).
+- La sesión la identifica el servidor; el cliente no añade ningún identificador.
+- La telemetría no cuenta como actividad para la inactividad de 15 min (RS-43).
+
+### 10.2 Pantallas (`screen`)
+`P-01`, `P-02`, `P-03`, `P-04`, `P-05`, `P-06`, `P-07`, `P-08`, `P-09`, `P-10`, `P-11`. **P-12 no existe en el MVP** (HU-09 descartada): no se incluye en el enum. Los diálogos cuentan como la pantalla que los abre (p. ej. la anulación desde "Cobrados hoy" es `P-02`; desde el ticket, `P-07`). La pantalla de cambio obligatorio del PIN cuenta como `P-01`.
+
+### 10.3 Flujos y pasos (`flow`, `step`)
+
+Cada paso incrementa `ux_flow_steps_total{flow, step}` cuando ocurre. Un **abandono** incrementa `ux_flow_abandoned_total{flow, step}` con el **último paso alcanzado**. La duración (`ux_flow_duration_seconds{flow}`) va del primer paso al paso final de éxito; los flujos abandonados no la registran.
+
+| `flow` | Historia | Pasos (`step`), en orden | Paso final de éxito | Abandono = |
+|---|---|---|---|---|
+| `login` | HU-01 | `user_selected` (P-01 paso 1), `pin_submitted` ("Entrar"), `failed`, `locked_shown` (cualquier bloqueo de cuenta o de dispositivo), `pin_change_required`, `succeeded` | `succeeded` | Usuario elegido sin `succeeded` en 60 s, o "Cambiar de usuario" |
+| `pin_change` | HU-07/CA-F04, CA-F09 | `started`, `current_entered`, `new_entered`, `rule_error`, `mismatch`, `current_invalid` (`403`), `locked_shown` (`423`/`429`), `saved` | `saved` | "Cerrar sesión" sin `saved` |
+| `take_order` | HU-02 | `started` ("Nuevo pedido"), `table_chosen` o `counter_chosen` (P-03), `category_changed`, `product_added`, `note_added`, `send_tapped`, `send_failed`, `sent` | `sent` | `discarded` (paso final de abandono, confirmar "Descartar") o salir de P-04 sin enviar (volver, cerrar sesión, caducidad) |
+| `mark_sold_out` | HU-05/CA-U02 | `mode_entered`, `toggled`, `mode_exited` | `toggled` | `mode_exited` sin ningún `toggled` |
+| `queue` (barra) | HU-03 | `started`, `ready`, `undone`, `undo_unavailable` ("ya servido"), `ack_modified`, `ack_cancelled`, `sound_blocked_shown`, `sound_reenabled`, `sound_toggled_off`, `wakelock_unavailable` | — (no es un embudo) | No aplica |
+| `serve` (sala) | HU-03/CA-F16, CA-F19 | `served`, `undone`, `undo_failed` | `served` | No aplica (`undone` mide los "Servido" por error) |
+| `payment` | HU-04 | `opened` u `opened_table` ("Cobrar mesa"), `method_card` o `method_cash`, `amount_quick` o `amount_typed`, `insufficient_shown`, `confirm_tapped`, `failed`, `already_paid_shown`, `confirmed` | `confirmed` | Volver o salir de P-06 sin `confirmed` |
+| `void_payment` | HU-04/CA-F11..F23 | `opened`, `reason_valid`, `pin_entered`, `pin_failed`, `locked_shown` (HU-01/CA-F12), `confirmed` | `confirmed` | "Volver" sin `confirmed`, o sesión revocada (HU-01/CA-F13) |
+| `modify_order` | HU-06 | `opened` (P-08), `line_added`, `line_removed`, `approval_requested`, `approval_failed`, `approval_blocked` (`429`), `conflict` (`409`), `saved` | `saved` | Salir de P-08 con cambios sin enviar, o `conflict` sin un `saved` después |
+| `cancel_order` | HU-06 | `opened`, `reason_chosen`, `approval_requested`, `approval_failed`, `approval_blocked`, `conflict`, `confirmed` | `confirmed` | "Volver" sin `confirmed` |
+| `edit_product` | HU-05 | `opened` (nuevo o editar), `validation_error`, `saved` | `saved` | Cerrar el formulario sin `saved` |
+| `staff_write` | HU-07 | `opened` (alta, rol, activar/desactivar, restablecer, desbloquear), `validation_error`, `pin_confirm_failed`, `locked_shown`, `saved` | `saved` | "Volver" o "Cancelar" sin `saved` |
+| `daily_close` | HU-08 | `opened`, `date_changed`, `cash_entered`, `confirm_shown`, `saved` | `saved` | `confirm_shown` y "Volver" sin `saved` (abrir el resumen sin cerrar caja **no** es abandono) |
+| `session` | HU-01/CA-F09, CA-N06 | `idle_warning_shown`, `idle_extended` ("Seguir conectado"), `idle_logout`, `expiry_warning_shown` (aviso de 12 h en barra), `relogin_early` | — | No aplica |
+
+Notas:
+- `table_chosen` y `counter_chosen` son pasos distintos (no una etiqueta aparte) para no añadir etiquetas a la métrica. El tipo de método de pago se trata igual (`method_card`, `method_cash`): sin importe, no identifica nada.
+- `product_added` y `category_changed` se cuentan **por toque**. Permiten estimar en DEMO los toques por pedido (HU-02/CA-U01) sin enviar qué productos son.
+- `login`: los pasos ocurren **antes** de tener sesión, y el endpoint exige sesión y rechaza la sesión con PIN provisional (RS-43). Propuesta: el cliente los guarda en memoria y los envía en el primer lote tras un login correcto (y, en `pin_change`, tras `saved`). Los abandonos de login sin un login posterior en ese dispositivo se pierden; los fallos ya los mide el servidor (`auth_login_attempts_total`). Hallazgo para Monitoring y Cybersecurity (ver informe de la tarea 1.2c).
+
+### 10.4 Señales sueltas (sin flujo)
+
+| Métrica | Cuándo se cuenta | Pantallas |
+|---|---|---|
+| `ux_offline_banner_total{screen}` | Cuando el aviso "Sin conexión" **se llega a mostrar** (tras el margen de <= 5 s de HU-02/CA-N02 y HU-03/CA-N02), no cada caída breve de la conexión que se recupera antes | P-02, P-04, P-05, P-06, P-08, P-11 |
+| `ux_offline_seconds_total{screen}` / `client.offline` (`offline_ms`) | Tiempo que el aviso ha estado visible; se envía al recuperar la conexión | Las mismas |
+| `ux_conflict_shown_total{screen}` | Al mostrar "El pedido ha cambiado" (`409`, HU-06/CA-N03) | P-02, P-05, P-06, P-08 |
+| `ux_rage_clicks_total{screen}` | >= 3 toques en el mismo control en <= 1 s sin cambio de estado (`docs/logging.md` §6.4). Como sumar cantidad o escribir dígitos sí cambia el estado, los productos, "+"/"−" y los teclados solo cuentan cuando están deshabilitados (p. ej. "Enviar a barra" sin líneas, teclas rápidas menores que el total, teclado bloqueado), que es justo la señal útil | Todas |
+| `ux_client_validation_errors_total{form, field, code}` | Error que el cliente muestra antes de enviar | Ver 10.5 |
+| `client_js_errors_total{screen}` / `client.js_error` | Error JS no capturado | Todas |
+| `order_propagation_seconds{target}` | Al recibir un evento de pedido: `kitchen` en P-05; `waiter` en P-02 y P-04 | P-02, P-04, P-05 |
+
+### 10.5 Formularios, campos y códigos (`form`, `field`, `code`)
+
+| `form` | `field` |
+|---|---|
+| `customer_name` (P-04) | `name` |
+| `line_note` (P-04) | `note` |
+| `cash_payment` (P-06) | `amount` |
+| `void_reason` (P-07/P-02) | `reason` |
+| `cancel_reason` (P-08) | `reason` |
+| `product` (P-09) | `name`, `category`, `price`, `available` |
+| `category` (P-09) | `name` |
+| `staff` (P-10) | `name`, `role`, `pin` |
+| `pin_change` (P-01) | `new_pin`, `repeat_pin` |
+| `daily_close` (P-11) | `cash_counted` |
+
+`code`: `required`, `too_long`, `too_short`, `out_of_range`, `too_many_decimals`, `duplicate`, `insufficient`, `pin_rule`, `pin_mismatch`.
+Para el PIN solo se envía `pin_rule` (no qué regla falló: repetido, secuencia, común…). Así no se da ninguna pista sobre el PIN que alguien intenta poner; para mejorar los textos de ayuda basta con saber cuántas veces falla la regla.

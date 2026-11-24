@@ -1,4 +1,6 @@
-# P-09 Gestión del menú (HU-05) y P-12 Ajustes (HU-09, propuesta)
+# P-09 Gestión del menú (HU-05) y menú de gestión
+
+[1.2c] **P-12 Ajustes queda FUERA DEL MVP** (HU-09 descartada por el humano el 2026-11-23). Las 20 mesas y los 10 min de "retrasado" son valores fijos de instalación (supuesto 20). La sección de P-12 se conserva al final solo como referencia.
 
 Solo encargado. Uso típico: TPV u ordenador (1440 px), también tablet. Navegable con teclado.
 
@@ -10,11 +12,10 @@ Solo encargado. Uso típico: TPV u ordenador (1440 px), también tablet. Navegab
 |  [▦ Cola de barra]             |
 |  [☕ Menú]                      |
 |  [👤 Personal]                  |
-|  [€ Resumen del día]           |   <- 1 toque al resumen de hoy (HU-08)
-|  [⚙ Ajustes]                   |   <- solo si se aprueba HU-09; 1 toque
+|  [€ Resumen del día]           |   <- 1 toque al resumen de hoy (HU-08/CA-U01)
 +--------------------------------+
 ```
-Panel lateral con opciones de 56 px de alto, icono + texto. Si el humano no aprueba HU-09, la opción "Ajustes" no existe y los valores se fijan en la instalación (supuesto 20).
+Panel lateral con opciones de 56 px de alto, icono + texto. [1.2c] **No hay opción "Ajustes"**: HU-09 está fuera del MVP y el número de mesas y el umbral de retraso no se pueden cambiar desde la aplicación (supuesto 20).
 
 ## P-09 Menú (1440x900)
 
@@ -78,7 +79,24 @@ Desactivar un producto: diálogo "¿Desactivar Moca? Dejará de aparecer en la t
 | Error de servidor | Bloque de error en el formulario; los datos escritos no se pierden |
 | Éxito | Toast "Producto guardado" / "Orden actualizado" |
 
-## P-12 Ajustes [1.2b] — vinculada a HU-09 (PROPUESTA, pendiente de aprobación humana)
+## Criterios cubiertos
+| Criterio | Cómo |
+|---|---|
+| HU-05/CA-U01 | Formulario con 4 campos obligatorios: nombre, categoría, precio, disponible |
+| HU-05/CA-U03, CA-F06 | Mensajes bajo el campo con el rango válido |
+| HU-05/CA-F07 | "Ya existe un producto con ese nombre en esta categoría." |
+| HU-05/CA-F08 | Diálogo de borrar categoría con el número de productos activos |
+| HU-05/CA-F05 | Diálogo de desactivar: "Se conserva en el histórico" |
+| HU-05/CA-F03 | Ayuda bajo el precio al editar |
+| HU-05/CA-F09 | Subir/Bajar (y arrastrar) en categorías y productos |
+| HU-05/CA-U02 | Modo agotados de `03-toma-pedido.md` |
+| HU-05/CA-N04 | Etiqueta visible por campo; reordenar con Subir/Bajar sin arrastrar (WCAG 2.5.7) |
+| HU-08/CA-U01 | "Resumen del día" en el menú de gestión, 1 toque |
+| HU-01/CA-F03 | El menú de gestión da acceso a cola, menú, personal y resumen |
+
+## ~~P-12 Ajustes~~ — FUERA DEL MVP [1.2c] (solo referencia)
+
+> HU-09 la ha descartado el humano el 2026-11-23. Esta pantalla **no se implementa, no se prueba y no se revisa** en el MVP, y no hay ningún acceso a ella. Se conserva el diseño de la tarea 1.2b por si HU-09 se recupera más adelante; sus criterios ya no figuran en la matriz de cobertura.
 
 Solo encargado (el resto de roles recibe 403). Valores por defecto de una instalación nueva: 20 mesas y 10 min (supuestos 1, 11 y 20).
 
@@ -123,17 +141,3 @@ Los errores siguen el patrón de §5.4 del design system: borde de 2 px `danger`
 | Cambios sin guardar al salir | Diálogo "¿Salir sin guardar los ajustes?" [Seguir editando] [Salir sin guardar] |
 
 Efecto en otras pantallas: P-03 adapta el tamaño de los botones de mesa a N para que se elija en 1 toque sin desplazar (ver `03-toma-pedido.md`). Los pedidos ya enviados conservan su mesa.
-
-## Criterios cubiertos
-| Historia | Criterio UX | Cómo |
-|---|---|---|
-| HU-05 | 1 formulario con <= 4 campos obligatorios | Nombre, categoría, precio, disponible |
-| HU-05 | Errores con campo y corrección | Mensajes bajo el campo con el rango |
-| HU-05 | Agotado en <= 2 toques desde la toma de pedido | Ver modo agotados en `03-toma-pedido.md` |
-| HU-05 (no func.) | Etiquetas asociadas; teclado | Etiqueta visible por campo; reordenar con ↑/↓ |
-| HU-05 | Borrar categoría con productos: indica cuántos | Diálogo con el número |
-| HU-09 (propuesta) | "Ajustes" en 1 toque desde el menú del encargado | Opción del menú de gestión |
-| HU-09 (propuesta) | 1 formulario, 2 campos, botón "Guardar" | P-12 |
-| HU-09 (propuesta) | Error junto al campo con el rango válido | Tabla de errores |
-| HU-09 (propuesta) | Mensaje "Ajustes guardados" | Toast |
-| HU-02 / HU-03 | N de mesas y umbral configurables (HU-09 o supuesto 20) | P-12, o valores fijos si HU-09 no se aprueba |

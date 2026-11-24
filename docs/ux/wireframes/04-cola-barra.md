@@ -1,6 +1,6 @@
 # P-05 Cola de barra/cocina (HU-03, HU-06)
 
-Pantalla táctil fija de 24" FHD o mayor (supuesto 21), horizontal, 1920x1080, escala del sistema y zoom al 100 %. Rol barra (o encargado). **Sin importes.** Los cambios de la tarea 1.2b van marcados [1.2b].
+Pantalla táctil fija de 24" FHD o mayor (supuesto 21), horizontal, 1920x1080, escala del sistema y zoom al 100 %. Rol barra (o encargado). **Sin importes.** Los cambios de la tarea 1.2b van marcados [1.2b] y los de la 1.2c, [1.2c].
 
 ## Maquetación (rejilla 3x2, 6 tarjetas sin desplazar)
 
@@ -76,8 +76,8 @@ Caso: un pedido "Listo" o "Servido" al que sala añade productos vuelve a PENDIE
 
 ```
 +---------------------------------+
-|＋ AÑADIDO A PEDIDO SERVIDO · 10:47|  <- franja de modificador (40 px), estilo Modificado
-|#40   MESA 7     Enviado 10:12   |     con otro icono (plus-circle); "LISTO" si no se había servido
+|＋ AÑADIDO 10:47 · YA SERVIDO     |  <- franja de modificador (40 px), estilo Modificado
+|#40   MESA 7     Enviado 10:12   |     con otro icono (plus-circle); "YA LISTO" si no se había servido
 |[○ PENDIENTE]   ⏱ 1 min (añadido)|  <- la espera dice desde cuándo cuenta
 |                                 |
 |1  Cruasán            AÑADIDO    |  <- solo las líneas nuevas, a 38 px
@@ -91,18 +91,11 @@ Caso: un pedido "Listo" o "Servido" al que sala añade productos vuelve a PENDIE
 +---------------------------------+
 ```
 
-- **Franja** "＋ AÑADIDO A PEDIDO SERVIDO · 10:47" (o "…A PEDIDO LISTO…"): texto + icono `plus-circle` + colores de Modificado (9,23:1) + franja superior. No es "MODIFICADO" (no estaba en la cola) y **no pide "Entendido"**: el botón es directamente "Empezar". Si además está retrasado, las dos franjas se unen en una: "⚠ RETRASADO · 12 min · ＋ AÑADIDO 10:47" con el borde discontinuo de retrasado.
+- **Franja** [texto 1.2c] "＋ AÑADIDO 10:47 · YA SERVIDO" (o "· YA LISTO"), que contiene el texto literal "AÑADIDO hh:mm" de HU-03/CA-F23: texto + icono `plus-circle` + colores de Modificado (9,23:1) + franja superior. No es "MODIFICADO" (no estaba en la cola) y **no pide "Entendido"**: el botón es directamente "Empezar". Si además está retrasado, las dos franjas se unen en una: "⚠ RETRASADO · 12 min · ＋ AÑADIDO 10:47" (se mantiene) con el borde discontinuo de retrasado.
 - **Cabecera:** número y mesa/cliente de siempre, con "Enviado 10:12" (hora original). La hora del añadido está en la franja.
 - **Líneas:** a tamaño completo (38 px) solo las líneas del ciclo actual, todas con la etiqueta "AÑADIDO". Lo preparado antes no se muestra como línea normal, porque una línea a 38 px sin etiqueta parece trabajo pendiente. Va resumido en una línea de contexto "✓✓ Ya entregado: …" (o "✓ Ya preparado: …" si estaba Listo) a 24 px en `text-secondary` (7,58:1). Las líneas eliminadas en ciclos anteriores no se muestran (como indica la arquitectura).
 - **Llegada:** igual que un pedido nuevo: sonido, borde resaltado 2 s y anuncio `aria-live` "Pedido 40, mesa 7: productos añadidos".
-- **Espera:** el texto de los minutos dice desde cuándo cuentan, para que valga para las dos opciones de orden que está decidiendo el PO:
-
-| Opción del PO | Posición en la cola | Texto de espera | RETRASADO desde |
-|---|---|---|---|
-| A (propuesta del Software Engineer): hora de entrada en la cola (`queued_at`) | Al final, como un pedido nuevo | "⏱ 1 min (añadido)" | La hora del añadido |
-| B: hora de envío original | En su posición original por hora de envío | "⏱ 35 min (desde el envío)" | La hora de envío (saldrá RETRASADO casi siempre) |
-
-La tarjeta es la misma con las dos opciones; solo cambian la posición y la referencia de la espera, que se muestra siempre en texto. Si el PO elige B, recomiendo que el umbral de retraso cuente desde el añadido aunque el orden sea el de envío: si no, la franja RETRASADO pierde valor como señal.
+- **Orden y espera [1.2c]:** decidido en HU-03/CA-F02, CA-F23 y el supuesto 24 (la opción A de la tarea 1.2b; la B queda descartada). El pedido entra **al final de la cola**, como uno nuevo, porque su hora de entrada en la cola es la del añadido; los minutos de espera y "RETRASADO" cuentan desde esa hora, y el texto lo dice: "⏱ 1 min (añadido)".
 - **Presupuesto de alto:** la línea de contexto ocupa 32 px (como una nota), así que caben 4 líneas añadidas + 1 de contexto en la tarjeta estándar. Con más, la tarjeta crece (nunca se ocultan líneas, HU-03).
 - **Añadir a un pedido que sigue en la cola** (Pendiente / En preparación) no es este caso: la tarjeta no se mueve, lleva "✎ MODIFICADO" con "Entendido" y las líneas nuevas con "AÑADIDO" junto a las anteriores, que siguen siendo trabajo pendiente.
 
@@ -127,28 +120,58 @@ Texto de los botones en `text-bar-action` (28 px). Mientras el servidor confirma
 | Sin conexión | Banner rojo fijo bajo la barra superior: "⚠ SIN CONEXIÓN · Reintentando… Los pedidos nuevos no se están recibiendo" (32 px, texto blanco sobre `offline`), en <= 5 s; "● Conectado" pasa a "○ Sin conexión" |
 | Reconectado | El banner cambia 3 s a "✓ Conexión recuperada" y la cola se resincroniza |
 | Pedido nuevo | Sonido (si está activado), borde resaltado 2 s, anuncio `aria-live`: "Nuevo pedido 45, mesa 5" |
-| Retrasado | Franja superior "⚠ RETRASADO · 12 min" + borde discontinuo de 6 px; los minutos se actualizan cada minuto. El umbral sale de Ajustes (HU-09, propuesta) o de la instalación (supuesto 20) |
-| Sonido bloqueado por el navegador [1.2b] | Tras recargar sin interacción, el interruptor de sonido se sustituye por el botón "🔇 Activar sonido" (72 px, fondo de Aviso) en la barra superior; al pulsarlo vuelve "🔊 Sonido: activado" |
-| Pantalla sin Wake Lock [1.2b] | Aviso fijo en la barra superior: "La pantalla puede apagarse sola: revisa el ahorro de energía" (requiere HTTPS, ver arquitectura) |
+| Retrasado | Franja superior "⚠ RETRASADO · 12 min" + borde discontinuo de 6 px; los minutos se actualizan cada minuto. Umbral fijo de 10 min desde la entrada en la cola (HU-03/CA-F06, supuesto 20) [1.2c] |
+| Sonido bloqueado por el navegador [1.2c] | Ver "Sonido" (abajo) |
+| Pantalla sin Wake Lock [1.2c] | Ver "Pantalla encendida" (abajo) |
+| Sesión a punto de caducar (12 h) [1.2c] | 15 min antes, aviso en la zona de estado: "La sesión caduca a las 19:30 · [Volver a entrar]" (botón `touch-bar`). Permite elegir un momento tranquilo; al pulsarlo se cierra la sesión y se va a P-01. Si no se pulsa, a las 12 h la cola vuelve a P-01 con "La sesión ha caducado (12 h)" (HU-01/CA-N06) |
+| Sesión revocada [1.2c] | Bloqueo indefinido, desactivación o PIN restablecido: la cola vuelve a P-01 en <= 1 s con el motivo (`01-login.md`, "Vuelta al inicio de sesión"; HU-01/CA-F13) |
+| Encargado con la cola abierta [1.2c] | Su sesión sí caduca a los 15 min sin tocar (HU-01/CA-F09), con el aviso de los 14 min. Solo la sesión de rol barra no caduca por inactividad |
 | Conflicto de versión (409) [1.2b] | Si un toque llega sobre una versión antigua del pedido, la tarjeta se recarga con la versión actual, muestra la franja "✎ MODIFICADO" y el botón "Entendido"; no se aplica el cambio de estado |
+
+## Sonido [1.2c] (HU-03/CA-F09, CA-F14)
+
+| Situación | Zona de estado de la barra superior | Al llegar un pedido |
+|---|---|---|
+| Primera vez en este dispositivo | "🔊 Sonido: activado" (valor inicial, HU-03/CA-F09) | Suena |
+| Barra lo desactiva | "🔈 Sonido: desactivado" (1 toque en el interruptor) | No suena y **no** aparece "Sonido bloqueado" |
+| Activado y el navegador bloquea el audio | Texto "🔇 Sonido bloqueado" + botón **"Activar sonido"** (`touch-bar`: 72 px de alto, >= 160 px de ancho; >= 60x60, HU-03/CA-F14), fondo de Aviso | No suena; el aviso sigue visible aunque lleguen más pedidos |
+| Toque en "Activar sonido" | Vuelve "🔊 Sonido: activado" | El siguiente suena |
+
+- **Preferencia guardada en el dispositivo** (HU-03/CA-F09, ronda 1.1f): activado/desactivado se conserva al recargar y al volver a entrar con cualquier usuario. Solo se guarda ese valor, sin datos personales.
+- **Cuándo se detecta el bloqueo** (HU-03/CA-F14): al abrir la cola (se comprueba si el audio puede sonar) y cada vez que un aviso falla. El aviso aparece en <= 1 s.
+- **Sin tapar pedidos:** va en la barra superior de 80 px, en el sitio del interruptor, así que no quita alto a las tarjetas (HU-03/CA-U03). Anuncio `role="status"`: "Sonido bloqueado. Pulsa Activar sonido."
+- Si a la vez falta el Wake Lock, la zona de estado muestra primero "Sonido bloqueado" (pide una acción de barra) y el aviso de pantalla queda como un icono "⚠ Pantalla" con texto accesible, que se amplía al tocarlo.
+
+## Pantalla encendida [1.2c] (HU-03/CA-N05)
+
+- Al abrir la cola, la app pide mantener la pantalla encendida (Wake Lock, solo con HTTPS) y lo vuelve a pedir cada vez que la pestaña vuelve a estar visible y al reconectar, porque el navegador lo libera al ocultar la pestaña.
+- Si se rechaza o no está disponible: aviso fijo en la zona de estado "⚠ La pantalla puede apagarse" (al tocarlo: "Revisa el ahorro de energía del dispositivo o avisa al encargado"). No tapa tarjetas.
+- Requisitos de instalación (no son de interfaz; para Infrastructure y el manual de instalación): certificado de la CA interna instalado en el dispositivo de barra (HTTPS) y navegador a pantalla completa. La verificación es con el apagado automático en su valor mínimo distinto de "nunca" (HU-03/CA-N05, ronda 1.1f).
 
 ## Responsive
 Pensada para 1920x1080. A 1440 px: 3 columnas con el mismo tamaño de texto (se ven 4 o 5 pedidos). A 768 px: 2 columnas. A 375 px: 1 columna (solo para emergencias; no es el dispositivo objetivo).
 
 ## Criterios cubiertos
-| Historia | Criterio UX | Cómo |
-|---|---|---|
-| HU-03 | Mayúsculas >= 7 mm (16 arcmin a 1,5 m) en producto, cantidad, número y mesa/cliente, en 24" FHD | 38 px en producto y cantidad (7,26 mm con la fuente más desfavorable) y 40 px en número y mesa/cliente (7,64 mm). Cálculo y método de verificación en design-system §2.1 [1.2b] |
-| HU-03 | 1 toque, botones >= 60x60 | Un botón por tarjeta, 72 px x 586 px |
-| HU-03 | >= 6 pedidos sin desplazar a 1920x1080 | Rejilla 3x2 (con el límite de líneas indicado arriba) |
-| HU-03 | Estados por texto y color | Insignia con texto + icono + color + patrón de borde |
-| HU-03 | Retrasado con icono y texto | "⚠ RETRASADO · N min" |
-| HU-03 | Deshacer "Empezar" y "Listo" en 30 s, solo la última acción; no disponible si ya está "Servido" | Zona Deshacer de 72 px en la barra superior con cuenta atrás visible (tabla "Deshacer") [1.2b] |
-| HU-03 | Barra no puede marcar "Servido" | No existe la acción en P-05 |
-| HU-03 | MODIFICADO / CANCELADO hasta confirmar | Franja + botón "Entendido" |
-| HU-03 | Sonido desactivable | Interruptor con el estado en texto |
-| HU-03 (no func.) | "Sin conexión" en <= 5 s | Banner |
-| HU-03 (no func.) | Barra no ve importes | No hay importes en la tarjeta |
-| HU-06 | AÑADIDO / ELIMINADO en texto | Etiquetas + tachado |
-| HU-03 / HU-06 | Pedido Listo o Servido que vuelve a la cola con líneas "AÑADIDO" | Tarjeta "＋ AÑADIDO A PEDIDO …" con solo las líneas nuevas a tamaño completo [1.2b] |
-| HU-01 | Nombre y rol visibles | "Javi · Barra" |
+| Criterio | Cómo |
+|---|---|
+| HU-03/CA-U01 | 38 px en producto y cantidad (7,26 mm con la fuente más desfavorable) y 40 px en número y mesa/cliente (7,64 mm), en 24" FHD (design-system §2.1) |
+| HU-03/CA-U02 | Un botón por tarjeta, 72 x 586 px, 1 toque |
+| HU-03/CA-U03 | Rejilla 3x2 con hasta 5 líneas (o 4 + 1 nota); los pedidos largos crecen y no ocultan nada |
+| HU-03/CA-U04 | Insignia con texto + icono + color + patrón de borde |
+| HU-03/CA-F01 | Tarjeta: número, mesa/cliente, hora de envío, espera, productos con cantidad y notas |
+| HU-03/CA-F02, CA-F24 | Orden por entrada en la cola; un añadido a un pedido que sigue en la cola no lo mueve |
+| HU-03/CA-F23, CA-F13 | Franja "＋ AÑADIDO hh:mm · YA SERVIDO/LISTO" y líneas "AÑADIDO" [1.2c] |
+| HU-03/CA-F03, CA-F04 | "Empezar" y "Marcar listo" |
+| HU-03/CA-F05, CA-F11 | Zona Deshacer (solo la última acción, 30 s; no disponible si ya está "Servido") |
+| HU-03/CA-F06 | "⚠ RETRASADO · N min" a los 10 min fijos [1.2c] |
+| HU-03/CA-F07 | Franja MODIFICADO / CANCELADO + "Entendido" |
+| HU-03/CA-F08 | Pedido nuevo sin recargar, con resaltado y `aria-live` |
+| HU-03/CA-F09 | Interruptor de sonido; preferencia guardada en el dispositivo, activada la primera vez [1.2c] |
+| HU-03/CA-F14 | "Sonido bloqueado" + "Activar sonido" en la barra superior [1.2c] |
+| HU-03/CA-F22 | No existe la acción "Servido" en P-05 |
+| HU-03/CA-N02 | Banner "Sin conexión" en <= 5 s; resincronización sola |
+| HU-03/CA-N03 | Sin importes en la tarjeta |
+| HU-03/CA-N05 | Wake Lock con reintento y aviso "La pantalla puede apagarse" [1.2c] |
+| HU-06/CA-U03 | AÑADIDO / ELIMINADO en texto + tachado |
+| HU-01/CA-U04 | "Javi · Barra" |
+| HU-01/CA-N06, CA-F09, CA-F13 | Aviso de caducidad de 12 h, inactividad del encargado y sesión revocada [1.2c] |

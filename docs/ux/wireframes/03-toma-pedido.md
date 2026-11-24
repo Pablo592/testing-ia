@@ -20,20 +20,21 @@ Un solo toque elige el tipo y la mesa a la vez: no hay un paso previo "¿Mesa o 
 |  |        | |        | |Abierta | |        | |        | |        | |Abierta |     |
 |  |        | |        | |  #44   | |        | |        | |        | |#38 #42 |     |
 |  +--------+ +--------+ +--------+ +--------+ +--------+ +--------+ +--------+     |
-|  ... hasta N (configurado en Ajustes). Botones de 120x88 px; 16 px de separación  |
+|  ... hasta N = 20 (fijo en la instalación). Botones de 120x88 px; 16 px de sep.   |
 |  "Abierta" en texto + borde de 2 px (no solo color).                              |
 +-----------------------------------------------------------------------------------+
 ```
 
-**Tamaño de la rejilla según N [1.2b]** (N = número de mesas, 1-99: HU-09 o supuesto 20). Para que elegir mesa siga siendo **un solo toque sin desplazar** (HU-02), el botón de mesa se adapta a N, con un mínimo de 56x56 px (>= 48 de `touch-min`). Espacio útil supuesto bajo el botón "Mostrador": 1216x512 px en 1280x800 y 704x736 px en 768x1024.
+**Tamaño de la rejilla [1.2c]:** en el MVP, N = **20 mesas fijas en la instalación** (supuesto 20; HU-09 fuera del MVP, HU-02/CA-F01). Con 20 mesas, la rejilla de 120x88 px cabe sin desplazar en las dos orientaciones de la tablet de referencia (HU-02/CA-U06, CA-N05):
 
-| N | Botón de mesa (separación) | Caben en 1280x800 | Caben en 768x1024 |
+| Vista | Espacio útil supuesto bajo "Mostrador" | Rejilla de 120x88 px (16 de separación) | 20 mesas |
 |---|---|---|---|
-| 1-32 | 120x88 px (16) | 8 x 4 = 32 | 5 x 7 = 35 |
-| 33-72 | 88x72 px (8) | 12 x 6 = 72 | 7 x 9 = 63: de 64 a 72 mesas, botón de 64x64 |
-| 73-99 | 64x64 px (8) | 16 x 7 = 112 | 9 x 10 = 90: de 91 a 99 mesas, botón de 56x56 (11 x 11 = 121) |
+| 1280x800 (horizontal, supuesto 23) | 1216x512 px | 8 x 4 = 32 | 8 + 8 + 4, sin desplazar |
+| 800x1280 (vertical, supuesto 23) | 736x968 px | 5 x 9 = 45 | 5 x 4, sin desplazar |
+| 768x1024 (captura de revisión) | 704x736 px | 5 x 7 = 35 | 5 x 4, sin desplazar |
 
-El texto pasa de "Mesa 7" a "7" (con `aria-label="Mesa 7"`) cuando el botón mide menos de 88 px de ancho; "Abierta" se mantiene en texto con el borde de 2 px. En 375 px se acepta desplazamiento vertical (dispositivo de emergencia).
+"Abierta" se muestra en texto con un borde de 2 px. En 375 px se acepta desplazamiento vertical (dispositivo de emergencia, fuera de HU-02/CA-N05).
+Si soporte técnico reinstala con otro número de mesas, la tabla de tamaños adaptables de la tarea 1.2b (hasta 99 mesas, con un mínimo de 56x56 px) sigue siendo válida; no forma parte del MVP.
 
 ## P-04 Toma de pedido: tablet en horizontal (1280x800)
 
@@ -44,8 +45,10 @@ El texto pasa de "Mesa 7" a "7" (con `aria-label="Mesa 7"`) cuando el botón mid
 | ⚠ La mesa 7 ya tiene un pedido abierto (#38). Este se enviará como pedido          |  <- Aviso no
 |   independiente.                                                          [ × ]    |     bloqueante
 +-----------------------------------------------------+-----------------------------+
-| [Cafés] [Infusiones] [Zumos] [Bollería] [Tostadas] >|  Pedido · Mesa 7            |
+| [Cafés] [Infusiones] [Zumos] [Bollería] [Tostadas]  |  Pedido · Mesa 7            |
 |  ^activa: fondo primario + subrayado 4 px           |                             |
+|  (con más categorías, pasan a otra fila: sin scroll  |                             |
+|   horizontal, ver "Categorías en varias filas")      |                             |
 |                                 [⊘ Marcar agotados] |  2 × Café con leche         |
 | +------------+ +------------+ +------------+        |      1,60 €    3,20 €       |
 | | Café solo  | | Café con  | | Cortado    |        |  [ − ] [ + ]  [✎ Añadir nota]|
@@ -70,13 +73,25 @@ El texto pasa de "Mesa 7" a "7" (con `aria-label="Mesa 7"`) cuando el botón mid
 Panel del pedido: 400 px fijos a la derecha. En "Mostrador", su cabecera tiene el campo
 "Nombre del cliente (opcional)", máx. 30, con contador.
 
-## P-04 en vertical (768x1024) y en móvil (375 px)
+## Categorías en varias filas [1.2c] (HU-02/CA-U02, CA-N05; HU-05/CA-N03)
+
+Con un menú de 20 categorías (HU-05/CA-N03, que incluye HU-02/CA-N05), una barra de pestañas de una sola fila necesitaría desplazamiento horizontal, que HU-02/CA-N05 prohíbe. Por eso las pestañas **pasan a varias filas**:
+- Pestañas de 48 px de alto, ancho según el texto (mín. 88 px), 8 px de separación. Siempre se ven todas: cambiar de categoría sigue siendo 1 toque (HU-02/CA-U02) y no hay menú "Más" que añada toques.
+- En 1280x800 el área de productos mide 880 px de ancho: unas 6-7 pestañas por fila, así que 20 categorías ocupan 3 filas (unos 160 px). En 800x1280 caben unas 6 por fila: 4 filas (unos 216 px).
+- Las pestañas no se desplazan con los productos: los productos tienen su propio desplazamiento vertical (permitido por HU-02/CA-N05). El total y "Enviar a barra" siguen fijos y visibles.
+- "Marcar agotados" va a la derecha de la última fila de pestañas.
+- Con el menú típico (5-7 categorías) sigue siendo una sola fila, como en el wireframe.
+- Nombres de categoría de hasta 30 caracteres (HU-05/CA-F01): si uno no cabe en 240 px, se parte en 2 líneas dentro de la pestaña (no se corta con "…").
+
+## P-04 en vertical (800x1280, supuesto 23; también 768 px) y en móvil (375 px)
 
 ```
 +-------------------------------------------+
 | Pedido · Mostrador        Lucía · Camarero|
 +-------------------------------------------+
-| [Cafés] [Infusiones] [Zumos] [Bollería] > |
+| [Cafés] [Infusiones] [Zumos] [Bollería]   |
+| [Tostadas] ...  (varias filas, sin scroll |
+|  horizontal)                              |
 |                     [⊘ Marcar agotados]   |
 | +---------+ +---------+ +---------+       |
 | |Café solo| |Café con | |Cortado  |       |
@@ -127,16 +142,24 @@ Toque 1: "Marcar agotados". Toque 2: el producto. Toast "Moca marcada como agota
 Igual que P-04 con el título "Modificar pedido #42 · Mesa 7". Las líneas nuevas llevan la insignia "AÑADIDO" y el primario es "Enviar cambios a barra".
 
 ## Criterios cubiertos
-| Historia | Criterio UX | Cómo |
-|---|---|---|
-| HU-02 | <= 6 toques para 3 productos | Nuevo pedido (P-02), Mesa (P-03), 3 productos, Enviar = 6 |
-| HU-02 | Categoría en 1 toque | Pestañas siempre visibles |
-| HU-02 | Producto >= 44x44 con nombre y precio | 120x88 px, nombre + precio |
-| HU-02 | Confirmación >= 3 s con número y pantalla lista | Toast de 5 s no bloqueante en P-02 |
-| HU-02 | Total actualizado en <= 200 ms | El total se calcula en el cliente para mostrarlo al momento; el servidor manda en el envío |
-| HU-02 (no func.) | Tablet en horizontal y vertical | Dos maquetaciones |
-| HU-02 | Aviso de mesa con pedido abierto | "Abierta #38" en P-03 + aviso en P-04 |
-| HU-02 / HU-09 | Tipo y mesa en 1 toque con N de 1 a 99 | Rejilla adaptable sin desplazar en 1280x800 y 768x1024 [1.2b] |
-| HU-02 | Categoría inicial = la primera del menú | La primera pestaña abre activa |
-| HU-05 | Agotado en <= 2 toques | Modo agotados |
-| HU-06 | "AÑADIDO" en texto | Insignia en la línea |
+| Criterio | Cómo |
+|---|---|
+| HU-02/CA-U01 | Nuevo pedido (P-02), Mesa (P-03), 3 productos, Enviar = 6 toques (flujos §3) |
+| HU-02/CA-U06 | Mesas y "Mostrador" en una sola rejilla: 1 toque, sin desplazar con 20 mesas |
+| HU-02/CA-U02 | Pestañas siempre visibles, en varias filas si hace falta [1.2c] |
+| HU-02/CA-F15 | La primera pestaña (primera categoría del menú) abre activa |
+| HU-02/CA-U03 | 120x88 px, nombre + precio |
+| HU-02/CA-U04 | Toast de 5 s no bloqueante en P-02 con el número |
+| HU-02/CA-U05 | El total se calcula en el cliente para mostrarlo al momento; el servidor manda en el envío (HU-02/CA-N03) |
+| HU-02/CA-N05 | Maquetación horizontal y vertical; total y "Enviar a barra" fijos; sin desplazamiento horizontal, también con 20 categorías [1.2c] |
+| HU-02/CA-F01 | Mesas 1..20 (supuesto 20) o "Mostrador" con nombre opcional de máx. 30 |
+| HU-02/CA-F03 | "+" y "−" de 48 px; a 0 la línea desaparece con "Deshacer" |
+| HU-02/CA-F04 | Nota de línea, máx. 100, con contador |
+| HU-02/CA-F06 | Producto agotado deshabilitado (`aria-disabled`) |
+| HU-02/CA-F08 | "Enviar a barra" deshabilitado sin líneas, con ayuda |
+| HU-02/CA-F09 | "Abierta #38" en P-03 + aviso no bloqueante en P-04 |
+| HU-02/CA-F11 | "Descartar" con diálogo |
+| HU-02/CA-N02 | Error de envío en línea, pedido conservado, reintento con la misma clave |
+| HU-05/CA-U02 | Modo agotados: 2 toques |
+| HU-05/CA-N03 | Con 20 categorías se mantiene HU-02/CA-N05 (pestañas en varias filas) [1.2c] |
+| HU-06/CA-U03, CA-F01 | Modo modificar: líneas nuevas con "AÑADIDO" en texto |

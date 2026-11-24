@@ -92,21 +92,25 @@ Los pedidos cobrados y no servidos dejan de verse a las 00:00 (`Europe/Madrid`) 
 - 1440 px: lista de ancho máximo 1200 px, centrada.
 
 ## Criterios cubiertos
-| Historia | Criterio | Cómo |
-|---|---|---|
-| HU-01 | Nombre y rol visibles | Barra superior |
-| HU-01 | El camarero no ve gestión | El botón "Gestión" solo existe para el encargado (y el servidor lo valida) |
-| HU-02 | Llega a "Pedidos" con "Nuevo pedido" | Esta pantalla; "Nuevo pedido" = toque 1 |
-| HU-02 | Qué entra y qué sale de la lista | Tabla "Qué entra en la lista" |
-| HU-02 | Campos de la fila (número, mesa/cliente, hora, estado en texto, COBRADO, total) | Fila del wireframe |
-| HU-02 | Orden por hora, agrupación por mesa | Comportamiento |
-| HU-02 | Actualización <= 2 s sin recargar | Actualización en vivo |
-| HU-03 | "Listos para servir" delante + aviso | Sección + toast `aria-live` |
-| HU-03 | "Servido" en 1 toque desde la fila | Botón "Servido" en filas LISTO |
-| HU-03 | Deshacer "Servido" en 30 s | Toast con acción y cuenta atrás |
-| HU-03 | Servido + Abierto sigue; Servido + Cobrado sale | Tabla "Qué entra en la lista" |
-| HU-03 | Cobrado y Listo sin servir: hasta fin del día | Tabla + nota de las 00:00 |
-| HU-04 | Cobro desde el pedido / Cobrar mesa | "Cobrar" en la fila (toque 1); "Cobrar mesa N" |
-| HU-04 | Cobrado sin servir sigue con "COBRADO" | Insignia "€ COBRADO" |
-| HU-04 | "Cobrados hoy" en 1 toque, del más reciente, con "ANULADO" | Pestaña "Cobrados hoy" |
-| HU-04 | Solo el encargado ve "Anular cobro" | Botón condicionado por rol |
+| Criterio | Cómo |
+|---|---|
+| HU-01/CA-U04 | Barra superior con nombre y rol |
+| HU-01/CA-F01 | El botón "Gestión" solo existe para el encargado (y el servidor lo valida) |
+| HU-02/CA-F16 | Esta pantalla al entrar; "Nuevo pedido" = toque 1 |
+| HU-02/CA-F17, CA-F18 | Tabla "Qué entra en la lista" |
+| HU-02/CA-F19 | Fila: número, mesa/cliente, hora, estado en texto, "€ COBRADO", total |
+| HU-02/CA-F20, CA-F21 | Orden por hora; agrupación por mesa |
+| HU-02/CA-F22 | Tocar la fila abre P-08 |
+| HU-02/CA-F23 | Actualización en vivo sin recargar |
+| HU-03/CA-F15 | "Listos para servir" delante + toast `aria-live` |
+| HU-03/CA-U05, CA-F16 | Botón "Servido" en filas LISTO, 1 toque |
+| HU-03/CA-F19 | Toast "Deshacer" de 30 s |
+| HU-03/CA-F17, CA-F18 | Servido + Abierto sigue; Servido + Cobrado sale |
+| HU-03/CA-F20 | "Servido" solo en filas LISTO |
+| HU-03/CA-F21 | Cobrado y Listo sin servir: hasta las 00:00 |
+| HU-04/CA-U01, CA-F09 | "Cobrar" en la fila (toque 1); "Cobrar mesa N" |
+| HU-04/CA-F18 | Insignia "€ COBRADO" en cobrados sin servir |
+| HU-04/CA-F19 | Pestaña "Cobrados hoy", del más reciente, con "ANULADO" |
+| HU-04/CA-F20 | "Ver ticket" |
+| HU-04/CA-F21 | "Anular cobro" solo para el encargado |
+| HU-06/CA-N03 | Aviso de conflicto (409) |

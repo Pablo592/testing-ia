@@ -91,7 +91,7 @@ Los mensajes exactos de cada respuesta del servidor están en el design system �
 |---|---|
 | Comprobando | "Comprobando…" en el botón, deshabilitado; teclado deshabilitado |
 | PIN incorrecto (o encargado bloqueado, desactivado o con PIN provisional: mismo error genérico, RS-04) | Bajo el PIN, en `danger`: "⚠ PIN de encargado incorrecto". El PIN se vacía y el foco vuelve al teclado. Desde el 2.º fallo seguido, ayuda: "Si estás seguro del PIN, inicia sesión con tu usuario para comprobar si tu cuenta está bloqueada." El cambio pendiente no se pierde |
-| Demasiados intentos en esta sesión (`429`, 5 en 10 min) | "🔒 Demasiados intentos de autorización desde esta sesión. Espera 9:12." Teclado deshabilitado para todos; "Volver" activo; el cambio pendiente se conserva |
+| Demasiados intentos en esta sesión (`429`, 5 en 10 min) | "🔒 Demasiados intentos. Espera 10 min." (texto de HU-06/CA-F19) Teclado deshabilitado para todos; "Volver" activo; el cambio pendiente se conserva |
 | Demasiados intentos en este dispositivo (`429`, 10 en 10 min) | "🔒 Demasiados intentos desde este dispositivo. Espera 9 min." |
 | Ningún encargado activo | No debería ocurrir (HU-07 exige al menos uno). Si ocurre: "No hay ningún encargado activo para autorizar" y solo "Volver" |
 | Sin conexión / error del servidor | "No se ha podido comprobar el PIN. No se ha hecho ningún cambio. · Reintentar"; el cambio pendiente se conserva |
@@ -108,18 +108,22 @@ Los mensajes exactos de cada respuesta del servidor están en el design system �
 | Éxito | Toast "Cambios enviados a barra" / "Pedido 42 cancelado" |
 
 ## Criterios cubiertos
-| Historia | Criterio | Cómo |
-|---|---|---|
-| HU-06 | Cancelar Pendiente en <= 3 toques | Cancelar pedido, motivo, Cancelar pedido |
-| HU-06 | Diálogo con número e importe | Cabecera del diálogo |
-| HU-06 | AÑADIDO / ELIMINADO en texto | Etiquetas + tachado (aquí y en barra) |
-| HU-06 | Aviso de que la línea puede estar preparada (o servida) | Aviso al pulsar "−" y en el diálogo [1.2b] |
-| HU-06 | Encargado + PIN en el mismo dispositivo | Diálogo de autorización A [1.2b] |
-| HU-06 | Único encargado preseleccionado | Variante B [1.2b] |
-| HU-06 | Sesión de encargado: sin autorización adicional | Tabla "Cuándo se pide autorización" [1.2b] |
-| HU-06 | PIN incorrecto: mensaje junto al campo, PIN vaciado, cambio conservado | Estados del diálogo [1.2b] |
-| HU-06 | Una autorización por acción | La autorización se consume en el envío o la cancelación [1.2b] |
-| HU-06 | Intentos y bloqueo (`seguridad.md` §6.1, §6.3) | Error genérico `403` (también si el encargado está bloqueado), `429` por sesión y por dispositivo [1.2b] |
-| HU-06 | PIN de encargado de 6 dígitos | Etiqueta "(6 dígitos)" y 6 indicadores [1.2b] |
-| HU-06 | Pedido cobrado: indica que hace falta anular el cobro | Estado "Pedido cobrado" |
-| HU-04 | Cobro desde el pedido | Primario "Cobrar" |
+| Criterio | Cómo |
+|---|---|
+| HU-06/CA-U01, CA-F09, CA-F04 | Cancelar pedido, motivo, Cancelar pedido = 3 toques; motivos de la lista |
+| HU-06/CA-U02 | Cabecera del diálogo con número e importe |
+| HU-06/CA-U03, CA-F01, CA-F02 | "AÑADIDO" / tachado + "ELIMINADO" (aquí y en barra) |
+| HU-06/CA-F03 | Aviso de línea ya preparada o servida al pulsar "−" y en el diálogo |
+| HU-06/CA-F05 | Cancelación con autorización (variante C) |
+| HU-06/CA-F11 | Diálogo de autorización A: encargado + PIN en el mismo dispositivo |
+| HU-06/CA-F12 | Variante B: único encargado preseleccionado |
+| HU-06/CA-F13 | "PIN de encargado incorrecto", PIN vaciado, cambio conservado |
+| HU-06/CA-F14 | La autorización se consume en el envío o la cancelación |
+| HU-06/CA-F15 | Sesión de encargado: sin autorización adicional |
+| HU-06/CA-F18 | Mismo error genérico con un encargado bloqueado, desactivado o con PIN provisional |
+| HU-06/CA-F19 | `429` por sesión: "Demasiados intentos. Espera X min", cambio conservado |
+| HU-06/CA-F06, CA-U04 | Estado "Pedido cobrado": hace falta que el encargado anule el cobro |
+| HU-06/CA-F10 | Pedido cancelado en solo lectura |
+| HU-06/CA-N03 | Aviso de conflicto (409) con la versión actual |
+| HU-01/CA-N01 | PIN de encargado de 6 dígitos: etiqueta "(6 dígitos)" y 6 indicadores |
+| HU-04/CA-U01 | Primario "Cobrar" desde el detalle |

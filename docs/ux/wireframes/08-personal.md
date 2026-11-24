@@ -26,6 +26,10 @@ Actualizado en la tarea 1.2b: estado de bloqueo y acción "Desbloquear" (`docs/s
 
 Crear usuario, cambiar el rol, activar, desactivar, restablecer PIN y desbloquear. Cambiar **solo el nombre** no pide PIN (`docs/arquitectura.md` §5). Cada una abre su diálogo de confirmación con la variante "Reconfirmación" del design system §5.10b integrada (nombre fijo "PIN de Marta (6 dígitos)" + teclado), y el botón final lleva el verbo: "Confirmar y crear usuario", "Confirmar y desbloquear"… Un PIN incorrecto no aplica nada, conserva lo escrito en el formulario y cuenta para el bloqueo de quien lo escribe. Los mensajes de error y bloqueo son los de la tabla de §5.10b.
 
+**Con la cuenta del encargado bloqueada [1.2c] (HU-01/CA-F12, CA-F13; HU-07/CA-N04):**
+- **Bloqueo temporal** (por fallos al reconfirmar aquí, en otro diálogo o al iniciar sesión en otro dispositivo): la sesión sigue abierta. El intento que activa el bloqueo muestra el "PIN incorrecto" normal; desde el siguiente, cualquier escritura muestra junto al PIN "🔒 Cuenta bloqueada. Espera 5 min.", no se hace nada, **los datos del formulario se conservan** y el rechazo no cuenta como fallo. Al terminar el bloqueo se puede repetir. Leer la lista y cambiar solo el nombre (que no pide PIN) siguen disponibles.
+- **Bloqueo indefinido** (20 fallos): todas sus sesiones se revocan; el dispositivo vuelve a P-01 con "Cuenta bloqueada. Pide al encargado que la desbloquee." y lo escrito en el formulario se pierde. Lo desbloquea otro encargado o, si no lo hay, soporte técnico.
+
 ### Desbloquear
 
 ```
@@ -75,10 +79,16 @@ Si se cambia el rol a Encargado y el PIN actual del usuario tiene menos de 6 dí
 | Éxito | Toasts "Usuario creado", "Lucía desbloqueada: ya puede iniciar sesión", "PIN restablecido", "Pedro desactivado" |
 
 ## Criterios cubiertos
-| Historia | Criterio | Cómo |
-|---|---|---|
-| HU-07 | Alta en 1 formulario de 3 campos | Nombre, rol, PIN (la reconfirmación es del encargado, no un campo del alta) |
-| HU-07 | Lista con nombre, rol y estado en texto | Tabla, con los estados de bloqueo [1.2b] |
-| HU-07 / SEC-001 | Desbloquear a un usuario bloqueado | Acción "Desbloquear" [1.2b] |
-| HU-07 / SEC-007 | PIN del encargado en cada escritura | Reconfirmación en cada diálogo [1.2b] |
-| HU-07 / SEC-001 | Reglas de PIN por rol; promoción a encargado con PIN corto | Regla según el rol; aviso al cambiar el rol [1.2b] |
+| Criterio | Cómo |
+|---|---|
+| HU-07/CA-U01 | Alta: nombre, rol, PIN (la reconfirmación del encargado es un paso aparte) |
+| HU-07/CA-U02, CA-F10 | Tabla con nombre, rol y estado en texto, incluido "Bloqueado hasta desbloquear" |
+| HU-07/CA-F01 | "Ya existe un usuario con ese nombre." (nombre único de 1 a 30) |
+| HU-07/CA-F03 | Diálogo de desactivar: "Su sesión se cerrará en menos de 1 minuto" |
+| HU-07/CA-F04 | Restablecer PIN: PIN provisional y contador a cero |
+| HU-07/CA-F05 | "Desactivar" deshabilitado con "Debe existir al menos un encargado activo" |
+| HU-07/CA-F06 | Regla de PIN según el rol (`01-login.md`, "Reglas de PIN") |
+| HU-07/CA-F08 | Acción "Desbloquear" |
+| HU-07/CA-F09 | Aviso al cambiar el rol a Encargado con PIN corto; cambio obligatorio en `01-login.md` |
+| HU-07/CA-N04 | Reconfirmación en cada escritura salvo cambiar solo el nombre; con cuenta bloqueada, HU-01/CA-F12 y CA-F13 [1.2c] |
+| HU-07/CA-N03 | Etiquetas asociadas; menú [⋯] con objetivos de 48 px navegable con teclado |
