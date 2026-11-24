@@ -17,6 +17,58 @@ IMAGE=localhost/mi-app-dev-tools:node26.13.1-pnpm12.21.0
 SIN_DEPS=0
 [ "${1:-}" = "--sin-deps" ] && SIN_DEPS=1
 
+# Comprobación de enlaces simbólicos en la lista de permitidos en escritura
+# (SEC-026, docs/infraestructura.md §7.1). web y deps pueden crear enlaces en
+# apps/, packages/ y node_modules/ hacia cualquier ruta; en el host se
+# resolverían contra los ficheros del usuario. Se detiene si:
+#  a) hay algún enlace en apps/ o packages/ fuera de los node_modules/ reales
+#     ("-type d" en la poda: un enlace llamado node_modules no se poda y se
+#     detecta, porque find no sigue enlaces);
+#  b) algún enlace de apps/, packages/ o node_modules/ (incluidos los de pnpm)
+#     resuelve fuera de esas tres carpetas (p. ej. a tests/run.sh o a ~/.ssh).
+# Nombres con salto de línea: como mucho dan un falso positivo, nunca un
+# falso negativo. Si realpath falla (p. ej. un bucle de enlaces), también se
+# detiene.
+comprobar_enlaces() {
+  R=$(pwd -P)
+  sospechosos=$(find apps packages \( -name node_modules -type d \) -prune -o -type l -print)
+  if [ -n "$sospechosos" ]; then
+    echo "ERROR (SEC-026): enlaces simbólicos en apps/ o packages/ (fuera de node_modules/):" >&2
+    printf '%s\n' "$sospechosos" >&2
+    echo "Revísalos sin abrirlos ni editarlos (ls -l) y bórralos antes de seguir." >&2
+    exit 1
+  fi
+  if ! destinos=$(find apps packages node_modules -type l -exec realpath -m -- {} +); then
+    echo "ERROR (SEC-026): no se pudo resolver algún enlace simbólico de la lista de permitidos" >&2
+    exit 1
+  fi
+  [ -z "$destinos" ] && return 0
+  fuera=$(printf '%s\n' "$destinos" | while IFS= read -r d; do
+    case $d in
+      "$R"/apps/*|"$R"/packages/*|"$R"/node_modules/*) ;;
+      *) printf '%s\n' "$d" ;;
+    esac
+  done)
+  if [ -n "$fuera" ]; then
+    echo "ERROR (SEC-026): enlaces simbólicos que apuntan fuera de apps/, packages/ y node_modules/:" >&2
+    # Camino lento, solo si hay error: enlace -> destino, uno a uno.
+    find apps packages node_modules -type l -exec sh -c '
+      R=$1; shift
+      NL="
+"
+      for l; do
+        d=$(realpath -m -- "$l")
+        case $d in
+          *"$NL"*) printf "  %s -> (destino con salto de línea)\n" "$l" ;;
+          "$R"/apps/*|"$R"/packages/*|"$R"/node_modules/*) ;;
+          *) printf "  %s -> %s\n" "$l" "$d" ;;
+        esac
+      done' sh "$R" {} + >&2
+    echo "Revísalos sin abrirlos ni editarlos (ls -l) y bórralos antes de seguir." >&2
+    exit 1
+  fi
+}
+
 # 1. Comprobaciones de la política (§3.1): nunca root, motor rootless, cgroups v2.
 if [ "$(id -u)" -eq 0 ]; then
   echo "ERROR: no ejecutar como root" >&2; exit 1
@@ -34,6 +86,7 @@ sh deploy/dev/generar-secretos.sh
 # en escritura de web/deps (SEC-023, docs/infraestructura.md §7.1).
 mkdir -p -m 0700 .secrets
 mkdir -p apps packages node_modules
+comprobar_enlaces
 
 # 3. Imagen de herramientas (formato docker para conservar el HEALTHCHECK).
 if ! podman image exists "$IMAGE"; then
@@ -46,6 +99,8 @@ if [ "$SIN_DEPS" -eq 0 ]; then
     echo "ERROR: falta pnpm-lock.yaml en la raíz (lo crea el Developer)" >&2; exit 1
   fi
   $PC --profile setup run --rm --no-deps deps
+  # deps acaba de ejecutar scripts de terceros con escritura en la lista.
+  comprobar_enlaces
 fi
 
 # 5. Base de datos, migraciones y encargado inicial (falla si el código de salida != 0).

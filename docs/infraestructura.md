@@ -2,7 +2,7 @@
 
 > Responsable: Infrastructure. Entradas: `docs/reglas-equipo.md` §3,
 > `docs/arquitectura.md` §3 y §10, ADR-001/002/003/007, `docs/seguridad.md`
-> (§6.2, §6.3, §8, SEC-002/003/009/010/011/013/014/015/018/019/020), `docs/permisos.md` §6–7,
+> (§6.2, §6.3, §8, SEC-002/003/009/010/011/013/014/015/018/019/020/023/026/027), `docs/permisos.md` §6–7,
 > `docs/logging.md` (§5, §6.5, §6.6, §7.0, §8.2) y `docs/testing.md` §7.
 > Estado: **DEV listo y validado con un workspace de prueba** (todavía no hay
 > código de la app). **TESTING en borrador** (`compose.test.yaml`). DEMO y PROD
@@ -115,15 +115,19 @@ Según ADR-007 y la arquitectura §10, DEV **no tiene Caddy**: el navegador usa
 |---|---|---|---|
 | `mi-app-dev_pgdata` (volumen) | `db:/var/lib/postgresql` | datos de PostgreSQL 19 (`PGDATA=/var/lib/postgresql/19/docker`) | `down -v` |
 | `mi-app-dev_pnpm-store` (volumen) | `deps:/pnpm-store` | caché de paquetes de pnpm | `down -v` (con `--profile setup`) |
-| `./` → `/workspace` | `api`, `migrate`, `init-manager`: **ro**; `web`, `deps`: rw | código fuente | — |
+| `./` → `/workspace` | **ro** en los 5 servicios (`api`, `web`, `deps`, `migrate`, `init-manager`) | código fuente; todo lo que no está en la lista de abajo queda en solo lectura (raíz, `.git`, `.claude`, `CLAUDE.md`, `deploy/`, `docs/`, `tools/`, `tests/`, compose, ficheros nuevos de la raíz) | — |
+| `./apps`, `./packages`, `./node_modules` → mismo sitio en **rw** (lista de permitidos, SEC-023, §7.1) | solo `web`, `deps` | código de los paquetes, caché de Vite y dependencias instaladas; solo datos o código que corre dentro de contenedores, sin enlaces simbólicos que salgan de la lista (SEC-026) | — |
 | tmpfs vacío → `/workspace/.secrets` (SEC-018) | los 5 servicios que montan `./` | nada: `ro`, modo 0000, 4 KiB, `notmpcopyup` | — |
-| `.git`, `.claude`, `CLAUDE.md`, `deploy`, `docs`, `tools`, `.gitignore`, `compose.dev.yaml`, `compose.test.yaml` → mismo sitio en **ro** (SEC-018) | `web`, `deps` | lo que se ejecuta o se lee como instrucciones en el host | — |
 | `./deploy/db/initdb` → `/docker-entrypoint-initdb.d` | `db`, ro | script de inicialización | — |
 | `.secrets/dev/<nombre>` → `/run/secrets/<nombre>` | por servicio, ro | secretos (§5) | — |
 
-`node_modules/` queda en el árbol del host (ignorado por git) para que el IDE
-vea los tipos; contiene binarios para Linux musl (Alpine), así que **no** se
-ejecuta `pnpm` en el host: todo se ejecuta en contenedores.
+`node_modules/` queda en el árbol del host (ignorado por git); contiene
+binarios para Linux musl (Alpine) y código de terceros que escribe `deps`, así
+que **no** se ejecuta `pnpm` ni `node` en el host ni se deja que el IDE cargue
+código de ahí (ESLint, Prettier, Vitest, TypeScript del workspace): todo se
+ejecuta en contenedores. Reglas y alternativas para el IDE en §7.1 (SEC-026).
+Para crear un servicio o montaje nuevo se copia la tabla anterior, no un
+montaje `rw` del proyecto entero (SEC-027).
 
 Límites (cgroups v2): `db` 1 CPU / 512 MB / 200 pids; `api` 1,5 CPU / 768 MB;
 `web` 1,5 CPU / 1 GB; `deps` 2 CPU / 2 GB; `migrate` e `init-manager` 1 CPU / 512 MB.
@@ -149,9 +153,11 @@ Todos los comandos desde la raíz del proyecto, con el usuario normal (sin `sudo
 | Reiniciar la BD de DEV (p. ej. tras `generar-secretos.sh --force`) | destruir y volver a `sh deploy/dev/levantar.sh` |
 
 `levantar.sh` hace, en orden y parando al primer error: comprobaciones
-(no root, rootless, cgroups v2) → secretos que falten → imagen de herramientas
-si no existe → `deps` → `up -d db` → espera a `db` *healthy* → `migrate` →
-`init-manager` → `up -d` (api, web).
+(no root, rootless, cgroups v2) → secretos que falten → puntos de montaje
+(`.secrets/`, `apps/`, `packages/`, `node_modules/`) → **comprobación de
+enlaces simbólicos** (SEC-026, §7.1) → imagen de herramientas si no existe →
+`deps` → otra vez la comprobación de enlaces → `up -d db` → espera a `db`
+*healthy* → `migrate` → `init-manager` → `up -d` (api, web).
 
 ### 4.1 Recarga en caliente
 - `api`: `tsx watch` (o equivalente) detecta cambios a través del montaje de
@@ -361,10 +367,70 @@ Cómo se aplica:
 - Toda ruta en `rw` es **solo datos o código que corre dentro de un
   contenedor**: el host no ejecuta nada de `apps/`, `packages/`,
   `node_modules/`, `tests/results` ni `tests/screenshots` (ni `node`/`pnpm`
-  del host sobre el árbol, ni extensiones del IDE que ejecuten
-  `vite.config`/`vitest.config` en el host). Riesgo residual aceptado: el
+  del host sobre el árbol). Riesgo residual aceptado: el
   código de `apps/` y `packages/` sigue siendo modificable por `web`/`deps`;
   solo se ejecuta dentro de contenedores y se revisa en `git diff`.
+- **IDE y herramientas del host (SEC-026).** En el host no se usan extensiones
+  ni herramientas que carguen o ejecuten código de `node_modules/`, `apps/` o
+  `packages/`: ESLint, Prettier, Vitest/Jest, Playwright, el servidor de
+  TypeScript con la "versión del workspace" o con `plugins` de un
+  `apps/*/tsconfig.json`, y cualquier extensión que lea
+  `vite.config`/`vitest.config`/`eslint.config`/`prettier.config` del árbol.
+  Todas ejecutan ese código **en el host**, con la cuenta del usuario, y
+  `node_modules/` lo escribe `deps` con scripts de terceros. Opciones
+  permitidas, de más a menos recomendada:
+  1. Abrir el proyecto en el IDE en **modo restringido / workspace no
+     confiable** (VS Code: "Restricted Mode"; equivalentes en otros IDE),
+     que desactiva esas extensiones y la versión de TypeScript del workspace.
+     Formateo, lint y tests se lanzan con `podman-compose` en los contenedores
+     (`... run --rm --no-deps deps pnpm lint`, etc.).
+  2. IDE conectado a un contenedor (dev container o servidor remoto del IDE
+     dentro de un contenedor con el mismo endurecimiento de §7 y la misma
+     lista de permitidos): las extensiones corren dentro, no en el host. Si se
+     añade, se documenta aquí y lo revisa Cybersecurity antes de usarlo.
+  3. Si se usa TypeScript en el host para ver tipos, solo con la versión que
+     trae el IDE (nunca "Use Workspace Version") y sin `plugins` de
+     `tsconfig`.
+  No se aceptan tareas automáticas del IDE (`.vscode/tasks.json`,
+  `runOn: folderOpen`) ni formateo al guardar con un formateador del
+  workspace.
+- **Enlaces simbólicos (SEC-026).** `web` y `deps` pueden crear en la lista
+  de permitidos enlaces a cualquier ruta (`apps/x -> ../tests/run.sh`,
+  `node_modules/y -> /home/<usuario>/.ssh/…`). Dentro del contenedor no sirven
+  de nada, pero en el host se resuelven contra los ficheros del usuario: si
+  algo del host escribe en ese nombre, escribe en el destino; si lo lee, el
+  contenido de un fichero privado entra en el contexto de un agente o en el
+  repositorio. Reglas:
+  - En `apps/` y `packages/`, fuera de los `node_modules/` reales, **no hay
+    enlaces simbólicos**. Si algún día hace falta uno versionado, se revisa
+    con Cybersecurity (aparece en `git diff` con modo `120000`) y se añade una
+    excepción explícita a la comprobación, nunca un comodín.
+  - En toda la lista (incluidos los `node_modules/`, que pnpm llena de
+    enlaces), ningún enlace resuelve fuera de `apps/`, `packages/` o
+    `node_modules/`.
+  - Comprobación (la misma en `levantar.sh` y en `tests/run.sh`), desde la
+    raíz y sin seguir enlaces:
+    ```sh
+    # a) debe salir vacío; "-type d" en la poda: un enlace llamado
+    #    node_modules no se poda y aparece
+    find apps packages \( -name node_modules -type d \) -prune -o -type l -print
+    # b) cada destino debe empezar por $(pwd -P)/apps/, /packages/ o /node_modules/
+    find apps packages node_modules -type l -exec realpath -m -- {} +
+    ```
+    El `-path '*/node_modules' -prune` propuesto en SEC-026 no basta: poda
+    también un **enlace** llamado `node_modules` (p. ej.
+    `packages/p/node_modules -> ../../tests`) y no lo muestra.
+  - `deploy/dev/levantar.sh` hace las dos comprobaciones (función
+    `comprobar_enlaces`) antes de arrancar nada y otra vez justo después de
+    `deps`, y se detiene con la lista de enlaces sospechosos (enlace →
+    destino). Es una foto: `web` sigue corriendo y puede crear enlaces
+    después. Por eso, además, los agentes y personas del host, antes de
+    **escribir** un fichero de `apps/` o `packages/` con herramientas del
+    host, comprueban que no es un enlace (`test -L <ruta>` → falso) ni lo es
+    ninguna carpeta del camino; y antes de **leer** algo de `node_modules/`,
+    que el destino real (`realpath`) está dentro de la lista.
+  - Ningún enlace de la lista se borra ni se "arregla" siguiéndolo: se
+    inspecciona con `ls -l` y se borra el enlace (`rm <enlace>`, sin `-r`).
 
 **Script de pruebas del host (lo crean Testing o Developer en la Etapa 2).**
 Ubicación: `tests/run.sh` (la de `docs/testing.md` §4.1 y §7.3), que ya no es
@@ -380,11 +446,27 @@ permitidos de DEV y en TESTING solo `tests/results` y `tests/screenshots` son
    monta `tests/run.sh` en escritura.
 4. El resto de §9 (orden de arranque, secretos por ejecución en
    `$XDG_RUNTIME_DIR`, `podman-compose` siempre).
+5. (SEC-026) Al empezar, antes de cualquier `up`/`run`, y otra vez antes de
+   leer resultados o tocar ficheros del árbol tras ejecutar contenedores que
+   escriben en la lista: las dos comprobaciones de enlaces de arriba. Si (a)
+   devuelve algo, o algún destino de (b) sale de `apps/`, `packages/` o
+   `node_modules/`, o `realpath` falla (bucle de enlaces), el script se
+   detiene con código distinto de 0 **sin seguir el enlace** (sin `cat`,
+   `cp`, `>` ni `rm -r` sobre él). Lo más simple es copiar la función
+   `comprobar_enlaces` de `deploy/dev/levantar.sh` (probada, §15). Si se
+   prefiere no duplicarla, Testing/Developer puede proponer moverla a
+   `tools/` (fuera de la lista de permitidos) y que la usen los dos scripts.
+   En TESTING, `tests/results` y `tests/screenshots` también son `rw`: la
+   misma comprobación (b) sobre ellas, sin enlaces permitidos, antes de que
+   el script lea o publique un informe.
 
 Cómo verificarlo (RS-45 ampliado): `podman-compose -f compose.dev.yaml
 --profile setup run --rm --no-deps --entrypoint sh <web|deps> -c 'touch
 /workspace/tests/run.sh'` → `Read-only file system`; el mismo `touch` en
-`/workspace/apps/x` → correcto. Resultado de la prueba real en §15.
+`/workspace/apps/x` → correcto. Además (SEC-026): plantar desde `deps`
+`ln -s ../tests/run.sh /workspace/apps/x` → `levantar.sh` y `tests/run.sh`
+se detienen con error y `tests/run.sh` no cambia. Resultado de la prueba
+real en §15.
 
 ## 8. Imágenes y digests
 
@@ -981,6 +1063,34 @@ El escaneo de imágenes (Trivy/Grype) se integra con la imagen final de la app
 (Etapa 2); la imagen de herramientas de DEV no se despliega.
 
 ## 15. Qué se validó realmente y qué no
+
+Validado en esta máquina el **2026-11-24 (tarea 1.7n, SEC-026 / SEC-027)**,
+sin `sudo`, sin construir imágenes ni arrancar contenedores:
+- Función `comprobar_enlaces` de `deploy/dev/levantar.sh` con `/bin/sh` y GNU
+  find sobre un árbol de prueba en el scratchpad (fuera del repo):
+  - se detiene con `apps/x -> ../tests/run.sh`, con un **enlace llamado**
+    `packages/p/node_modules -> ../../tests` (que `-path '*/node_modules'
+    -prune` no habría mostrado), con `node_modules/evil -> /etc/passwd`, con
+    `packages/p/node_modules/t -> ../../../tests`, con un destino absoluto
+    con `..` que sale del árbol, con un destino que contiene un salto de línea
+    y con un bucle de enlaces (`realpath` falla);
+  - pasa con enlaces tipo pnpm (`apps/web/node_modules/a ->
+    ../../../node_modules/.pnpm/a`, `node_modules/p -> ../packages/p`) y con
+    la lista vacía; 5 000 enlaces legítimos en 0,4 s;
+  - falso positivo conocido e inocuo: un enlace a la propia carpeta `apps`
+    (sin barra final) se rechaza.
+- `sh deploy/dev/levantar.sh` real con `apps/x -> ../tests/run.sh` plantado:
+  secretos conservados, error SEC-026 y salida 1 **antes** de construir o
+  arrancar nada. Con `node_modules/evil -> /etc/hostname` y `--sin-deps`:
+  igual, mostrando `enlace -> destino`. Después se borraron los enlaces y
+  `apps/`, `packages/`, `node_modules/` (vacíos); `git status` solo muestra
+  el cambio del script; `podman ps -a` solo `mi-app-dev_db_1` (detenido).
+- §3 (tabla de volúmenes) contrastada con `podman-compose -f compose.dev.yaml
+  --profile setup config`: `./:/workspace:ro` en los 5 servicios y
+  `./apps`, `./packages`, `./node_modules` en `rw` solo en `web` y `deps`.
+- No probado: plantar el enlace **desde** `deps` con el contenedor real y
+  `pnpm install` real (no hay código de la app); queda para RS-45 en la
+  Etapa 2, igual que `tests/run.sh` (aún no existe).
 
 Validado en esta máquina el **2026-11-24 (tarea 1.7c, SEC-023 / RS-45
 ampliado)**, sin `sudo` y sin coste, con `podman-compose` 1.5.0 y Podman 5.7.0
