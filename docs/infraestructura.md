@@ -5,7 +5,8 @@
 > (§6.2, §6.3, §8, SEC-002/003/009/010/011/013/014/015/018/019/020/023/026/027), `docs/permisos.md` §6–7,
 > `docs/logging.md` (§5, §6.5, §6.6, §7.0, §8.2) y `docs/testing.md` §7.
 > Estado: **DEV listo y validado con un workspace de prueba** (todavía no hay
-> código de la app). **TESTING en borrador** (`compose.test.yaml`). DEMO y PROD
+> código de la app). **TESTING en borrador** (`compose.test.yaml`; BD de test,
+> roles y plantilla validados el 2026-11-24, §9.1 y §15). DEMO y PROD
 > pendientes (Etapas 4 y 5), con las decisiones que ya condicionan su diseño en §10–§12.
 
 ## Índice
@@ -60,6 +61,7 @@ mi-app/
     │   ├── generar-secretos.sh   # crea los secretos de DEV
     │   └── levantar.sh           # levanta DEV completo con un comando
     ├── db/initdb/10-roles.sh     # roles y BD (todos los entornos)
+    ├── db/testing/20-test-admin.sh  # SOLO TESTING: rol con CREATEDB y BD plantilla (T-28, §9.1)
     ├── proxy/Caddyfile           # TESTING, DEMO y PROD
     ├── app/Containerfile         # (pendiente) imagen final multi-stage → distroless
     ├── quadlet/                  # (pendiente, Etapa 5) unidades de PROD
@@ -116,7 +118,7 @@ Según ADR-007 y la arquitectura §10, DEV **no tiene Caddy**: el navegador usa
 | `mi-app-dev_pgdata` (volumen) | `db:/var/lib/postgresql` | datos de PostgreSQL 19 (`PGDATA=/var/lib/postgresql/19/docker`) | `down -v` |
 | `mi-app-dev_pnpm-store` (volumen) | `deps:/pnpm-store` | caché de paquetes de pnpm | `down -v` (con `--profile setup`) |
 | `./` → `/workspace` | **ro** en los 5 servicios (`api`, `web`, `deps`, `migrate`, `init-manager`) | código fuente; todo lo que no está en la lista de abajo queda en solo lectura (raíz, `.git`, `.claude`, `CLAUDE.md`, `deploy/`, `docs/`, `tools/`, `tests/`, compose, ficheros nuevos de la raíz) | — |
-| `./apps`, `./packages`, `./node_modules` → mismo sitio en **rw** (lista de permitidos, SEC-023, §7.1) | solo `web`, `deps` | código de los paquetes, caché de Vite y dependencias instaladas; solo datos o código que corre dentro de contenedores, sin enlaces simbólicos que salgan de la lista (SEC-026) | — |
+| `./apps`, `./packages`, `./node_modules` → mismo sitio en **rw** (lista de permitidos, SEC-023, §7.1); además `./tests/node_modules` solo en `deps` (T-35) | solo `web`, `deps` | código de los paquetes, caché de Vite y dependencias instaladas; solo datos o código que corre dentro de contenedores, sin enlaces simbólicos que salgan de la lista (SEC-026) | — |
 | tmpfs vacío → `/workspace/.secrets` (SEC-018) | los 5 servicios que montan `./` | nada: `ro`, modo 0000, 4 KiB, `notmpcopyup` | — |
 | `./deploy/db/initdb` → `/docker-entrypoint-initdb.d` | `db`, ro | script de inicialización | — |
 | `.secrets/dev/<nombre>` → `/run/secrets/<nombre>` | por servicio, ro | secretos (§5) | — |
@@ -154,7 +156,7 @@ Todos los comandos desde la raíz del proyecto, con el usuario normal (sin `sudo
 
 `levantar.sh` hace, en orden y parando al primer error: comprobaciones
 (no root, rootless, cgroups v2) → secretos que falten → puntos de montaje
-(`.secrets/`, `apps/`, `packages/`, `node_modules/`) → **comprobación de
+(`.secrets/`, `apps/`, `packages/`, `node_modules/`, `tests/node_modules/`) → **comprobación de
 enlaces simbólicos** (SEC-026, §7.1) → imagen de herramientas si no existe →
 `deps` → otra vez la comprobación de enlaces → `up -d db` → espera a `db`
 *healthy* → `migrate` → `init-manager` → `up -d` (api, web).
@@ -319,8 +321,9 @@ No da ningún privilegio: el usuario del contenedor ya es el del host.
 2. **Partes del árbol del proyecto en escritura en `web` y `deps`** (SEC-018,
    SEC-023). La raíz del contenedor sigue en solo lectura y **el proyecto
    también** (`./:/workspace:ro`); encima solo se vuelve a montar en `rw` una
-   lista de permitidos: `apps/`, `packages/` y `node_modules/`. `deps` escribe
-   ahí `node_modules/` (raíz y cada paquete del workspace) y Vite escribe su
+   lista de permitidos: `apps/`, `packages/` y `node_modules/` (y, solo en
+   `deps`, `tests/node_modules/`, T-35). `deps` escribe
+   ahí `node_modules/` (raíz y cada paquete del workspace, incluido `tests`) y Vite escribe su
    caché (`apps/web/node_modules/.vite`) y ficheros temporales junto a
    `apps/web/vite.config`. `api`, `migrate` e `init-manager` montan el
    proyecto entero en `ro`. Si el Developer mueve la caché de Vite a `/tmp`
@@ -353,7 +356,8 @@ que luego corre en el host antes de que nadie mire `git diff`.
 
 Cómo se aplica:
 - **DEV, `web` y `deps`:** proyecto en `ro` + lista de permitidos en `rw`
-  (`x-rw-apps`, `x-rw-packages`, `x-rw-node-modules` en `compose.dev.yaml`).
+  (`x-rw-apps`, `x-rw-packages`, `x-rw-node-modules` en `compose.dev.yaml`;
+  `deps` además `x-rw-tests-node-modules`, solo `./tests/node_modules`, T-35).
   Es una lista de permitidos, no de prohibidos: lo que no está en ella queda
   en `ro`. Si falta un origen, `podman-compose` crea el directorio vacío en el
   host; `deploy/dev/levantar.sh` los crea antes con `mkdir -p`.
@@ -363,6 +367,9 @@ Cómo se aplica:
 - **Nunca** se añade a la lista de permitidos la raíz, `tests/` entero, ni una
   ruta que contenga scripts que se ejecuten en el host. Si `tests/` pasa a ser
   un paquete del workspace pnpm, se añade solo `./tests/node_modules` en `rw`.
+  **Hecho (T-35, 2026-11-24):** `tests/` es `@mi-app/tests`; solo `deps` monta
+  `./tests/node_modules` en `rw` (`web` no lo necesita). `tests/run.sh` y el
+  resto de `tests/` siguen en `ro` (comprobado, §15).
   Al añadir `compose.demo.yaml` u otro fichero de entrada, va fuera de la lista.
 - Toda ruta en `rw` es **solo datos o código que corre dentro de un
   contenedor**: el host no ejecuta nada de `apps/`, `packages/`,
@@ -406,16 +413,17 @@ Cómo se aplica:
     con Cybersecurity (aparece en `git diff` con modo `120000`) y se añade una
     excepción explícita a la comprobación, nunca un comodín.
   - En toda la lista (incluidos los `node_modules/`, que pnpm llena de
-    enlaces), ningún enlace resuelve fuera de `apps/`, `packages/` o
-    `node_modules/`.
+    enlaces, y `tests/node_modules/`), ningún enlace resuelve fuera de
+    `apps/`, `packages/`, `node_modules/` o `tests/node_modules/`.
   - Comprobación (la misma en `levantar.sh` y en `tests/run.sh`), desde la
     raíz y sin seguir enlaces:
     ```sh
     # a) debe salir vacío; "-type d" en la poda: un enlace llamado
     #    node_modules no se poda y aparece
     find apps packages \( -name node_modules -type d \) -prune -o -type l -print
-    # b) cada destino debe empezar por $(pwd -P)/apps/, /packages/ o /node_modules/
-    find apps packages node_modules -type l -exec realpath -m -- {} +
+    # b) cada destino debe empezar por $(pwd -P)/apps/, /packages/, /node_modules/
+    #    o /tests/node_modules/
+    find apps packages node_modules tests/node_modules -type l -exec realpath -m -- {} +
     ```
     El `-path '*/node_modules' -prune` propuesto en SEC-026 no basta: poda
     también un **enlace** llamado `node_modules` (p. ej.
@@ -501,9 +509,11 @@ imagen final de la app y las imágenes de los ejecutores.
 | Ejecutores sin root ni capacidades | todos con `x-hardening` (UID 1000, `cap_drop: ALL`, `no-new-privileges`, `read_only`, `tmpfs /tmp`, `HOME=/tmp`, límites) |
 | Red interna, sin host ni sockets | redes `backend` y `edge`, **ambas `internal`** (sin salida a internet); `runner-unit` con `network_mode: none` |
 | `db` en tmpfs | `/var/lib/postgresql` en tmpfs de 512 MB (probado: inicializa y queda *healthy* con raíz de solo lectura); `fsync=off` |
-| `proxy` con `tls internal` y CA confiada | la CA se genera en cada ejecución en el volumen `caddy-data`; los ejecutores lo montan en `ro` y usan `NODE_EXTRA_CA_CERTS` |
+| `proxy` con `tls internal` y CA confiada | la CA se genera en cada ejecución en el volumen `caddy-data`; los ejecutores lo montan en `ro` y usan `NODE_EXTRA_CA_CERTS`; `runner-e2e` la añade además al almacén del sistema **de su contenedor** para WebKit (T-34, §9.1) |
+| BD de integración aislada por fichero (§9.2 de testing) | rol `test_admin` con `CREATEDB` y BD `app_template` migrada, **solo en TESTING** (T-28, §9.1) |
+| E2E siembra y fabrica estado en BD | `runner-e2e` en la red `db-seed` (solo `db`) con `app_rw` y el *pepper* de la ejecución (T-29, §9.1) |
 | Toxiproxy entre ejecutores y `proxy` | servicio `toxiproxy` (perfiles `e2e`, `perf`); Caddy sirve los nombres `proxy` y `toxiproxy` |
-| Perfiles por suite | `unit`, `integration`, `e2e`, `perf`, `security` (+ `setup` para `migrate`) |
+| Perfiles por suite | `unit`, `integration`, `e2e`, `perf`, `security` (+ `setup` para `migrate` y `migrate-template`) |
 | Secretos aleatorios por ejecución | ficheros en `TEST_SECRETS_DIR` (ver nota) |
 | Salida escribible sin montar el repo en escritura | repo en `ro`; solo `tests/results` (o `TEST_RESULTS_DIR`) y `tests/screenshots` en rw, con `keep-id` |
 | `TZ=UTC` y ejecución con otra zona | `TZ: ${APP_TZ:-UTC}` en `app`; `APP_TZ=America/New_York` para la segunda ejecución |
@@ -540,6 +550,112 @@ Notas y cambios que se piden a Testing (respuesta a T-12):
    directorio no existe (p. ej. en CI) el punto de montaje no se puede crear
    dentro de un montaje `ro` y el contenedor no arranca. Los secretos de la
    ejecución solo llegan por `/run/secrets` desde `TEST_SECRETS_DIR`.
+
+### 9.1 Acceso a la BD de los ejecutores (T-28, T-29) y CA en WebKit (T-34) — 2026-11-24
+
+**Qué recibe cada contenedor en TESTING** (además de lo de §5 para `db`, `migrate` y `app`):
+
+| Contenedor | Redes | Rol de BD | Secretos (`/run/secrets`) | Variables |
+|---|---|---|---|---|
+| `db` | `backend`, `db-seed` | — (inicializa) | los 4 de §5 + `db_test_admin_password` | `MI_APP_ENTORNO=testing`, `APP_TEMPLATE_DB=app_template` |
+| `migrate` | `backend` | `app_owner` | `db_owner_password` | `DATABASE_NAME=cafeteria` |
+| `migrate-template` (nuevo, perfil `setup`) | `backend` | `app_owner` | `db_owner_password` | `DATABASE_NAME=app_template` (misma imagen y comando que `migrate`) |
+| `runner-integration` | `backend` | `app_rw` + `test_admin` | `db_app_password`, `db_test_admin_password` (**ya no** `db_owner_password`) | `DATABASE_HOST/PORT/NAME`, `DATABASE_APP_USER=app_rw`, `DATABASE_APP_PASSWORD_FILE`, `DATABASE_ADMIN_USER=test_admin`, `DATABASE_ADMIN_PASSWORD_FILE`, `DATABASE_TEMPLATE=app_template` |
+| `runner-e2e` (también la semilla de k6) | `edge`, `db-seed` | `app_rw` | `db_app_password`, `pin_pepper` | `DATABASE_HOST/PORT/NAME`, `DATABASE_APP_USER`, `DATABASE_APP_PASSWORD_FILE`, `PIN_PEPPER_FILE`, `TOXIPROXY_API`, `SSL_CERT_FILE` |
+| `runner-perf` (k6), `runner-unit`, `runner-security`, `zap` | sin cambios | ninguno | ninguno | sin cambios |
+
+Variables con los nombres de `tests/README.md` §6.
+
+**T-28: rol `test_admin` y plantilla `app_template`.**
+- Los crea `deploy/db/testing/20-test-admin.sh`, que **solo** monta
+  `compose.test.yaml`. `db` monta ahora dos **ficheros** sueltos en
+  `/docker-entrypoint-initdb.d/` (el mismo `10-roles.sh` de todos los entornos
+  y este) en lugar del directorio; con la raíz en solo lectura funciona
+  (comprobado: el entrypoint ejecuta los dos en orden). DEV no cambia; DEMO
+  y PROD montarán solo `10-roles.sh` (o el directorio `deploy/db/initdb/`,
+  que no contiene el script de TESTING).
+- Doble condición para que no se active por error: `MI_APP_ENTORNO=testing`
+  (solo en `compose.test.yaml`) **y** el secreto `db_test_admin_password`. Si
+  falta cualquiera, el script sale con error y `db` no llega a *healthy*.
+- `test_admin`: `LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION
+  NOBYPASSRLS CONNECTION LIMIT 4`; no es miembro de ningún rol ni recibe
+  `CONNECT` en `cafeteria` ni en `app_template`; se conecta a la BD `postgres`.
+  Puede crear BD (clonando la plantilla), y borrar **las suyas**. No puede
+  leer tablas de la app (ni en las BD que crea: el esquema `public` y las
+  tablas son de `app_owner`), crear roles, cambiar contraseñas ni darse otros
+  roles (comprobado, §15).
+- `app_template`: propiedad de `app_owner`, mismos permisos que `cafeteria`
+  (`REVOKE ALL … FROM PUBLIC`, `CONNECT` y `USAGE` para `app_rw`) e
+  `IS_TEMPLATE true` (así `test_admin` puede clonarla sin ser su propietario).
+  La migra `migrate-template` con las mismas migraciones que `cafeteria`; no
+  tiene usuarios ni ajustes, así que sirve para RS-09 (BD sin encargados).
+- La BD clonada (`t_<x>`) es de `test_admin`, con el esquema y los `GRANT` de
+  la plantilla: `app_rw` lee y escribe lo que la migración le concede y no
+  puede hacer DDL (comprobado). Como toda BD nueva, tiene `CONNECT`/`TEMP`
+  para `PUBLIC` (los permisos de BD no se copian de la plantilla); es efímera
+  y solo existe en TESTING.
+- **`DROP DATABASE … WITH (FORCE)` no puede cerrar conexiones de `app_rw`**
+  (`permission denied to terminate process`; `test_admin` no tiene
+  `pg_signal_backend`, a propósito). Con todas las conexiones cerradas antes
+  (`tests/support/app.ts` cierra el pool y la app antes de borrar) funciona.
+  Si un test deja una conexión abierta, el `DROP` falla: es una señal útil,
+  no se le da más privilegio.
+- `CREATE DATABASE … TEMPLATE` exige que nadie esté conectado a la plantilla:
+  `migrate-template` termina antes de los tests y nada más se conecta a ella.
+- Ya **no** se da `app_owner` (DDL) a `runner-integration` (mínimo privilegio;
+  ningún test usa `DATABASE_USER`).
+- Límite de conexiones de `app_rw` (20, igual en todos los entornos): lo
+  comparten `app`, la app en proceso de cada test y los *pools* de los
+  constructores (`max: 2`). Con los ficheros en serie alcanza; si Testing
+  activa ficheros en paralelo y aparecen `too many connections for role`, se
+  revisa (no se sube el límite sin hablarlo con Cybersecurity).
+
+**T-29: `runner-e2e` llega a la BD.**
+- Red nueva `db-seed` (`internal: true`) con **solo** `db` y `runner-e2e`: el
+  ejecutor llega a `db:5432` pero no a `app:3000` (que sigue solo en
+  `backend`), así no puede saltarse `proxy`/Toxiproxy hacia la app.
+- Rol `app_rw` (el de la app), contraseña `db_app_password` de la ejecución y
+  `pin_pepper` de la ejecución (el mismo que `app`, para que los PIN sembrados
+  valgan). Ambos aleatorios por ejecución, en `TEST_SECRETS_DIR`, borrados al
+  final; el *pepper* solo lo reciben `app` y este contenedor efímero.
+- La semilla de k6 la hace `runner-e2e` (`--project=semilla-perf`, como ya
+  hace `tests/run.sh`); `runner-perf` (k6) **no** recibe BD ni *pepper*.
+
+**T-34: WebKit sin `ignoreHTTPSErrors` (propuesta implementada, pendiente de
+probar con la imagen real de Playwright).**
+- La CA se genera en cada ejecución, así que no se puede instalar al construir
+  la imagen. Se instala **en el almacén del contenedor efímero** al arrancar:
+  `runner-e2e` tiene un tmpfs en `/etc/ssl/certs` (con copia del contenido de
+  la imagen, `rw,nosuid,nodev,noexec,size=8m,U`) y un `entrypoint` de `sh` que
+  escribe `/etc/ssl/certs/ca-certificates.crt` = bundle de la imagen + CA de
+  la ejecución y hace `exec` del comando (el de `tests/run.sh` llega como
+  argumentos; no hay que cambiar `run.sh`). Sin root, sin capacidades, raíz
+  en solo lectura (solo ese tmpfs es escribible), nada se escribe en el host
+  ni en la imagen, se pierde al terminar. `SSL_CERT_FILE` apunta al mismo
+  fichero.
+- Si falta la CA o el bundle, avisa (`AVISO … T-34`) y sigue: Chromium no
+  depende de esto (sigue con la fijación SPKI de `global-setup.ts`).
+- Probado el mecanismo (no WebKit): en un contenedor con el mismo
+  endurecimiento, el bundle queda con todos los certificados de la imagen más
+  la CA y el resto de la raíz sigue en `EROFS` (§15). **No probado:** que el
+  WebKit de Playwright (GnuTLS/glib-networking) lea ese fichero; no hay imagen
+  de Playwright en la máquina. Testing lo comprueba con la primera ejecución
+  e2e: si `tablet-h-webkit` sigue fallando por certificado, se deja fuera
+  hasta que decida Cybersecurity (nunca `ignoreHTTPSErrors` sin su decisión).
+- El tmpfs sobre `/etc/ssl/certs` es del contenedor, no un directorio del
+  host: no entra en la prohibición de §3.4 de montar directorios del sistema.
+  Lo revisa Cybersecurity. El *sandbox* de Chromium (§7.2) no cambia.
+
+**Cambios que necesita `tests/run.sh` (Testing; Infrastructure no lo edita):**
+1. Generar también `db_test_admin_password` en `TEST_SECRETS_DIR` (lista de
+   `generar_secreto`). Sin ese fichero `db` no se crea (`statfs
+   …/db_test_admin_password: no such file or directory`, comprobado): fallan
+   **todas** las suites con BD hasta que `run.sh` lo genere.
+2. En `integration`/`security`, después de `migrate`:
+   `$PC --profile setup run --rm --no-deps migrate-template` (código de
+   salida real, como `migrate`).
+3. Nada más: el `entrypoint` de `runner-e2e` respeta el comando que pasa
+   `ejecutar`, y las variables de §9.1 ya están en el compose.
 
 ## 10. Logs y PostgreSQL (M-05, M-06, SEC-015, SEC-020)
 
@@ -1063,6 +1179,63 @@ El escaneo de imágenes (Trivy/Grype) se integra con la imagen final de la app
 (Etapa 2); la imagen de herramientas de DEV no se despliega.
 
 ## 15. Qué se validó realmente y qué no
+
+Validado en esta máquina el **2026-11-24 (tarea 2.1b, T-28 / T-29 / T-34 /
+T-35)**, sin `sudo`, Podman 5.7.0 rootless, cgroups v2, `podman-compose` 1.5.0
+(con `DBUS_SESSION_BUS_ADDRESS` del propio usuario, §4.2). Sin imagen de la app
+ni de Playwright: no se ejecutó ningún test ni nada de `node_modules/`,
+`apps/` o `packages/`.
+- `podman-compose -f compose.test.yaml` con los 6 perfiles `config`: correcto
+  (imágenes con una referencia ficticia por digest).
+- BD de TESTING real (proyecto `mi-app-test-t28probe`, secretos aleatorios en
+  `$XDG_RUNTIME_DIR`, borrados al terminar): `db` *healthy* con la raíz en
+  solo lectura y los dos ficheros de init montados sueltos; el entrypoint
+  ejecuta `10-roles.sh` y luego `20-test-admin.sh`. `podman top`: procesos con
+  el UID del usuario (nunca 0). Redes `backend` y `db-seed`, las dos `internal`.
+- Roles (`pg_roles`): `app_owner`/`app_rw`/`app_backup` sin cambios;
+  `test_admin` con solo `CREATEDB`, 4 conexiones, sin pertenencia a otros
+  roles. `app_template`: de `app_owner`, `IS_TEMPLATE`, ACL igual que
+  `cafeteria` (sin `app_backup`).
+- Con contenedores cliente endurecidos (UID 1000, `cap-drop=ALL`,
+  `no-new-privileges`, raíz `ro`, límites):
+  - una "migración" simulada como `app_owner` en `app_template` (tabla +
+    `GRANT` a `app_rw`); `test_admin` hace `CREATE DATABASE t_prueba1
+    TEMPLATE app_template` (propietario `test_admin`); `app_rw` inserta y lee
+    en la clonada y **no** puede crear tablas; `DROP … WITH (FORCE)` sin
+    conexiones abiertas: correcto;
+  - `test_admin`: sin `CONNECT` en `cafeteria` ni en `app_template`, no ve
+    las tablas de la clonada, no puede `CREATE ROLE`, `ALTER ROLE app_rw
+    PASSWORD` ni `GRANT app_owner TO test_admin`; `app_rw` no puede `CREATE
+    DATABASE`;
+  - con una conexión de `app_rw` abierta, `DROP … WITH (FORCE)` falla
+    (`permission denied to terminate process`), y funciona al cerrarla;
+  - `app_rw` desde la red `db-seed` (la de `runner-e2e`) conecta a `db`.
+- SEC-015/SEC-020 con el script nuevo: las 5 contraseñas de la ejecución
+  aparecen **0** veces en los logs de `db` y en `pg_stat_statements`; 0
+  sentencias `CREATE ROLE` guardadas.
+- Sin `db_test_admin_password` en `TEST_SECRETS_DIR`, `db` no se crea
+  (`statfs … no such file or directory`).
+- T-34, mecanismo: con la imagen `node:26.13.1-alpine` y el mismo
+  endurecimiento y tmpfs de `runner-e2e` (`/etc/ssl/certs`, copia del
+  contenido, `U`), el script del `entrypoint` deja el bundle con los 118
+  certificados de la imagen + la CA (119), el fichero es del UID 1000 y
+  `/etc/ssl` y `/usr` siguen en `Read-only file system`.
+- T-35: `podman-compose -f compose.dev.yaml --profile setup config`:
+  `./tests/node_modules` en `rw` **solo** en `deps`. Contenedor `deps` real
+  (UID 1000): `touch /workspace/tests/node_modules/x` correcto,
+  `touch /workspace/tests/run.sh` y `tests/nuevo` → `Read-only file system`,
+  `.secrets` → `Permission denied`. `comprobar_enlaces` nueva (copiada de
+  `levantar.sh`, árbol de prueba en el scratchpad): pasa con enlaces tipo
+  pnpm en `tests/node_modules` (`@mi-app/api -> ../../../apps/api`,
+  `pg -> ../../node_modules/.pnpm/pg`) y con un enlace de `node_modules/` a
+  `tests/node_modules/`; se detiene con `tests/node_modules/malo -> ../run.sh`,
+  con un destino absoluto fuera y con un bucle; si falta `tests/node_modules`
+  también se detiene (por eso `levantar.sh` lo crea antes).
+- **No validado:** migraciones reales en `app_template` y la suite de
+  integración (no hay imagen de la app); `runner-e2e` real (no hay imagen de
+  Playwright): ni el `entrypoint` con `pwuser`/UID 1000 en Ubuntu ni que
+  WebKit use el bundle; `tests/run.sh` con los cambios que se piden a Testing
+  (§9.1).
 
 Validado en esta máquina el **2026-11-24 (tarea 1.7n, SEC-026 / SEC-027)**,
 sin `sudo`, sin construir imágenes ni arrancar contenedores:

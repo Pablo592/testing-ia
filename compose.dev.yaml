@@ -63,6 +63,9 @@ x-workspace-tmpfs: &workspace-tmpfs
 x-rw-apps: &rw-apps ./apps:/workspace/apps:rw
 x-rw-packages: &rw-packages ./packages:/workspace/packages:rw
 x-rw-node-modules: &rw-node-modules ./node_modules:/workspace/node_modules:rw
+# T-35: tests/ es paquete del workspace (@mi-app/tests). SOLO su node_modules,
+# nunca tests/ entero (tests/run.sh se ejecuta en el host). Solo lo monta deps.
+x-rw-tests-node-modules: &rw-tests-node-modules ./tests/node_modules:/workspace/tests/node_modules:rw
 
 x-node-image: &node-image
   image: localhost/mi-app-dev-tools:node26.13.1-pnpm12.21.0
@@ -240,11 +243,12 @@ services:
       CI: "true"
     volumes:
       # Proyecto en ro; pnpm escribe node_modules/ en la raíz y en cada paquete
-      # del workspace (apps/*, packages/*). --frozen-lockfile no toca el lockfile.
+      # del workspace (apps/*, packages/*, tests). --frozen-lockfile no toca el lockfile.
       - ./:/workspace:ro
       - *rw-apps
       - *rw-packages
       - *rw-node-modules
+      - *rw-tests-node-modules
       - pnpm-store:/pnpm-store
     networks: [deps]
     healthcheck:

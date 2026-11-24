@@ -24,8 +24,9 @@ SIN_DEPS=0
 #  a) hay algún enlace en apps/ o packages/ fuera de los node_modules/ reales
 #     ("-type d" en la poda: un enlace llamado node_modules no se poda y se
 #     detecta, porque find no sigue enlaces);
-#  b) algún enlace de apps/, packages/ o node_modules/ (incluidos los de pnpm)
-#     resuelve fuera de esas tres carpetas (p. ej. a tests/run.sh o a ~/.ssh).
+#  b) algún enlace de apps/, packages/, node_modules/ o tests/node_modules/
+#     (incluidos los de pnpm) resuelve fuera de esas cuatro carpetas (p. ej. a
+#     tests/run.sh o a ~/.ssh). tests/node_modules lo escribe deps (T-35).
 # Nombres con salto de línea: como mucho dan un falso positivo, nunca un
 # falso negativo. Si realpath falla (p. ej. un bucle de enlaces), también se
 # detiene.
@@ -38,21 +39,21 @@ comprobar_enlaces() {
     echo "Revísalos sin abrirlos ni editarlos (ls -l) y bórralos antes de seguir." >&2
     exit 1
   fi
-  if ! destinos=$(find apps packages node_modules -type l -exec realpath -m -- {} +); then
+  if ! destinos=$(find apps packages node_modules tests/node_modules -type l -exec realpath -m -- {} +); then
     echo "ERROR (SEC-026): no se pudo resolver algún enlace simbólico de la lista de permitidos" >&2
     exit 1
   fi
   [ -z "$destinos" ] && return 0
   fuera=$(printf '%s\n' "$destinos" | while IFS= read -r d; do
     case $d in
-      "$R"/apps/*|"$R"/packages/*|"$R"/node_modules/*) ;;
+      "$R"/apps/*|"$R"/packages/*|"$R"/node_modules/*|"$R"/tests/node_modules/*) ;;
       *) printf '%s\n' "$d" ;;
     esac
   done)
   if [ -n "$fuera" ]; then
-    echo "ERROR (SEC-026): enlaces simbólicos que apuntan fuera de apps/, packages/ y node_modules/:" >&2
+    echo "ERROR (SEC-026): enlaces simbólicos que apuntan fuera de apps/, packages/, node_modules/ y tests/node_modules/:" >&2
     # Camino lento, solo si hay error: enlace -> destino, uno a uno.
-    find apps packages node_modules -type l -exec sh -c '
+    find apps packages node_modules tests/node_modules -type l -exec sh -c '
       R=$1; shift
       NL="
 "
@@ -60,7 +61,7 @@ comprobar_enlaces() {
         d=$(realpath -m -- "$l")
         case $d in
           *"$NL"*) printf "  %s -> (destino con salto de línea)\n" "$l" ;;
-          "$R"/apps/*|"$R"/packages/*|"$R"/node_modules/*) ;;
+          "$R"/apps/*|"$R"/packages/*|"$R"/node_modules/*|"$R"/tests/node_modules/*) ;;
           *) printf "  %s -> %s\n" "$l" "$d" ;;
         esac
       done' sh "$R" {} + >&2
@@ -85,7 +86,7 @@ sh deploy/dev/generar-secretos.sh
 # Puntos de montaje: .secrets/ (tapado por un tmpfs) y la lista de permitidos
 # en escritura de web/deps (SEC-023, docs/infraestructura.md §7.1).
 mkdir -p -m 0700 .secrets
-mkdir -p apps packages node_modules
+mkdir -p apps packages node_modules tests/node_modules
 comprobar_enlaces
 
 # 3. Imagen de herramientas (formato docker para conservar el HEALTHCHECK).

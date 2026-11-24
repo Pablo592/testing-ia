@@ -9,6 +9,7 @@
 #   $P --profile <suite> up -d db                    # (si la suite usa BD)
 #   podman wait --condition=healthy <proyecto>_db_1
 #   $P --profile setup run --rm --no-deps migrate    # código de salida real
+#   $P --profile setup run --rm --no-deps migrate-template   # solo integration (T-28)
 #   $P --profile <suite> up --abort-on-container-exit --exit-code-from runner-<suite>
 #   $P --profile <suite> --profile setup down -v     # siempre (trap)
 #
@@ -20,7 +21,10 @@
 #   TOXIPROXY_IMAGE      ghcr.io/shopify/toxiproxy@sha256:...
 #   ZAP_IMAGE            docker.io/zaproxy/zap-stable@sha256:...
 #   TEST_SECRETS_DIR     directorio 0700 con secretos aleatorios de ESTA ejecución
-#                        (p. ej. $XDG_RUNTIME_DIR/mi-app-test-<id>), borrado al final
+#                        (p. ej. $XDG_RUNTIME_DIR/mi-app-test-<id>), borrado al final.
+#                        Ficheros: db_superuser_password, db_owner_password,
+#                        db_app_password, db_backup_password, pin_pepper y
+#                        db_test_admin_password (T-28; solo existe en TESTING).
 # Opcionales: APP_TZ (por defecto UTC), TEST_RESULTS_DIR (./tests/results).
 
 x-podman:
@@ -70,7 +74,7 @@ x-runner: &runner
     - ./tests/screenshots:/workspace/tests/screenshots:rw
     - caddy-data:/caddy-data:ro
   working_dir: /workspace
-  environment:
+  environment: &runner-env
     TZ: UTC
     HOME: /tmp
     # CA interna de ESTA ejecución: se confía en ella, no se ignoran errores TLS.
@@ -127,10 +131,19 @@ services:
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --encoding=UTF8 --locale=C.UTF-8"
       APP_DB_NAME: cafeteria
       TZ: UTC
-    secrets: [db_superuser_password, db_owner_password, db_app_password, db_backup_password]
+      # Activa 20-test-admin.sh (rol CREATEDB + plantilla). Solo en este fichero.
+      MI_APP_ENTORNO: testing
+      APP_TEMPLATE_DB: app_template
+    secrets: [db_superuser_password, db_owner_password, db_app_password, db_backup_password, db_test_admin_password]
     volumes:
-      - ./deploy/db/initdb:/docker-entrypoint-initdb.d:ro
-    networks: [backend]
+      # Ficheros sueltos (no el directorio): el mismo 10-roles.sh de todos los
+      # entornos y, solo en TESTING, 20-test-admin.sh (T-28, §9.1). Los puntos
+      # de montaje se crean en la raíz de la imagen, no en el árbol del host.
+      - ./deploy/db/initdb/10-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+      - ./deploy/db/testing/20-test-admin.sh:/docker-entrypoint-initdb.d/20-test-admin.sh:ro
+    # backend: app, migrate, runner-integration. db-seed: solo db y runner-e2e
+    # (T-29), para que el ejecutor e2e llegue a la BD pero no a app:3000.
+    networks: [backend, db-seed]
     healthcheck:
       test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "5432", "-d", "cafeteria", "-U", "app_rw"]
       interval: 5s
@@ -149,6 +162,27 @@ services:
     command: ["node", "dist/migrate.js"]
     environment:
       <<: *app-env
+      DATABASE_USER: app_owner
+      DATABASE_PASSWORD_FILE: /run/secrets/db_owner_password
+    secrets: [db_owner_password]
+    networks: [backend]
+    healthcheck:
+      disable: true
+    restart: "no"
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 256m, pids: 100 }
+
+  # Las mismas migraciones sobre la BD plantilla de integración (T-28, §9.2 de
+  # docs/testing.md). Misma imagen, mismo rol (app_owner); solo cambia la BD.
+  migrate-template:
+    <<: *hardening
+    profiles: [setup]
+    image: ${APP_IMAGE:?APP_IMAGE obligatorio (por digest)}
+    command: ["node", "dist/migrate.js"]
+    environment:
+      <<: *app-env
+      DATABASE_NAME: app_template
       DATABASE_USER: app_owner
       DATABASE_PASSWORD_FILE: /run/secrets/db_owner_password
     secrets: [db_owner_password]
@@ -250,11 +284,19 @@ services:
       HOME: /tmp
       API_URL: http://app:3000
       DATABASE_HOST: db
+      DATABASE_PORT: "5432"
       DATABASE_NAME: cafeteria
-      # Acceso de BD para restricciones y datos de prueba (§9.2): rol propietario.
-      DATABASE_USER: app_owner
-      DATABASE_PASSWORD_FILE: /run/secrets/db_owner_password
-    secrets: [db_owner_password]
+      # T-28 (a): la app en proceso (buildApp) y los constructores de datos usan
+      # el rol real de la app. Ya no recibe app_owner (DDL): mínimo privilegio.
+      DATABASE_APP_USER: app_rw
+      DATABASE_APP_PASSWORD_FILE: /run/secrets/db_app_password
+      # T-28 (b): rol SOLO de TESTING con CREATEDB, solo en este ejecutor, para
+      # CREATE DATABASE t_<x> TEMPLATE app_template / DROP DATABASE (RS-09).
+      DATABASE_ADMIN_USER: test_admin
+      DATABASE_ADMIN_PASSWORD_FILE: /run/secrets/db_test_admin_password
+      DATABASE_TEMPLATE: app_template
+    # Sin pin_pepper: la integración usa un pepper propio en proceso (tests/support/app.ts).
+    secrets: [db_app_password, db_test_admin_password]
     networks: [backend]
     depends_on:
       app: { condition: service_healthy }
@@ -290,10 +332,51 @@ services:
     <<: *runner
     profiles: [e2e]
     image: ${PLAYWRIGHT_IMAGE:?PLAYWRIGHT_IMAGE obligatorio (por digest)}
+    # T-34: antes del comando, almacén de CA del sistema = el de la imagen + la
+    # CA de ESTA ejecución, en un tmpfs del contenedor efímero (WebKit/GnuTLS
+    # lee /etc/ssl/certs/ca-certificates.crt; nunca ignoreHTTPSErrors). No
+    # toca el host ni la imagen. Chromium sigue con la fijación SPKI.
+    # Si algo falla, avisa y sigue: solo fallaría el proyecto WebKit.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -u
+        CA=/caddy-data/caddy/pki/authorities/local/root.crt
+        B=/etc/ssl/certs/ca-certificates.crt
+        if [ -s "$$CA" ] && [ -f "$$B" ] \
+           && cat "$$B" "$$CA" > /etc/ssl/certs/.bundle.tmp \
+           && mv -f /etc/ssl/certs/.bundle.tmp "$$B"; then
+          echo "runner-e2e: CA de la ejecución añadida al almacén del contenedor (T-34)"
+        else
+          echo "runner-e2e: AVISO: no se pudo añadir la CA al almacén; WebKit no confiará en el proxy (T-34)" >&2
+        fi
+        exec "$$@"
+      - runner-e2e
     command: ["npx", "playwright", "test"]
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=256m
+      - /workspace/.secrets:ro,nosuid,nodev,noexec,size=4k,mode=0000,notmpcopyup
+      # Copia del contenido de la imagen (copy-up por defecto) en un tmpfs del
+      # usuario del contenedor (U); se pierde al terminar.
+      - /etc/ssl/certs:rw,nosuid,nodev,noexec,size=8m,U
+    environment:
+      <<: *runner-env
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+      TOXIPROXY_API: http://toxiproxy:8474
+      # T-29: siembra de usuarios (hasta HU-07) y estado fabricado en BD (§8.1)
+      # con el rol de la app; solo por la red db-seed (no llega a app:3000).
+      DATABASE_HOST: db
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: cafeteria
+      DATABASE_APP_USER: app_rw
+      DATABASE_APP_PASSWORD_FILE: /run/secrets/db_app_password
+      # Pepper ALEATORIO de esta ejecución (el mismo que app). Nunca fuera de TESTING.
+      PIN_PEPPER_FILE: /run/secrets/pin_pepper
+    secrets: [db_app_password, pin_pepper]
     # Memoria compartida para Chromium sin --ipc=host (§7.2).
     shm_size: 1g
-    networks: [edge]
+    networks: [edge, db-seed]
     depends_on:
       proxy: { condition: service_healthy }
     deploy:
@@ -318,6 +401,9 @@ networks:
     internal: true
   edge:
     internal: true
+  # Solo db y runner-e2e (T-29).
+  db-seed:
+    internal: true
 
 volumes:
   caddy-data: {}
@@ -328,3 +414,5 @@ secrets:
   db_app_password:       { file: "${TEST_SECRETS_DIR:?TEST_SECRETS_DIR obligatorio}/db_app_password" }
   db_backup_password:    { file: "${TEST_SECRETS_DIR:?TEST_SECRETS_DIR obligatorio}/db_backup_password" }
   pin_pepper:            { file: "${TEST_SECRETS_DIR:?TEST_SECRETS_DIR obligatorio}/pin_pepper" }
+  # T-28: solo TESTING; lo reciben db (init) y runner-integration.
+  db_test_admin_password: { file: "${TEST_SECRETS_DIR:?TEST_SECRETS_DIR obligatorio}/db_test_admin_password" }
