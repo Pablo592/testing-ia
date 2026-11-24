@@ -10,8 +10,8 @@ Una historia a la vez, en el orden de `docs/historias/README.md`: HU-01, HU-05, 
 
 | # | Agente | Tarea | Estado |
 |---|---|---|---|
-| 2.0 | product-owner | Supuesto nuevo en el README: los "Cobros tras el cierre" no separan efectivo (decisión H-1.7g-01) | En cola |
-| 2.1 | testing | HU-01: tests de la historia (y `tests/run.sh` con los requisitos de `docs/infraestructura.md` §7.1) | En cola |
+| 2.0 | product-owner | Supuesto nuevo en el README: los "Cobros tras el cierre" no separan efectivo (decisión H-1.7g-01) | Hecho (supuesto 25 en el README, nota en HU-08; sin cambios de criterios) |
+| 2.1 | testing | HU-01: tests de la historia (y `tests/run.sh` con los requisitos de `docs/infraestructura.md` §7.1) | En curso |
 | 2.2 | developer | HU-01: estructura inicial del monorepo e implementación de la historia | En cola |
 | 2.3 | cybersecurity / ux-designer | HU-01: revisión de la entrega | En cola |
 

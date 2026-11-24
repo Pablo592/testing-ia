@@ -157,6 +157,7 @@ aquí y en el criterio.
 22. **[Cambio 2026-11-21]** **Autorización del encargado (HU-06):** se elige el encargado y se introduce su PIN, en el mismo dispositivo, para una sola acción. Si quien tiene la sesión abierta ya es encargado, no se le vuelve a pedir. La parte de seguridad (longitud del PIN, intentos, bloqueo, si se exige reautenticación) la decide Cybersecurity. **[Cambio 2026-11-21, SEC-001, SEC-007]** Decidido por Cybersecurity (`docs/seguridad.md` §6.3): los fallos cuentan para el bloqueo del encargado elegido y para el del dispositivo; 5 autorizaciones fallidas en una sesión en 10 min bloquean las autorizaciones 10 min; un encargado bloqueado, desactivado o con PIN provisional no autoriza (HU-06/CA-F17..CA-F19). El encargado con sesión propia no reintroduce el PIN en HU-06, pero **sí** al anular un cobro (HU-04/CA-F23) y en las escrituras de Personal (HU-07/CA-N04).
 23. **[Cambio 2026-11-21, T-03, T-07]** **Dispositivo de referencia de sala:** la tablet de 10" que defina el cliente (pregunta 7). Mientras no exista, los criterios que dependen del dispositivo (HU-02/CA-U05) se miden en Chromium con la CPU ralentizada x4. Las vistas de tablet se verifican a **1280x800 CSS px** (horizontal) y **800x1280 CSS px** (vertical) (HU-02/CA-N05). Si la tablet real tiene otra resolución, se sustituyen esos valores por los suyos.
 24. **[Cambio 2026-11-21, T-04]** **Hora de entrada en la cola:** es la hora de envío del pedido o, si el pedido vuelve a la cola desde "Listo" o "Servido" porque se le añaden productos, la hora de ese añadido. La cola se ordena por esta hora, y los minutos de espera y el aviso de "retrasado" se cuentan desde ella; pasar de "Pendiente" a "En preparación" no reinicia la cuenta, y añadir o quitar productos a un pedido que sigue en la cola tampoco (HU-03/CA-F01, CA-F02, CA-F06, CA-F23, CA-F24; HU-06/CA-F08). La tarjeta conserva la hora de envío original y muestra "AÑADIDO hh:mm". Origen: propuesta T-04 de Testing y decisión técnica del Software Engineer (`docs/arquitectura.md` §4.2).
+25. **[Nuevo 2026-11-24, 2.0, H-1.7g-01, decisión del humano]** **Los "Cobros tras el cierre" no separan efectivo y tarjeta.** En la sección aparte de un día cerrado (HU-08/CA-F05), los "Cobros tras el cierre" (HU-08/CA-F15 (c)) solo muestran número e importe, sin desglose por forma de pago. **Consecuencia:** el efectivo que entra en caja después de guardar el cierre **no se concilia en ninguna pantalla**: no suma al efectivo esperado ni a la diferencia de caja del cierre guardado (HU-08/CA-F04, CA-F15 (b)), y la sección aparte no da una cifra de efectivo con la que comparar la caja. Si el encargado cuenta la caja después de esos cobros, la diferencia con el cierre guardado tendrá que explicarla él fuera de la aplicación. Origen: hallazgo H-1.7g-01 de UX (`docs/ux/wireframes/09-resumen-dia.md`) y decisión del humano del 2026-11-24 (`docs/estado.md`, "Decisiones del humano"). No cambia ningún criterio.
 
 ## Fuera del alcance del MVP
 
@@ -225,6 +226,15 @@ Texto original de las preguntas:
 14. **[Nueva 2026-11-21]** ¿A qué hora **cierra el local**? ¿Alguna vez trabaja después de medianoche? Si es así, hace falta una "jornada" con hora de corte configurable en lugar del día natural (supuesto 15). ¿El local está en la península o Baleares (si está en Canarias, la hora es otra)?
 
 ## Registro de cambios
+
+- **2026-11-24, tarea 2.0 [Cambio 2026-11-24, 2.0]** (hallazgo H-1.7g-01 de
+  UX, `docs/ux/wireframes/09-resumen-dia.md`; decisión del humano del
+  2026-11-24 en `docs/estado.md`, "Decisiones del humano"): **supuesto 25
+  nuevo.** Los "Cobros tras el cierre" de HU-08/CA-F15 (c) no separan efectivo
+  y tarjeta, solo número e importe; por eso el efectivo que entra en caja
+  después del cierre no se concilia en ninguna pantalla (HU-08/CA-F04). Solo
+  se documenta lo que ya dicen los criterios: ningún criterio cambia y ningún
+  ID es nuevo, retirado ni renumerado.
 
 - **2026-11-24, ronda 1.7k [Cambio 2026-11-24, 1.7k]** (hallazgos T-23..T-25 e
   interpretaciones I-13..I-16 de Testing, `docs/testing.md` §4.5 y §14.4;

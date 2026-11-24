@@ -75,3 +75,8 @@ después = hora igual o posterior) y que las cancelaciones cuentan por el día d
 la cancelación; CA-F07 y CA-F15 usan esa frontera; CA-F03 dice que el aviso de
 pedidos sin cobrar se calcula al consultar, también en un día cerrado; CA-F15 (d)
 precisa en qué fila cuenta un cobro tras el cierre que se anula. Mismos IDs._
+
+_Nota 2026-11-24 (tarea 2.0, H-1.7g-01, decisión del humano): según el
+supuesto 25 del README, los "Cobros tras el cierre" de CA-F15 (c) no separan
+efectivo y tarjeta, y el efectivo que entra en caja después del cierre no se
+concilia en ninguna pantalla (CA-F04). Ningún criterio cambia._
