@@ -13,6 +13,10 @@
 > 1.7b (§3.2, §6.3, §7.4), del dictamen T-20 en `SessionPinProbing` y
 > `auth.verify.rate_limited`, y de la telemetría `pre_session` (§6.4.1)
 > frente a las condiciones de §6.4 "UX (1.2c)". Sin hallazgos nuevos.
+> Revisión 1.7l, 2026-11-24: verificación de SEC-023 sobre `compose.dev.yaml`,
+> `deploy/dev/levantar.sh` y `docs/infraestructura.md` §7.1 y §15 (commit
+> aebd6ef), con prueba propia en Podman 5.7.0 rootless; hallazgos nuevos
+> SEC-026 y SEC-027 (baja).
 > Entradas: `docs/historias/` (README + HU-01..HU-09, IDs estables `CA-`),
 > `docs/arquitectura.md`, `docs/decisiones/ADR-001..008`, `docs/ux/`,
 > `docs/infraestructura.md`, `compose.dev.yaml`, `compose.test.yaml`,
@@ -855,7 +859,7 @@ contra TESTING/DEMO), **S** estático (SAST/lint/CI), **C** contenedores/host.
 | RS-38 | Secretos montados como fichero; `podman inspect` sin secretos en `Env`; `app` no tiene credenciales de `app_owner` ni `postgres`; `migrate` no tiene el *pepper* | C |
 | RS-39 | Trivy o Grype sobre cada imagen: 0 críticas/altas (excepciones solo con aprobación escrita de Cybersecurity en §9); `pnpm audit --prod` sin altas/críticas; `pnpm install --frozen-lockfile` con scripts deshabilitados salvo lista blanca; imágenes base por digest | S/CI |
 | RS-40 | DEV: puertos publicados solo en `127.0.0.1` | C (`ss -ltnp` en el host) |
-| RS-45 | [1.4b, SEC-018; 1.4c, SEC-023] Ningún contenedor de DEV ni de TESTING ve `.secrets/` (ni vacío por debajo ni copiado: el tmpfs lleva `notmpcopyup`), ni puede escribir en `.git/`, `.claude/`, `CLAUDE.md`, `deploy/`, `docs/`, `tools/`, `.gitignore`, los `compose.*.yaml` ni en ningún fichero que se ejecute en el host (`tests/run.sh` y cualquier otro script de entrada) | C: en cada servicio que monta el proyecto, `ls -la /workspace/.secrets` → denegado o vacío; en `/proc/mounts`, `tmpfs /workspace/.secrets ro,…`; `touch` en cada una de esas rutas y en `tests/run.sh` → error; control: el mismo contenedor sin esos montajes sí lee y escribe. Repetir con las imágenes reales de Playwright/k6/ZAP y con Vite y `pnpm install` reales |
+| RS-45 | [1.4b, SEC-018; 1.4c, SEC-023; 1.7l, SEC-026] Ningún contenedor de DEV ni de TESTING ve `.secrets/` (ni vacío por debajo ni copiado: el tmpfs lleva `notmpcopyup`), ni puede escribir en `.git/`, `.claude/`, `CLAUDE.md`, `deploy/`, `docs/`, `tools/`, `.gitignore`, los `compose.*.yaml` ni en ningún fichero que se ejecute en el host (`tests/run.sh` y cualquier otro script de entrada) | C: en cada servicio que monta el proyecto, `ls -la /workspace/.secrets` → denegado o vacío; en `/proc/mounts`, `tmpfs /workspace/.secrets ro,…`; `touch` en cada una de esas rutas y en `tests/run.sh` → error; control: el mismo contenedor sin esos montajes sí lee y escribe. Repetir con las imágenes reales de Playwright/k6/ZAP y con Vite y `pnpm install` reales. [1.7l] Además: ningún enlace simbólico en `apps/` o `packages/` (fuera de `node_modules/`) apunta fuera de su paquete; `find apps packages -path '*/node_modules' -prune -o -type l -print` vacío o solo enlaces revisados (SEC-026) |
 | RS-46 | [1.4b, SEC-022] El rol `waiter` solo lee cobros y tickets del día de negocio actual; `manager`, de cualquier día | I: `GET /payments/:id` y `/ticket` de un cobro de ayer como W → `404`; como M → `200` |
 | RS-41 | PROD: cortafuegos según §6.2a; SSH solo con clave y sin `root`; `sysctl net.ipv4.ip_unprivileged_port_start` = 80 (o sin tocar si no es host dedicado); usuario de servicio sin `sudo` | C (nmap desde fuera de la red permitida, `sysctl`, `id`) |
 | RS-42 | Copias cifradas (clave pública en el host, privada fuera), fuera del host, restauración probada; *pepper* custodiado aparte de las copias | C (prueba de restauración en DEMO) |
@@ -903,7 +907,7 @@ aprobar los ficheros de `deploy/` cuando existan.
 | Imágenes por digest | `node`, `postgres` por digest; herramientas locales `pull_policy: never` | `db` y `proxy` por digest; resto por variable obligatoria | Cumple |
 | `HEALTHCHECK` | Containerfile (forma exec) + compose | compose | Cumple |
 | Secretos | ficheros en `/run/secrets`, variables `*_FILE`, ninguno en `environment` | igual, por ejecución | Cumple (SEC-010), **salvo** el montaje del proyecto (SEC-018) |
-| Montaje del proyecto | `./` en `ro` en `api`/`migrate`/`init-manager`, **en `rw` en `web` y `deps`**; incluye `.secrets/`, `.git/` y `.claude/` | `./` en `ro` en los ejecutores; incluye `.secrets/` | **SEC-018 (media)**. [1.4c] Corregido y verificado: tmpfs vacío con `notmpcopyup` sobre `.secrets` en los 11 servicios que montan `./`; `.git`, `.claude`, `CLAUDE.md`, `deploy`, `docs`, `tools`, `.gitignore` y compose en `ro` en `web`/`deps`. Queda `tests/` escribible desde `web`/`deps` con `tests/run.sh` ejecutado en el host: **SEC-023 (media)** |
+| Montaje del proyecto | `./` en `ro` en `api`/`migrate`/`init-manager`, **en `rw` en `web` y `deps`**; incluye `.secrets/`, `.git/` y `.claude/` | `./` en `ro` en los ejecutores; incluye `.secrets/` | **SEC-018 (media)**. [1.4c] Corregido y verificado: tmpfs vacío con `notmpcopyup` sobre `.secrets` en los 11 servicios que montan `./`; `.git`, `.claude`, `CLAUDE.md`, `deploy`, `docs`, `tools`, `.gitignore` y compose en `ro` en `web`/`deps`. Queda `tests/` escribible desde `web`/`deps` con `tests/run.sh` ejecutado en el host: **SEC-023 (media)**. [1.7l] SEC-023 **verificado**: en `web` y `deps` el proyecto está en `ro` y solo `apps/`, `packages/` y `node_modules/` en `rw` (lista de permitidos); prueba propia. Restos de baja: SEC-026 (enlaces simbólicos y consumidores del host en la lista), SEC-027 (tabla de §3 de `docs/infraestructura.md` desactualizada) |
 | Containerfile de DEV | base por digest, `USER 1000:1000`, root solo en construcción, sin secretos | — | Cumple |
 | `10-roles.sh` | sin contraseñas en el log (SEC-015); roles `NOSUPERUSER…`, límites de conexión, `app_backup` | igual | Cumple; **SEC-020 (media)** por `pg_stat_statements`. [1.4c] Corregido y verificado: `SET pg_stat_statements.track_utility = off` en cada bloque y `pg_stat_statements_reset()` al final |
 | `Caddyfile` | — | `admin off`, 8080/8443, RS-26 completo, `-Server`, sin `log_credentials`, `X-Request-Id` propio, 404 a internos, sin `trusted_proxies` | Cumple |
@@ -919,6 +923,12 @@ servicio a servicio, incluidos los perfiles `setup`, `unit`, `integration`,
 `e2e`, `perf` y `security`). SEC-018 y SEC-020 verificados; queda SEC-023
 (media, `tests/run.sh` escribible). Ningún motivo de bloqueo por la regla de
 contenedores. El escaneo de imágenes (RS-39) sigue pendiente de la Etapa 2.
+
+**Veredicto (1.7l):** `compose.dev.yaml` tras aebd6ef revisado en `web` y
+`deps` (el resto de servicios sin cambios): `user 1000:1000` + `keep-id`,
+`CapEff` 0, `NoNewPrivs` 1, raíz `ro`, `/workspace` `ro`, `.secrets` tapado;
+sin `--privileged`, sockets ni red del host. SEC-023 verificado. Ningún motivo
+de bloqueo por la regla de contenedores. RS-39 sigue pendiente de la Etapa 2.
 
 ---
 
@@ -1140,6 +1150,17 @@ contenedores. El escaneo de imágenes (RS-39) sigue pendiente de la Etapa 2.
 - Cómo corregir: (1) que todo script que se ejecute en el host esté en una ruta que `web`/`deps` montan en `ro`: mover el punto de entrada a `tools/` (p. ej. `tools/run-tests.sh`, ya en `ro`), o montar `./tests/run.sh:/workspace/tests/run.sh:ro` en `web` y `deps` en cuanto exista el fichero (si no existe, `podman-compose` crearía un directorio); (2) añadir a `docs/infraestructura.md` §7 la regla "ningún fichero que se ejecute en el host queda escribible desde un contenedor" y aplicarla a cada script nuevo; (3) recomendado: montar en `web`/`deps` solo lo que necesitan (`apps/`, `packages/`, `tests/` salvo sus scripts de host, `node_modules/`, `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig*.json`) en lugar de `./` entero, para que un fichero nuevo en la raíz no quede escribible por defecto.
 - Cómo verificar: RS-45 ampliado (`touch /workspace/tests/run.sh` o el script que se elija → error en `web` y `deps`).
 - Estado: abierto (media, no bloquea; debe estar corregido antes de crear `tests/run.sh` en la Etapa 2)
+- Corrección 1.7c (infrastructure, commit aebd6ef): se aplica la opción (3), más estricta que (1): `web` y `deps` montan `./:/workspace:ro` y solo vuelven a montar en `rw` la lista de permitidos `apps/`, `packages/` y `node_modules/` (`x-rw-apps`, `x-rw-packages`, `x-rw-node-modules`, compose.dev.yaml:63-65, :207-210, :244-247); `api`, `migrate` e `init-manager` siguen en `ro` sin excepciones; `deploy/dev/levantar.sh:35-36` crea `.secrets` (0700) y los tres directorios antes de cualquier `run`/`up`. Regla (2) en `docs/infraestructura.md` §7.1 con los requisitos de `tests/run.sh` (crear `.secrets`, no ejecutar nada de rutas `rw`, vivir fuera de ellas, solo `podman-compose`) y prohibición de añadir a la lista la raíz, `tests/` entero o rutas con scripts del host. En TESTING (`compose.test.yaml:68-70`) solo `tests/results` y `tests/screenshots` son `rw`: `tests/run.sh` tampoco es escribible allí.
+- Verificación 1.7l (2026-11-24, Cybersecurity, prueba propia no destructiva): Podman 5.7.0 rootless (`rootless true`, cgroups v2), `podman-compose` 1.5.0, `DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus` (§4.2 de `docs/infraestructura.md`), `apps/`, `packages/` y `node_modules/` creados antes con `mkdir -p` como hace `levantar.sh`. Con `podman-compose -f compose.dev.yaml --profile setup run --rm --no-deps --entrypoint sh <web|deps> /probe.sh` (script de prueba montado `ro` desde el scratchpad), proceso `uid=1000(node)`, `CapEff 0`, `NoNewPrivs 1`, en **los dos** servicios:
+  - `touch` en `/workspace/tests/run.sh`, `/workspace/CLAUDE.md`, `/workspace/.git/hooks/x`, `/workspace/.envrc`, `/workspace/.claude/x`, `/workspace/tools/x`, `/workspace/deploy/x`, `/workspace/compose.dev.yaml`, `/workspace/tests/results/x`, `/workspace/src/x` y un fichero nuevo de la raíz → `Read-only file system` (11/11).
+  - `touch` + `rm` en `/workspace/apps/`, `/workspace/packages/` y `/workspace/node_modules/` → correcto (3/3).
+  - `/workspace/.secrets` → `Permission denied`.
+  - `/proc/mounts`: `/workspace ro`, `/workspace/.secrets ro`, `/workspace/{apps,packages,node_modules} rw`; nada más en `rw` bajo `/workspace`.
+  - `ln -s ../tests/run.sh /workspace/apps/x` → correcto; en el host aparece el enlace `apps/x -> ../tests/run.sh` (origen de SEC-026).
+  - Limpieza: enlace borrado y `apps/`, `packages/`, `node_modules/` eliminados con `rmdir` (estaban vacíos); `tests/` sin cambios; ningún contenedor huérfano (`podman ps -a` solo `mi-app-dev_db_1`, detenido). El aviso `rootless netns: kill network process: permission denied` al borrar el contenedor es la incidencia de entorno ya descrita en §15, sin efecto.
+  - Coincide con la prueba de Infrastructure (§15). Diseño: es una lista de permitidos, de modo que un fichero nuevo en la raíz (`.envrc`, `.vscode/`) queda en `ro` sin acordarse de él, que era el punto (3) recomendado.
+- Riesgo residual aceptado (valoración 1.7l): `web`/`deps` pueden modificar el código de `apps/`, `packages/` y `node_modules/`. Es aceptable porque (a) hoy esas rutas no existen y no contienen nada que el host ejecute; (b) según `docs/infraestructura.md` §3 y §7.1 y `docs/testing.md` §7.3/§7.4, todo `pnpm`/`node`/Vite/Vitest corre en contenedores, `node_modules/` tiene binarios musl y el host solo ejecuta `tests/run.sh`, `tests/containers/` (TX-CONT-01), `deploy/`, `tools/` y `.claude/hooks/`, todo fuera de la lista; (c) un cambio malicioso en `apps/`/`packages/` solo corre dentro de un contenedor endurecido hasta que alguien lo revisa en `git diff` y, desde TESTING, en la imagen final construida desde el árbol (ese paso sí lleva el código a DEMO/PROD: lo cubren la revisión de `git diff` en cada historia y RS-39). Lo que **no** cubre la regla y se registra aparte: enlaces simbólicos plantados en la lista y herramientas del host que leen o ejecutan `node_modules/` (extensiones del IDE): SEC-026 (baja).
+- Estado: **verificado** (DEV, 1.7l). En la Etapa 2: repetir RS-45 con `pnpm install` y Vite reales (si piden escribir fuera de la lista se decide con Cybersecurity, sin ampliar a la raíz ni a `tests/`) y comprobar que `tests/run.sh` cumple los requisitos 1–4 de `docs/infraestructura.md` §7.1.
 
 ## SEC-024: Alertas de seguridad que no cumplen §6.1.7
 - Severidad: media
@@ -1161,9 +1182,42 @@ contenedores. El escaneo de imágenes (RS-39) sigue pendiente de la Etapa 2.
 - Cómo verificar: RS-16d.
 - Estado: abierto (baja, no bloquea)
 
+## SEC-026: Enlaces simbólicos y herramientas del host sobre la lista de permitidos en escritura
+- Severidad: baja
+- Ubicación: compose.dev.yaml:63-65 (`apps/`, `packages/`, `node_modules/` en `rw` en `web` y `deps`); docs/infraestructura.md §7.1 (viñeta "Toda ruta en `rw` es solo datos…") y §3 (`node_modules/` en el host "para que el IDE vea los tipos")
+- Descripción: comprobado en 1.7l: desde `web` o `deps` se puede crear en `apps/` un enlace simbólico a cualquier ruta (p. ej. `apps/x -> ../tests/run.sh` o a `~/.ssh/…` con ruta absoluta del host); dentro del contenedor no sirve de nada, pero en el host se resuelve contra el sistema de ficheros del usuario. Si después una herramienta del host **escribe** en esa ruta (el Developer o Testing editando un fichero de `apps/` con sus herramientas, un formateador del IDE al guardar), el contenido acaba en el destino (`tests/run.sh`, un hook de `.git`, `~/.bashrc`); si la **lee** (un agente que abre el fichero), el contenido de un fichero privado del host entra en el contexto del agente y podría acabar copiado en el repositorio. Segundo vector del mismo origen: la regla de §7.1 dice que el host no ejecuta nada de la lista, pero solo nombra `vite.config`/`vitest.config`; las extensiones habituales del IDE (ESLint, Prettier, Vitest, TypeScript con "versión del workspace" o `plugins` de un `apps/*/tsconfig.json`) cargan y ejecutan código de `node_modules/` **en el host**, y `node_modules/` lo escribe `deps` con scripts de terceros. El control del contenido por el atacante es parcial y hace falta una acción posterior en el host, de ahí baja.
+- Responsable: infrastructure (`docs/infraestructura.md` §7.1) y testing/developer (comprobación en `tests/run.sh` o en la revisión de cada historia, Etapa 2)
+- Cómo corregir: (1) en §7.1, ampliar la regla: "en el host no se usan extensiones del IDE ni herramientas que carguen código de `node_modules/` o de `apps/`/`packages/` (ESLint, Prettier, Vitest, TypeScript del workspace, plugins de `tsconfig`); si se quieren, se ejecutan en un contenedor o con el IDE apuntando a un contenedor"; (2) comprobación de enlaces: antes de editar en el host y al inicio de `tests/run.sh`, `find apps packages -path '*/node_modules' -prune -o -type l -print` debe salir vacío (o solo enlaces revisados y versionados, visibles en `git diff` con modo `120000`); si hay alguno no esperado, el script se detiene; (3) recomendado: que los agentes del host no sigan enlaces simbólicos al leer/escribir en `apps/`/`packages/` (comprobar con `test -L` antes de escribir).
+- Cómo verificar: RS-45 ampliado (enlace plantado desde `deps` en `apps/` → `tests/run.sh` se detiene con error y no lo sigue); revisión de `docs/infraestructura.md` §7.1.
+- Estado: abierto (baja, no bloquea; antes de crear `tests/run.sh` en la Etapa 2)
+
+## SEC-027: `docs/infraestructura.md` §3 describe todavía el montaje anterior a SEC-023
+- Severidad: baja
+- Ubicación: docs/infraestructura.md:118 (`./` → `/workspace` … `web`, `deps`: rw) y :120 (fila de los montajes `ro` de SEC-018 sobre `.git`, `.claude`, `CLAUDE.md`…)
+- Descripción: la tabla de volúmenes de §3 sigue diciendo que `web` y `deps` montan el proyecto en `rw` con una lista de prohibidos en `ro`, que es el diseño de 1.5b. `compose.dev.yaml` y §7/§7.1 ya usan proyecto en `ro` + lista de permitidos. Quien añada un servicio o un montaje copiando §3 puede reintroducir el árbol en `rw`, que es justo lo que corrige SEC-023.
+- Responsable: infrastructure
+- Cómo corregir: sustituir esas filas por "`./` → `/workspace`: `ro` en los 5 servicios" y "`./apps`, `./packages`, `./node_modules` → mismo sitio en `rw`: solo `web`, `deps` (lista de permitidos, §7.1)".
+- Cómo verificar: lectura de §3 frente a `podman-compose -f compose.dev.yaml --profile setup config`.
+- Estado: abierto (baja, no bloquea)
+
 ---
 
-### Resumen para la puerta de la Etapa 1 (revisión 1.7j, 2026-11-24)
+### Resumen para la puerta de la Etapa 1 (revisión 1.7l, 2026-11-24)
+- **Altos o críticos abiertos: ninguno.**
+- **SEC-023** (media, infrastructure + testing): **verificado** en DEV con
+  prueba propia en `web` y `deps` (proyecto `ro`, lista de permitidos `rw`,
+  11/11 escrituras fuera de la lista denegadas, 3/3 dentro permitidas,
+  `.secrets` tapado). Pendiente en la Etapa 2: RS-45 con `pnpm install` y
+  Vite reales y los requisitos de `tests/run.sh` (§7.1).
+- Nuevos: **SEC-026** (baja, infrastructure + testing/developer: enlaces
+  simbólicos y extensiones del IDE sobre la lista de permitidos) y
+  **SEC-027** (baja, infrastructure: tabla de §3 desactualizada).
+- Abiertos que no bloquean: SEC-003 (media), SEC-025 (baja), SEC-026 (baja),
+  SEC-027 (baja).
+- Contenedores: sin motivo de bloqueo (§8.1, veredicto 1.7l). Escaneo de
+  imágenes (RS-39): Etapa 2.
+
+### Resumen para la puerta de la Etapa 1 (revisión 1.7j, 2026-11-24; histórico, sustituido por el de 1.7l)
 - **Altos o críticos abiertos: ninguno.** Sin hallazgos nuevos en 1.7j.
 - **SEC-024** (media, monitoring): **verificado** en diseño (`docs/logging.md`
   1.7b); RS-47 lo comprueba en la implementación.

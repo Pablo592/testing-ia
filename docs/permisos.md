@@ -227,9 +227,12 @@ El `uid` del secreto montado es el UID real del contenedor que lo recibe
 (nunca se arregla un desajuste con modo 0444): en `app` y `migrate`,
 `uid=1000,gid=1000,mode=0400` (SEC-010). En DEV y TESTING los contenedores que
 montan el proyecto llevan un tmpfs vacío con `notmpcopyup` sobre
-`/workspace/.secrets` y `web`/`deps` no pueden escribir en `.git/`, `.claude/`
-ni en lo que se ejecuta en el host (SEC-018, verificado; SEC-023 para
-`tests/run.sh`).
+`/workspace/.secrets`, y el proyecto se monta en `ro` en todos ellos; `web` y
+`deps` solo escriben en la lista de permitidos `apps/`, `packages/` y
+`node_modules/`, de modo que nada de lo que se ejecuta en el host (`.git/`,
+`.claude/`, `tests/run.sh`, `deploy/`, `tools/`…) es escribible desde un
+contenedor (SEC-018 y SEC-023, verificados; SEC-026 para enlaces simbólicos y
+herramientas del host sobre esa lista).
 
 ## 8. Contenedores y host
 
