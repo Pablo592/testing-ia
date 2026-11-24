@@ -226,6 +226,32 @@ Texto original de las preguntas:
 
 ## Registro de cambios
 
+- **2026-11-24, ronda 1.7k [Cambio 2026-11-24, 1.7k]** (hallazgos T-23..T-25 e
+  interpretaciones I-13..I-16 de Testing, `docs/testing.md` §4.5 y §14.4;
+  petición del Software Engineer de la 1.7h, `docs/arquitectura.md` §4.4;
+  criterio del humano "menor carga"). Solo redacción, sin cambio de alcance:
+  - **T-23 aceptado, I-13 confirmada:** en HU-08, "antes del cierre" = hora
+    anterior a la hora del cierre guardado; "después del cierre" = hora igual o
+    posterior (el mismo instante va a la sección aparte). Cada cobro, anulación
+    y cancelación está en las cifras guardadas o en la sección, nunca en las dos
+    ni en ninguna. Se escribe en HU-08/CA-F05 y se aplica en CA-F07 ("antes de
+    la hora del cierre") y CA-F15.
+  - **T-24 aceptado, I-16 confirmada:** HU-08/CA-F05 dice "los pedidos
+    cancelados ese día después del cierre, sea cual sea el día del pedido"
+    (CA-F11); un pedido cancelado en un día posterior cuenta en ese día.
+  - **T-25 aceptado, I-15 confirmada:** HU-08/CA-F03 dice que el aviso "Hay N
+    pedidos sin cobrar" se calcula al consultar, también en un día cerrado, y no
+    es una cifra guardada del cierre (CA-F05 lo repite).
+  - **I-14 confirmada:** HU-08/CA-F15 (d) dice que un cobro tras el cierre que
+    se anula cuenta por su importe completo en "Cobros anulados" de la sección,
+    en la fila del encargado que anuló con "No aplica (encargado)", y en la
+    sección del día del cobro original aunque se anule otro día.
+  - **Petición del Software Engineer (1.7h):** HU-08/CA-F05 dice que una
+    anulación posterior al cierre no resta de los productos vendidos guardados
+    del día cerrado (como CA-F15 (b) para los cobros); en un día cerrado,
+    CA-F09 se aplica a la sección aparte.
+  - Mismos IDs; ninguno nuevo, retirado ni renumerado.
+
 - **2026-11-24, ronda 1.7f [Cambio 2026-11-24, 1.7f]** (hallazgo H-1.7e-01 de
   UX, `docs/ux/wireframes/09-resumen-dia.md`; criterio del humano "menor
   carga"): **HU-08/CA-F15 nuevo.** Un cobro registrado en un día ya cerrado
