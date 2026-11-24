@@ -101,6 +101,7 @@ services:
       - db_superuser_password
       - db_owner_password
       - db_app_password
+      - db_backup_password
     volumes:
       - pgdata:/var/lib/postgresql
       - ./deploy/db/initdb:/docker-entrypoint-initdb.d:ro
@@ -278,6 +279,7 @@ secrets:
   db_superuser_password: { file: ./.secrets/dev/db_superuser_password }
   db_owner_password:     { file: ./.secrets/dev/db_owner_password }
   db_app_password:       { file: ./.secrets/dev/db_app_password }
+  db_backup_password:    { file: ./.secrets/dev/db_backup_password }
   pin_pepper:            { file: ./.secrets/dev/pin_pepper }
   initial_manager_name:  { file: ./.secrets/dev/initial_manager_name }
   initial_manager_pin:   { file: ./.secrets/dev/initial_manager_pin }

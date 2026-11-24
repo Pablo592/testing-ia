@@ -117,7 +117,7 @@ services:
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --encoding=UTF8 --locale=C.UTF-8"
       APP_DB_NAME: cafeteria
       TZ: UTC
-    secrets: [db_superuser_password, db_owner_password, db_app_password]
+    secrets: [db_superuser_password, db_owner_password, db_app_password, db_backup_password]
     volumes:
       - ./deploy/db/initdb:/docker-entrypoint-initdb.d:ro
     networks: [backend]
@@ -177,6 +177,7 @@ services:
     environment:
       SITE_ADDRESS: "proxy, toxiproxy"
       CADDY_TLS: internal
+      PUBLIC_HTTPS_SUFFIX: ":8443"
       XDG_DATA_HOME: /data
       XDG_CONFIG_HOME: /config
     tmpfs:
@@ -312,4 +313,5 @@ secrets:
   db_superuser_password: { file: "${TEST_SECRETS_DIR:?TEST_SECRETS_DIR obligatorio}/db_superuser_password" }
   db_owner_password:     { file: "${TEST_SECRETS_DIR:?TEST_SECRETS_DIR obligatorio}/db_owner_password" }
   db_app_password:       { file: "${TEST_SECRETS_DIR:?TEST_SECRETS_DIR obligatorio}/db_app_password" }
+  db_backup_password:    { file: "${TEST_SECRETS_DIR:?TEST_SECRETS_DIR obligatorio}/db_backup_password" }
   pin_pepper:            { file: "${TEST_SECRETS_DIR:?TEST_SECRETS_DIR obligatorio}/pin_pepper" }

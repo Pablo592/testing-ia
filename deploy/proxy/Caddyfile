@@ -3,6 +3,8 @@
 # variables de entorno:
 #   SITE_ADDRESS  nombres servidos, separados por comas (p. ej. "caja.local")
 #   CADDY_TLS     "internal" (CA interna, red local) o un correo para ACME
+#   PUBLIC_HTTPS_SUFFIX  "" si el host publica 443 (PROD), ":8443" si publica
+#                 8443 tal cual (TESTING/DEMO, ADR-007 opción a)
 # ADR-007, docs/seguridad.md §6.2 b) y RS-26, docs/logging.md §5.1 y §8.2.
 {
 	# Sin API de administración: la configuración es inmutable dentro del contenedor.
@@ -12,6 +14,8 @@
 	https_port 8443
 	# No intentar instalar la CA en el almacén del sistema (no hay root).
 	skip_install_trust
+	# La redirección a HTTPS se define abajo para poder incluir el puerto público.
+	auto_https disable_redirects
 	# Caddy es el borde: no se confía en X-Forwarded-For de los clientes
 	# (sin trusted_proxies), así la app ve la IP que ve Caddy (SEC-003).
 }
@@ -52,6 +56,11 @@
 		# SSE (ADR-004): sin búfer.
 		flush_interval -1
 	}
+}
+
+# HTTP -> HTTPS (308) en todos los nombres; ninguna ruta se sirve en claro (§6.2 b).
+http:// {
+	redir https://{host}{$PUBLIC_HTTPS_SUFFIX}{uri} 308
 }
 
 # Sitio interno de salud, sin TLS, no publicado al host (docs/logging.md §8.2).
