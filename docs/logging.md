@@ -12,6 +12,15 @@
 > Este documento **no implementa nada**: define el contrato que el Developer
 > sigue al instrumentar y lo que Testing verifica. Los cambios que pide en la
 > arquitectura están en la §10 y en `docs/estado.md`.
+>
+> **Revisión 1.6c (2026-11-23)**, tras las decisiones del humano y contrastada
+> con `docs/seguridad.md` §6.3 y `docs/infraestructura.md` §11.1:
+> - M-07: alertas por correo, horario de alertas 07:00–21:00 `Europe/Madrid`,
+>   retención de logs de 30 días (90 los de seguridad), aviso a los empleados
+>   (§4.6, §5.2, §6.6, §7).
+> - M-06: opción **B** sin excepción a §3.4 (§5.1, §5.2, §5.3, §5.5, §6.5).
+> - SEC-017: `confirmPin` y cualquier clave que case con `/pin/i` se redactan
+>   (§3.2, §4.1, §4.3, §4.5).
 
 ---
 
@@ -149,7 +158,7 @@ Todos llevan `client_ip` y `ua_family`. Cybersecurity puede añadir eventos en
 
 | Evento | Nivel | Campos específicos |
 |---|---|---|
-| `auth.login.succeeded` | `info` | `user_id`, `role`, `session_id`, `must_change_pin` |
+| `auth.login.succeeded` | `info` | `user_id`, `role`, `session_id`, `provisional_credential` (bool: entra con PIN provisional; el nombre evita la subcadena `pin`, que se redacta siempre, §4.3) |
 | `auth.login.failed` | `warn` | `reason`: `bad_pin` \| `unknown_user`; `target_user_id` (solo si el usuario existe), `failed_attempts` (contador tras este fallo). **Nunca** el nombre tecleado ni el PIN (§4.1) |
 | `auth.login.locked` (intento con la cuenta bloqueada, `423`) | `warn` | `target_user_id`, `retry_after_s` |
 | `auth.account.locked` (5.º fallo, se activa el bloqueo) | `warn` | `target_user_id`, `locked_until`, `lockouts_24h` (bloqueos de ese usuario en 24 h) |
@@ -233,7 +242,7 @@ no como líneas de log (§6.4).
 
 | Dato | Por qué / dónde aparece | Regla |
 |---|---|---|
-| PIN (`pin`, `currentPin`, `newPin`, `managerApproval.pin`, PIN provisional de alta/restablecimiento) | HU-01, HU-07 | nunca; ni truncado ni enmascarado parcialmente (4–6 dígitos: cualquier dígito revela demasiado) |
+| PIN (`pin`, `currentPin`, `newPin`, `confirmPin`, `managerApproval.pin`, PIN provisional de alta/restablecimiento) y, en general, **el valor de cualquier clave cuyo nombre case con `/pin/i`** (SEC-017) | HU-01, HU-06, HU-07; `confirmPin` es el PIN de 6 dígitos del encargado al anular cobros y en Personal (SEC-007) | nunca; ni truncado ni enmascarado parcialmente (4–6 dígitos: cualquier dígito revela demasiado) |
 | Hash del PIN (`pin_hash`) y parámetros de argon2 de un usuario | permite ataque offline | nunca |
 | *Pepper* y cualquier secreto (`podman secret`: contraseñas de BD, datos del encargado inicial) | ADR-005, §3.7 de reglas | nunca; `app.started` lista solo los **nombres** de las claves |
 | Cookie `sid`, token de sesión, `token_hash`, cabeceras `Cookie`, `Set-Cookie`, `Authorization`, `Proxy-Authorization` | secuestro de sesión | nunca; las sesiones se identifican con `session_id` |
@@ -252,8 +261,8 @@ no como líneas de log (§6.4).
 - `user_id`, `session_id`, `target_user_id`, `approver_id`: UUID seudónimos.
   Son datos personales de los empleados en sentido RGPD (se pueden relacionar
   con la persona en la BD): se aplican la retención de la §5 y el acceso
-  restringido al stack de monitorización. **Informar a los empleados** de que
-  existe este registro es una decisión del humano/cliente (ver `docs/estado.md`).
+  restringido al stack de monitorización. Se informa a los empleados de que
+  existe este registro con el texto de la §4.6 (decisión del humano, M-07).
 - `client_ip`: IP de la red interna del local. Necesaria para el límite por IP
   de ADR-005 y para detectar un dispositivo que ataca. En PROD con VM en
   internet la IP puede ser pública: misma retención; Cybersecurity decide si se
@@ -265,28 +274,59 @@ no como líneas de log (§6.4).
 
 ### 4.3 Redacción en pino (segunda barrera)
 
-Configuración `redact` obligatoria en `app`, con `censor: "[REDACTED]"` (no
-`remove`, para que se note si algo se intentó registrar). Rutas mínimas:
+Dos mecanismos, los dos obligatorios en `app` y `migrate` (y en el comando
+`create-initial-manager`), con `censor: "[REDACTED]"` (no `remove`, para que
+se note si algo se intentó registrar).
+
+**(a) `redact` de pino con rutas fijas.** Rutas mínimas:
 
 ```
 # cabeceras
 req.headers.cookie, req.headers.authorization, req.headers["proxy-authorization"],
 res.headers["set-cookie"],
 # primer nivel del objeto registrado
-pin, currentPin, newPin, managerApproval, pinHash, pin_hash, pepper, token,
-tokenHash, token_hash, sid, password, customerRef, customer_ref, note,
+pin, currentPin, newPin, confirmPin, managerApproval, pinHash, pin_hash, pepper,
+token, tokenHash, token_hash, sid, password, customerRef, customer_ref, note,
 reasonText, reason_text, body,
 # segundo nivel (comodín de pino: obj.<cualquiera>.campo)
-*.pin, *.currentPin, *.newPin, *.managerApproval, *.pinHash, *.pin_hash,
-*.pepper, *.token, *.tokenHash, *.token_hash, *.sid, *.password,
+*.pin, *.currentPin, *.newPin, *.confirmPin, *.managerApproval, *.pinHash,
+*.pin_hash, *.pepper, *.token, *.tokenHash, *.token_hash, *.sid, *.password,
 *.customerRef, *.customer_ref, *.note, *.reasonText, *.reason_text, *.body
 ```
 
 En pino, `*.campo` solo cubre el segundo nivel y no hay comodín recursivo: el
 Developer añade las rutas anidadas reales que existan (p. ej.
-`*.lines[*].note`) y Testing las comprueba (§4.5). El campo `reason` de los
-eventos del catálogo es siempre un valor de un enum que pone el código
-(`"bad_pin"`, `"idle"`...), nunca texto del usuario, y por eso no se redacta.
+`*.lines[*].note`) y Testing las comprueba (§4.5).
+
+**(b) Regla general por nombre de clave: `/pin/i` (SEC-017).** `redact` no
+admite expresiones regulares, así que se añade una función de redacción
+recursiva que se aplica al objeto **final** de cada línea:
+- Recorre objetos y *arrays* a cualquier profundidad (con protección frente a
+  ciclos y un límite de 10 niveles; lo que pase de ahí se sustituye por
+  `"[TRUNCATED]"`).
+- Si el **nombre de una clave** casa con `/pin/i`, su valor se sustituye por
+  `"[REDACTED]"`, sea del tipo que sea (cadena, número, objeto completo). Cubre
+  `pin`, `currentPin`, `newPin`, `confirmPin`, `managerApproval.pin`,
+  `pinHash`, `pin_hash`, `provisionalPin` y cualquier campo nuevo con `pin` que
+  aparezca en el futuro sin tener que acordarse de añadirlo a (a).
+- Se aplica también al `err` ya serializado (§4.4) y a los *bindings* de los
+  loggers hijos (`logger.child({...})`), no solo a los campos de la llamada.
+  El punto exacto de pino (p. ej. `formatters.log` + la misma función en
+  `formatters.bindings` y al final del serializador `err`) lo elige el
+  Developer; el test de §4.5 demuestra que funciona.
+- **Sin excepciones.** Ningún campo del catálogo tiene `pin` en su nombre (por
+  eso `auth.login.succeeded` usa `provisional_credential`). Los falsos
+  positivos (`mapping`, `shipping`, `spinner`...) se aceptan: redactar de más
+  no pone datos en riesgo; si molesta, se cambia el nombre del campo, no la
+  regla.
+- La regla mira **claves**, no valores: los valores de enum como
+  `reason: "bad_pin"`, `reason: "pin_reset"` o `event: "auth.pin.changed"` no
+  se redactan (los pone el código, nunca el usuario).
+
+La regla (b) es la misma que el software-engineer recoge en
+`docs/arquitectura.md` §11. El campo `reason` de los eventos del catálogo es
+siempre un valor de un enum que pone el código (`"bad_pin"`, `"idle"`...),
+nunca texto del usuario, y por eso no se redacta.
 
 ### 4.4 Serializadores
 
@@ -310,9 +350,43 @@ eventos del catálogo es siempre un valor de un enum que pone el código
   el stdout de `app` y se comprueba que **no** aparece ningún PIN usado en el
   test, ni el pepper de test, ni el valor de la cookie `sid`, ni el nombre del
   usuario, ni el texto de las notas/motivos. Debe fallar el build si aparecen.
+- SEC-017 (RS-29, RS-31 de `docs/seguridad.md`): el PIN centinela se envía
+  también como `confirmPin` (anular cobro, alta, restablecimiento y
+  desbloqueo). Test unitario de la regla (b) de §4.3: se registra a propósito
+  `{confirmPin, a: {b: {c: {userPin}}}, list: [{pin}]}`, un `logger.child`
+  con una clave `pin` y un error con una propiedad `pin`; ninguno de los
+  valores aparece en la salida y todos quedan como `"[REDACTED]"`.
 - Mismo test sobre los logs de `proxy` y `db` en TESTING.
 - Toda línea de stdout de `app` es JSON válido y tiene los campos obligatorios
   de §2.1 (validación con un esquema JSON en el test).
+
+### 4.6 Información a los empleados (M-07)
+
+Decisión del humano: se informa con un texto breve, sin desarrollo en la
+aplicación. El texto lo entrega el cliente a su personal (por ejemplo con el
+manual de uso de la Etapa 4 en `docs/especificacion/`). El cliente es el
+responsable del tratamiento y puede adaptarlo; no sustituye a un
+asesoramiento jurídico.
+
+> **Registro de actividad en la aplicación de pedidos**
+>
+> Para que la aplicación funcione de forma segura y para poder resolver
+> incidencias, el sistema registra la actividad de cada usuario: inicios y
+> cierres de sesión (también los fallidos), pedidos, cambios de estado,
+> cobros, anulaciones, cambios en la carta y en el personal, la hora y la
+> dirección de red del dispositivo usado. En estos registros técnicos cada
+> persona aparece con un identificador interno y su rol, no con su nombre.
+> **Nunca** se registran los PIN, las notas de los pedidos ni el nombre de los
+> clientes.
+>
+> Los registros técnicos se conservan **30 días** (los relativos a la
+> seguridad, como los inicios de sesión fallidos, **90 días**) y después se
+> borran automáticamente. Solo accede a ellos el responsable técnico del
+> sistema. Las operaciones de cobro y anulación quedan además en el historial
+> de la aplicación, que forma parte de los datos de negocio del local.
+>
+> Para cualquier consulta sobre estos datos, diríjase a [responsable del
+> local].
 
 ---
 
@@ -322,7 +396,8 @@ eventos del catálogo es siempre un valor de un enum que pone el código
 
 Cada contenedor escribe en stdout/stderr; Podman (rootless, usuario sin
 privilegios) los recoge con su *log driver*. Ningún servicio escribe ficheros
-de log dentro del contenedor.
+de log dentro del contenedor. En todos los entornos el *log driver* es
+`k8s-file` (M-06, opción B: no se usa journald para los contenedores, §5.5).
 
 | Servicio | Formato en stdout |
 |---|---|
@@ -337,28 +412,40 @@ de log dentro del contenedor.
 |---|---|---|---|---|---|
 | DEV | `k8s-file` (por defecto en compose) con `log_size_max = 10 MB` en `containers.conf` del usuario o `log_opt: max-size` en `compose.dev.yaml` | lo que dure el contenedor (se pierde al recrearlo) | `debug` | no (opcional: perfil `monitoring` para probar dashboards) | lectura con `podman logs -f app \| jq` o `pino-pretty`. El logger **siempre** emite JSON; el formato bonito se aplica solo al leer, nunca en el proceso |
 | TESTING | `k8s-file`, 20 MB | efímero; al final de cada ejecución se guardan `podman logs` de cada servicio como **artefacto** de la ejecución (14 días) | `info` (`debug` si se reproduce un fallo) | no | los tests de §4.5 se ejecutan sobre estos artefactos |
-| DEMO | `journald` | journald del usuario: 7 días o 500 MB | `info` | sí (Loki 7 días) | los datos de la demo son ficticios; los participantes de la prueba de usabilidad usan usuarios de prueba, nunca su nombre |
-| PROD | `journald` (por defecto con Quadlet) | journald del usuario: **30 días** o 1 GB (lo que llegue antes) | `info` | sí: Loki **30 días** general y **90 días** para `category=security` | ver §5.3 |
+| DEMO | `k8s-file` con `log_opt path=` al directorio dedicado de logs (§5.3) y `max-size` 100 MB | búfer local: el fichero se trunca al llegar a `max-size`; no es la copia de referencia | `info` | sí (Loki 7 días) | igual que PROD para probar la recogida; los datos de la demo son ficticios; los participantes de la prueba de usabilidad usan usuarios de prueba, nunca su nombre |
+| PROD | `k8s-file` con `log_opt path=` al directorio dedicado de logs (§5.3) y `max-size` 100 MB (Quadlet: `LogDriver=k8s-file`, `LogOpt=path=...`, `LogOpt=max-size=100mb`) | búfer local de ~7–10 días de `app` (≈ 10 MB/día); la retención la da Loki | `info` | sí: Loki **30 días** general y **90 días** para `category="security"` (decisión del humano, M-07) | ver §5.3 y §5.5 |
 
 Tamaño estimado en PROD: ~10 MB/día de `app` + ~5 MB/día de `proxy` → menos de
-0,5 GB en 30 días. Las cifras de retención son una **propuesta**: la
-validan Cybersecurity (necesidad de investigar incidentes) y el humano
-(conservación de datos de empleados, RGPD; ver pregunta 10 del README de
-historias para los datos de negocio, que viven en la BD y no en los logs).
+0,5 GB en Loki en 30 días (más los 90 días de `security`, de volumen mucho
+menor). La retención de 30/90 días es **decisión del humano** (M-07) y se
+aplica en Loki (§6.6). Los datos de negocio y el `audit_log` viven en la BD,
+no en los logs, y siguen la conservación decidida para el MVP (sin borrado).
+
+Mensajes que siguen yendo a journald del usuario: los de las unidades systemd
+(arranque y parada de los servicios Quadlet, temporizador de métricas de §6.5,
+copias de seguridad). No contienen datos de la aplicación. Retención
+recomendada a Infrastructure: la misma, 30 días (`MaxRetentionSec=30day`).
 
 ### 5.3 Requisitos del host de PROD (Infrastructure)
 
-- journald persistente: `Storage=persistent` en `/etc/systemd/journald.conf`
-  y `MaxRetentionSec=30day`, `SystemMaxUse=1G` (se aplica al aprovisionar con
-  Terraform/cloud-init; es configuración del sistema, no de un contenedor).
-  Con almacenamiento persistente, journald separa un diario por usuario
-  (`SplitMode=uid`), así el usuario de los servicios puede leer **solo** el suyo
-  con `journalctl --user`.
+Lo diseña y aplica Infrastructure (`docs/infraestructura.md` §10 y §11.1, que
+está unificando); aquí solo se fija lo que necesita la monitorización, con las
+condiciones de Cybersecurity (`docs/seguridad.md` §6.3, condiciones 1–7).
+
+- **Directorio dedicado de logs** del usuario de servicio (p. ej.
+  `~/mi-app/logs/`, un fichero por servicio `<servicio>.log` vía `log_opt
+  path`), modo 0750 y propiedad del usuario de servicio (condición 6). No se
+  monta el almacenamiento de Podman (`~/.local/share/containers`).
+- **Directorio dedicado de métricas** del temporizador de §6.5 (p. ej.
+  `~/mi-app/metrics/`), 0750, ficheros 0640 escritos de forma atómica
+  (condición 3).
 - `loginctl enable-linger <usuario>` para que los servicios Quadlet y los
-  temporizadores de health check sigan sin sesión abierta.
+  temporizadores sigan sin sesión abierta.
+- journald persistente solo para los mensajes de las unidades (§5.2).
 - Lectura para agentes y humano sin root:
-  `journalctl --user -u app.service -o cat --since "1 hour ago" | jq ...`
-  (`-o cat` da la línea JSON tal cual).
+  `podman logs --since 1h app | jq ...` (Podman quita el prefijo CRI del
+  fichero `k8s-file`), o en Loki con `logcli` (§9). `journalctl --user` ya
+  **no** muestra los logs de los contenedores.
 
 ### 5.4 PostgreSQL
 
@@ -391,19 +478,29 @@ los parámetros de las consultas lentas en el log, y uno de ellos podría ser un
   baja cardinalidad: `service`, `env`, `level`, `category`. El resto de campos
   (incluidos `event`, `request_id`, `user_id`) se consultan como campos JSON
   (`| json`), no como etiquetas.
-- Para que Alloy lea el diario de journald dentro de un contenedor hace falta
-  montar en solo lectura el directorio del diario (`/var/log/journal`), que la
-  §3.4 de las reglas prohíbe (directorio del sistema). Opciones, decisión de
-  Infrastructure y Cybersecurity, y excepción con aprobación humana si se
-  elige (a):
-  - (a) Excepción: montar `/var/log/journal` en solo lectura. El proceso
-    (UID del usuario de servicio) solo puede leer su propio diario por los
-    permisos de journald. Mantiene journald como fuente de verdad.
-  - (b) Sin excepción: `k8s-file` también en PROD con `log_size_max` y Alloy
-    leyendo los `ctr.log` del almacenamiento de Podman del usuario
-    (`~/.local/share/containers/storage/...`, dentro de su `$HOME`). Más
-    simple, pero si Loki está caído y el fichero se trunca, se pierden logs.
-  - Recomendación de Monitoring: **(a)**. Registrado en `docs/estado.md`.
+- **Decisión M-06: opción B** (humano, 2026-11-23), tal como la diseñó
+  Infrastructure (`docs/infraestructura.md` §11.1) y la aprobó Cybersecurity
+  con condiciones (`docs/seguridad.md` §6.3). **Sin excepción a §3.4**: no se
+  monta `/var/log/journal`, ni el almacenamiento de Podman, ni el socket.
+  Sustituye a la recomendación (a) anterior de Monitoring.
+- **Fuente:** los ficheros `k8s-file` del directorio dedicado de logs (§5.3).
+  El contenedor de Alloy monta **solo** ese directorio, en `ro`, y nada más del
+  host (condición 6); resto de §3.4 completo (UID ≥ 1000, `cap-drop: ALL`,
+  `no-new-privileges`, `read-only`, límites, sin `network=host`). Su fichero
+  de posiciones va a un volumen propio de Alloy, no al directorio de logs.
+- **Formato:** cada línea del fichero `k8s-file` tiene el prefijo CRI
+  (`<hora> stdout|stderr F|P <línea>`). Alloy usa `stage.cri` para quitarlo y
+  unir las líneas partidas (`P`), y después `stage.json` para extraer `level`
+  y `category` (servicios propios) o el parser de Caddy/PostgreSQL. El
+  servicio sale del nombre del fichero (`<servicio>.log`), no de lo que diga
+  la línea.
+- **Riesgo aceptado:** si Alloy no puede leer o Loki no acepta durante tanto
+  tiempo que el fichero llega a `max-size` y se trunca, se pierden esas
+  líneas. Mitigación: `max-size` 100 MB (~7–10 días de margen en `app`) y las
+  alertas `LogShippingFailing` y `LogIngestionStopped` (§7.1).
+- La redacción de §4 sigue aplicando (condición 6, SEC-017): Alloy no añade
+  campos ni etiquetas con datos personales; solo las etiquetas de baja
+  cardinalidad de arriba.
 
 ---
 
@@ -505,31 +602,59 @@ Flujos y pasos iniciales (UX los ajusta):
 
 Restricción: las reglas prohíben montar el socket de Podman y `/proc` u otros
 directorios del sistema en contenedores, así que cAdvisor o
-`prometheus-podman-exporter` no son válidos tal cual. Propuesta (decide
-Infrastructure, valida Cybersecurity):
+`prometheus-podman-exporter` no son válidos. Solución de la opción B (M-06,
+`docs/infraestructura.md` §11.1), con las condiciones 1–5 de
+`docs/seguridad.md` §6.3, obligatorias:
 
-- Un **temporizador de systemd del usuario** de servicio (sin root, fuera de
-  los contenedores; cada 15 s) ejecuta `podman stats --no-stream --format json`,
-  `podman healthcheck run`/`podman inspect --format '{{.State.Health.Status}}'`,
-  `systemctl --user show <unidad> -p NRestarts,Result,ActiveState` y `df` sobre
-  el almacenamiento de Podman y los volúmenes, y escribe un fichero `.prom` en
-  un volumen.
-- Un contenedor `node_exporter` con **solo** el colector `textfile`
-  (`--collector.disable-defaults --collector.textfile`) monta ese volumen en
-  solo lectura y lo expone a Prometheus.
+- Un **temporizador de systemd del usuario** de servicio
+  (`~/.config/systemd/user/`, `systemctl --user`; nunca de sistema, root ni
+  `sudo`), cada 15 s, ejecuta un script versionado en `deploy/` que **solo
+  lee**. Comandos permitidos (y ningún otro):
+  - `podman stats --no-stream --format ...`
+  - `podman ps --format ...`
+  - `podman inspect --format` con campos concretos
+    (`{{.State.Health.Status}}`, `{{.State.OOMKilled}}`, `{{.RestartCount}}`);
+    nunca el `inspect` completo (incluye entorno y montajes)
+  - `systemctl --user show <unidad> -p NRestarts,Result,ActiveState`
+  - `df -P` sobre rutas fijas
+  - Prohibidos `podman exec/run/rm/kill`, `podman healthcheck run` (ejecuta el
+    comando de salud **dentro** del contenedor; el estado se lee con
+    `inspect`), `podman events`, `podman secret inspect --showsecret` y `sudo`.
+- Escribe un fichero `.prom` de forma atómica (temporal + `mv`) en el
+  directorio dedicado de métricas (§5.3), con la **lista cerrada** de métricas
+  de abajo y etiquetas acotadas: nombre del contenedor o de la unidad; nunca
+  imagen, comando, variables ni rutas de montaje.
+- Unidad con `NoNewPrivileges=yes`, `UMask=0027`, `TimeoutStartSec=30`, sin
+  red. Sus mensajes van al diario del usuario y no contienen secretos.
+- Un contenedor `node_exporter` con todo §3.4 y **solo** el colector
+  `textfile` (`--collector.disable-defaults --collector.textfile`) monta
+  **solo** ese directorio en `ro` (sin `/proc`, `/sys` ni `/` del host), sin
+  puertos publicados (solo en la red de Prometheus).
+- Cybersecurity revisa el script y las unidades cuando existan (Etapa 2/5).
 
-Métricas resultantes:
+Métricas resultantes (lista cerrada):
 
-| Métrica | Etiquetas | Notas |
+| Métrica | Etiquetas | Fuente en el script / notas |
 |---|---|---|
-| `container_health_status` | `name`, `status` = `healthy` \| `unhealthy` \| `starting` | |
-| `container_restarts_total` | `name` | con Quadlet el contenedor se recrea en cada reinicio: la cuenta fiable es `NRestarts` de la unidad systemd, no el `RestartCount` de Podman |
-| `container_oom_kills_total` | `name` | `Result=oom-kill` de la unidad, o evento `oom` de `podman events` |
-| `container_cpu_ratio`, `container_memory_bytes`, `container_memory_limit_bytes` | `name` | de `podman stats` |
-| `host_filesystem_used_ratio` | `mount` = `containers_storage` \| `pgdata` \| `journal` | |
-| `host_load1`, `host_memory_available_bytes` | — | `/proc/loadavg`, `/proc/meminfo` leídos por el usuario en el host |
-| `backup_last_success_timestamp_seconds` | `kind` = `pg_dump` | lo escribe el trabajo de copia de Infrastructure |
-| `time_offset_seconds` | — | desfase NTP del host (los tiempos de espera usan `serverTime`) |
+| `container_health_status` | `name`, `status` = `healthy` \| `unhealthy` \| `starting` | `podman inspect --format '{{.State.Health.Status}}'` |
+| `container_restarts_total` | `name` | `NRestarts` de la unidad systemd: con Quadlet el contenedor se recrea en cada reinicio y el `RestartCount` de Podman vuelve a 0 |
+| `container_oom_kills_total` | `name` | `Result=oom-kill` de la unidad y `{{.State.OOMKilled}}`; el script acumula el contador en su propio fichero de estado |
+| `container_cpu_ratio`, `container_memory_bytes`, `container_memory_limit_bytes` | `name` | `podman stats --no-stream` |
+| `systemd_unit_active` | `unit` | `ActiveState` (1 = `active`) |
+| `host_filesystem_used_ratio` | `mount` = `containers_storage` \| `pgdata` \| `logs` \| `metrics` | `df -P` sobre rutas fijas (`logs` = directorio dedicado de logs, §5.3) |
+| `business_hours_open` | — | 1 entre 07:00 y 21:00 `Europe/Madrid`, 0 fuera; para las alertas **(H)** (§7). Requiere `date` en el script (ver nota) |
+| `business_minutes_since_open` | — | minutos desde las 07:00 `Europe/Madrid` (0 fuera de horario); margen de las alertas de conexión de §7.3 |
+| `backup_last_success_timestamp_seconds` | `kind` = `pg_dump` | lo escribe el trabajo de copia de Infrastructure (SEC-011) en el mismo directorio |
+| `host_load1`, `host_memory_available_bytes` | — | **pendiente de Cybersecurity**: leer `/proc/loadavg` y `/proc/meminfo` no está en la lista de la condición 2. Si no se aprueba, se quitan (`podman stats` ya da la memoria por contenedor) |
+| `time_offset_seconds` | — | **pendiente de Cybersecurity**: necesita `timedatectl show` o `chronyc tracking` (solo lectura), fuera de la lista de la condición 2. Si no se aprueba, se quita `ClockDrift` (§7.1) |
+
+Nota: `business_hours_open` se calcula en el host porque Prometheus no
+conoce zonas horarias (`hour()` es UTC y el cambio de hora desplazaría la
+ventana). Solo usa `TZ=Europe/Madrid date +%H%M`, de solo lectura; se pide a
+Cybersecurity que lo añada a la lista de la condición 2 junto con los dos
+puntos pendientes de arriba. Si el temporizador deja de escribir, la alerta
+`HostMetricsStale` (§7.1) avisa, porque sin esta métrica las alertas (H) no
+saltan.
 
 ### 6.6 Stack de monitorización
 
@@ -541,18 +666,51 @@ publicar puertos a la LAN:
 | Contenedor | Retención | Memoria orientativa |
 |---|---|---|
 | Prometheus | PROD 30 días, DEMO 7 días | 256 MB |
-| Alertmanager | — | 64 MB |
-| Loki (modo monolítico, almacenamiento en volumen local) | §5.2 | 256 MB |
+| Alertmanager | — (estado de silencios y notificaciones en su volumen) | 64 MB |
+| Loki (modo monolítico, almacenamiento en volumen local) | PROD 30 días general, 90 días `category="security"`; DEMO 7 días | 256 MB |
 | Grafana Alloy | — | 128 MB |
 | Grafana | — | 192 MB |
 | node_exporter (solo textfile), postgres_exporter | — | 32 MB c/u |
 
-Total ≈ 1 GB: Infrastructure lo tiene en cuenta al dimensionar el host.
-Grafana se publica solo en `127.0.0.1` del host (acceso del humano por túnel
-SSH) o detrás de Caddy con autenticación propia; decisión de Infrastructure y
-Cybersecurity. Los ficheros (dashboards como JSON, reglas de alerta, config de
-Alloy) se versionan en `deploy/monitoring/` cuando se implementen (Etapa 2,
-con Infrastructure).
+**Retención (M-07, decisión del humano)**, configuración en PROD:
+
+```yaml
+# Loki: borrado real con el compactor (sin él, retention_period no borra nada)
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  retention_delete_delay: 2h
+  delete_request_store: filesystem
+limits_config:
+  retention_period: 720h            # 30 días: todo lo que no sea seguridad
+  retention_stream:
+    - selector: '{category="security"}'
+      priority: 1
+      period: 2160h                 # 90 días
+```
+
+```
+# Prometheus (argumentos del contenedor)
+--storage.tsdb.retention.time=30d
+--storage.tsdb.retention.size=5GB   # tope de seguridad del disco; el que llegue antes
+```
+
+- Las métricas no llevan datos personales (§6, sin `user_id` ni IP en
+  etiquetas); 30 días bastan para comparar semanas (`TrafficSpike` usa 7).
+- La retención de 90 días se aplica a la etiqueta `category="security"`, que
+  pone Alloy a partir del campo `category` de los servicios propios (§3.2). Los
+  logs de `proxy` y `db` quedan en 30 días.
+- DEMO: Loki y Prometheus 7 días (`retention_period: 168h`, sin
+  `retention_stream`).
+- Testing comprueba en DEMO que el compactor borra (consulta de un intervalo
+  ya vencido sin resultados) antes de la Etapa 5.
+
+Total ≈ 1 GB: Infrastructure lo tiene en cuenta al dimensionar el host
+(`docs/infraestructura.md` §11.2: 2 vCPU, 4 GB, 40 GB). Grafana solo en
+`127.0.0.1` del host con acceso del humano por túnel SSH (decisión de
+Infrastructure, §11.2). Los ficheros (dashboards como JSON, reglas de alerta,
+config de Alloy y la **plantilla** de Alertmanager de §7.0) se versionan en
+`deploy/monitoring/` cuando se implementen (Etapa 2, con Infrastructure).
 
 ---
 
@@ -560,33 +718,146 @@ con Infrastructure).
 
 **No se implementan todavía** (se activan en la Etapa 5). Severidades:
 
-- **crítica**: el local no puede trabajar o hay riesgo de seguridad activo.
-  Notificación inmediata al responsable técnico y al encargado.
-- **aviso**: degradación o señal a revisar en el día. Notificación agrupada.
-- **info**: solo en el dashboard y en el informe diario a los agentes.
+- **crítica** (etiqueta `severity="critical"`): el local no puede trabajar o
+  hay riesgo de seguridad activo. Correo inmediato (dentro del horario de
+  alertas, o a cualquier hora si la alerta está marcada **[24h]**).
+- **aviso** (`severity="warning"`): degradación o señal a revisar en el día.
+  Correo agrupado.
+- **info** (`severity="info"`): solo en el dashboard y en el informe diario a
+  los agentes; no genera correo.
 
-Horario de apertura: las alertas marcadas **(H)** solo se evalúan en horario de
-apertura (`time_intervals` de Alertmanager). Supuesto: 07:00–21:00
-`Europe/Madrid`, a confirmar por el humano. Canal de notificación pendiente de
-decidir (correo, Telegram, ntfy...): ver `docs/estado.md`.
+Decisiones del humano (M-07): canal **correo**; **horario de alertas
+07:00–21:00 `Europe/Madrid`**.
+
+- **(H)** = la condición solo tiene sentido con el local abierto (p. ej. "nadie
+  conectado"). Se evalúa solo en horario: la expresión de Prometheus lleva
+  `and on() business_hours_open == 1` (§6.5). Así, a las 07:00 no llega un
+  correo por algo que fue normal durante la noche.
+- **[24h]** = se envía también fuera de horario (21:00–07:00). Solo alertas de
+  seguridad (con el local cerrado no hay tráfico legítimo, cualquier señal es
+  sospechosa y su volumen es bajo) y el disco casi lleno (puede impedir las
+  copias y la ingesta de logs de la noche).
+- **Resto (aviso y crítica sin [24h])**: fuera de horario **esperan**. Si
+  siguen activas a las 07:00, el correo sale entonces. Las que se resuelven
+  solas durante la noche no envían correo, pero aparecen en el dashboard y en
+  el informe a los agentes (§9).
+
+### 7.0 Enrutamiento de Alertmanager (correo)
+
+Plantilla orientativa; se versiona como `deploy/monitoring/alertmanager.yml.tmpl`
+y se completa en el despliegue (Etapa 5).
+
+```yaml
+global:
+  smtp_smarthost: "${SMTP_HOST}:587"        # Etapa 5
+  smtp_from: "${ALERT_FROM}"
+  smtp_auth_username: "${SMTP_USER}"
+  smtp_auth_password_file: /run/secrets/alertmanager_smtp_password
+  smtp_require_tls: true
+
+time_intervals:
+  - name: horario_alertas
+    time_intervals:
+      - times: [{start_time: "07:00", end_time: "21:00"}]
+        location: Europe/Madrid
+
+route:
+  receiver: correo-aviso
+  group_by: [alertname, severity]
+  group_wait: 1m
+  group_interval: 10m
+  repeat_interval: 12h
+  routes:
+    - matchers: ['severity="info"']
+      receiver: nulo                          # solo dashboard e informe
+    - matchers: ['alertname="Watchdog"']      # latido diario del canal
+      receiver: correo-aviso
+      active_time_intervals: [horario_alertas]
+      group_wait: 0s
+      repeat_interval: 24h
+    - matchers: ['after_hours="notify"']      # [24h]: a cualquier hora
+      receiver: correo-critica
+      group_wait: 10s
+      repeat_interval: 1h
+    - matchers: ['severity="critical"']
+      receiver: correo-critica
+      active_time_intervals: [horario_alertas]
+      group_wait: 10s
+      repeat_interval: 1h
+    - matchers: ['severity="warning"']
+      receiver: correo-aviso
+      active_time_intervals: [horario_alertas]
+
+inhibit_rules:                                # una causa, un correo
+  - source_matchers: ['alertname="DbDown"']
+    target_matchers: ['alertname=~"AppNotReady|ErrorRateHigh|ErrorLogBurst|SlowQueries|DbPoolSaturated"']
+  - source_matchers: ['alertname="AppDown"']
+    target_matchers: ['alertname=~"AppNotReady|NoClientsConnected|KitchenScreenDisconnected|LogIngestionStopped|ErrorRateHigh"']
+  - source_matchers: ['alertname="NoClientsConnected"']
+    target_matchers: ['alertname="KitchenScreenDisconnected"']
+  - source_matchers: ['severity="critical"']  # misma alerta en crítica tapa su aviso
+    target_matchers: ['severity="warning"']
+    equal: [alertname]
+
+receivers:
+  - name: nulo
+  - name: correo-critica
+    email_configs:
+      - to: "${ALERT_TO_CRITICAL}"            # responsable técnico y encargado
+        send_resolved: true
+        headers: {Subject: '[mi-app CRÍTICA] {{ .CommonLabels.alertname }}'}
+  - name: correo-aviso
+    email_configs:
+      - to: "${ALERT_TO_WARNING}"             # responsable técnico
+        send_resolved: false
+        headers: {Subject: '[mi-app aviso] {{ .CommonLabels.alertname }}'}
+```
+
+- **Servidor SMTP, usuario, remitente y destinatarios se definen en la
+  Etapa 5.** La contraseña SMTP es un secreto (`podman secret`, montado como
+  fichero en `/run/secrets/`, §3.7 de las reglas); los demás valores (las
+  direcciones son datos personales) se inyectan al generar el fichero en el
+  despliegue. **Nada de esto se escribe en `docs/` ni se versiona**: en el
+  repositorio solo está la plantilla con los marcadores `${...}`.
+  Alertmanager no expande variables: el aprovisionamiento genera el fichero
+  final fuera del repositorio.
+- El contenedor de Alertmanager es el único del stack con salida a internet,
+  y solo hacia el puerto SMTP (submission 587 con TLS). Infrastructure lo
+  define en la red; Cybersecurity lo valida.
+- **`Watchdog`**: regla siempre activa (`expr: vector(1)`) que envía un correo
+  al día al empezar el horario. Si un día no llega, el canal de alertas está
+  roto (SMTP, credenciales o Alertmanager caído). El humano lo revisa.
+- El correo no "despierta" a nadie por sí solo: si se quiere que las [24h]
+  suenen de noche, quien las recibe configura un aviso en su móvil para el
+  asunto `[mi-app CRÍTICA]`. Decisión del humano/cliente, sin desarrollo.
+
+Alertas **[24h]** (llevan la etiqueta `after_hours="notify"`):
+`LoginFailuresHigh` (aviso y crítica), `LockoutRepeated`, `LockoutSpray`,
+`LoginIpRateLimited`, `ManagerApprovalFailures`, `AuthzDeniedBurst`,
+`CsrfRejected`, `InvalidSessionBurst`, `PrivilegeChange` (solo la de
+`new_role="manager"` o `initial_manager`), `LoginOutsideHours`,
+`TrafficSpike`, `DiskFilling` (solo la crítica, > 90 %).
 
 ### 7.1 Disponibilidad y contenedores
 
 | Alerta | Condición | Severidad | Acción sugerida | Responsable |
 |---|---|---|---|---|
-| `AppDown` | `/healthz` falla o `up{job="app"} == 0` durante 1 min | crítica | `systemctl --user status app.service`, `journalctl --user -u app.service -n 200`; comprobar reinicio automático | infrastructure |
+| `AppDown` | `/healthz` falla o `up{job="app"} == 0` durante 1 min | crítica | `systemctl --user status app.service`, `podman logs --tail 200 app`; comprobar reinicio automático | infrastructure |
 | `AppNotReady` | `readiness_status == 0` durante 2 min | crítica | ver qué `check` falla; si es `db`, ver `DbDown` | infrastructure |
 | `DbDown` | `pg_up == 0` durante 1 min | crítica | estado del contenedor `db`, disco, logs de PostgreSQL | infrastructure |
 | `ContainerRestartLoop` | `increase(container_restarts_total[15m]) >= 3` | crítica | logs del arranque (`app.start.failed`, `config.invalid`); no reiniciar a mano en bucle | infrastructure (developer si es un fallo de código) |
 | `ContainerOOMKilled` | `increase(container_oom_kills_total[1h]) > 0` | aviso (crítica si ≥ 2 en 1 h) | revisar `process_resident_memory_bytes` previo; fuga o límite de memoria bajo | developer / infrastructure |
 | `ContainerUnhealthy` | `container_health_status{status="unhealthy"} == 1` durante 2 min, cualquier contenedor | crítica para `app`/`db`/`proxy`, aviso para el stack de monitorización | `podman healthcheck run <nombre>`; logs | infrastructure |
 | `MemoryNearLimit` | `container_memory_bytes / container_memory_limit_bytes > 0.85` durante 10 min | aviso | ajustar límite o investigar fuga | infrastructure / developer |
-| `DiskFilling` | `host_filesystem_used_ratio > 0.80` | aviso; > 0.90 crítica | limpiar imágenes antiguas (`podman image prune`), revisar retención de journald/Loki y tamaño de `pgdata` | infrastructure |
+| `DiskFilling` | `host_filesystem_used_ratio > 0.80` | aviso; > 0.90 crítica **[24h]** | limpiar imágenes antiguas (`podman image prune`), revisar la retención de Loki/Prometheus (§6.6), el `max-size` de los logs y el tamaño de `pgdata` | infrastructure |
 | `BackupMissing` | `time() - backup_last_success_timestamp_seconds > 26 h` | crítica | ejecutar la copia y revisar por qué falló | infrastructure |
 | `TlsCertExpiring` | caducidad < 14 días (aviso), < 3 días (crítica) | aviso / crítica | renovación ACME de Caddy; en CA interna, revisar `/data` de Caddy | infrastructure |
 | `MonitoringTargetDown` | cualquier `up == 0` del stack de monitorización durante 5 min | aviso | sin esto, las demás alertas pueden no saltar | infrastructure |
-| `LogIngestionStopped` | sin líneas de `service="app"` en Loki durante 15 min **(H)** | aviso | Alloy caído o journald sin datos | infrastructure |
-| `ClockDrift` | `abs(time_offset_seconds) > 2` | aviso | NTP del host | infrastructure |
+| `LogIngestionStopped` | sin líneas de `service="app"` en Loki durante 15 min **(H)** | aviso | Alloy caído o sin acceso al directorio de logs (§5.5); comprobar que `app` sigue escribiendo (`podman logs --tail 5 app`) | infrastructure |
+| `LogShippingFailing` | `increase(loki_write_dropped_entries_total[10m]) > 0`, o el envío de Alloy falla durante 10 min | aviso | Loki caído o lleno; si dura, el fichero `k8s-file` puede truncarse antes de enviarse (§5.5) | infrastructure |
+| `HostMetricsStale` | `time() - node_textfile_mtime_seconds > 120`, o `node_textfile_scrape_error == 1` | aviso | el temporizador de §6.5 no escribe: `systemctl --user status <temporizador>`; sin él no saltan las alertas (H) ni las de contenedores | infrastructure |
+| `Watchdog` | `vector(1)` (siempre activa) | aviso (ruta propia, §7.0) | un correo al día a las 07:00; si no llega, el canal de alertas está roto | infrastructure |
+| `ClockDrift` | `abs(time_offset_seconds) > 2` (solo si Cybersecurity aprueba la métrica, §6.5) | aviso | NTP del host | infrastructure |
 
 ### 7.2 Rendimiento (umbrales de las historias)
 
@@ -606,6 +877,12 @@ decidir (correo, Telegram, ntfy...): ver `docs/estado.md`.
 
 ### 7.3 Tiempo real y operación del local
 
+Las alertas (H) de conexión de clientes (`KitchenScreenDisconnected`,
+`NoClientsConnected`) llevan además `and on() business_minutes_since_open >= 15`
+(margen de 15 min tras las 07:00, §6.5) para no avisar cada mañana mientras se
+encienden las pantallas. Si el local abre más tarde de las 07:00, se ajusta ese margen, no
+el horario de alertas.
+
 | Alerta | Condición | Severidad | Acción sugerida | Responsable |
 |---|---|---|---|---|
 | `KitchenScreenDisconnected` | `sse_clients_connected{role="kitchen"} == 0` durante 2 min **(H)** | crítica | nadie ve la cola: revisar la pantalla de barra (Wi-Fi, navegador, sesión) | infrastructure (aviso al encargado) |
@@ -622,19 +899,19 @@ Umbrales iniciales a validar por Cybersecurity en `docs/seguridad.md`.
 
 | Alerta | Condición | Severidad | Acción sugerida | Responsable |
 |---|---|---|---|---|
-| `LoginFailuresHigh` | `increase(auth_login_attempts_total{result=~"bad_pin\|unknown_user"}[5m]) > 10`; > 30 crítica | aviso / crítica | en Loki, agrupar `auth.login.failed` por `client_ip` y `target_user_id` | cybersecurity |
-| `LockoutRepeated` | ≥ 3 `auth.account.locked` del mismo `target_user_id` en 24 h (Loki) | crítica | posible ataque de fuerza bruta a un PIN de 4 dígitos (riesgo de §13 de arquitectura); restablecer PIN y revisar el dispositivo de origen | cybersecurity |
-| `LockoutSpray` | ≥ 3 usuarios distintos bloqueados en 15 min | crítica | rociado de un PIN común contra todos los usuarios | cybersecurity |
-| `LoginIpRateLimited` | `increase(auth_login_attempts_total{result="ip_rate_limited"}[15m]) > 0` | aviso | identificar el dispositivo por `client_ip` | cybersecurity |
-| `ManagerApprovalFailures` | `increase(manager_approvals_total{result="failed"}[15m]) >= 3` | aviso | alguien prueba el PIN del encargado desde un dispositivo de sala | cybersecurity |
-| `AuthzDeniedBurst` | `increase(authz_denied_total[10m]) > 10`, o > 5 de una misma sesión (Loki) | aviso | sondeo de rutas o fallo de la UI que muestra opciones no permitidas | cybersecurity (developer si es la UI) |
-| `CsrfRejected` | `increase(csrf_rejected_total[10m]) > 0` | aviso | origen ajeno intentando modificar datos | cybersecurity |
-| `InvalidSessionBurst` | > 20 `auth.session.invalid` de una IP en 10 min | aviso | posible reutilización o fuerza bruta de cookies | cybersecurity |
-| `PrivilegeChange` | `increase(staff_privilege_changes_total{kind=~"role_changed\|initial_manager"}[5m]) > 0` | info (aviso si `new_role="manager"`) | confirmar con el encargado que el cambio es legítimo | cybersecurity |
-| `LoginOutsideHours` | `auth.login.succeeded` fuera del horario de apertura (Loki) | aviso | acceso fuera de horario | cybersecurity |
+| `LoginFailuresHigh` | `increase(auth_login_attempts_total{result=~"bad_pin\|unknown_user"}[5m]) > 10`; > 30 crítica | aviso / crítica **[24h]** | en Loki, agrupar `auth.login.failed` por `client_ip` y `target_user_id` | cybersecurity |
+| `LockoutRepeated` | ≥ 3 `auth.account.locked` del mismo `target_user_id` en 24 h (Loki) | crítica **[24h]** | posible ataque de fuerza bruta a un PIN de 4 dígitos (riesgo de §13 de arquitectura); restablecer PIN y revisar el dispositivo de origen | cybersecurity |
+| `LockoutSpray` | ≥ 3 usuarios distintos bloqueados en 15 min | crítica **[24h]** | rociado de un PIN común contra todos los usuarios | cybersecurity |
+| `LoginIpRateLimited` | `increase(auth_login_attempts_total{result="ip_rate_limited"}[15m]) > 0` | aviso **[24h]** | identificar el dispositivo por `client_ip` | cybersecurity |
+| `ManagerApprovalFailures` | `increase(manager_approvals_total{result="failed"}[15m]) >= 3` | aviso **[24h]** | alguien prueba el PIN del encargado desde un dispositivo de sala | cybersecurity |
+| `AuthzDeniedBurst` | `increase(authz_denied_total[10m]) > 10`, o > 5 de una misma sesión (Loki) | aviso **[24h]** | sondeo de rutas o fallo de la UI que muestra opciones no permitidas | cybersecurity (developer si es la UI) |
+| `CsrfRejected` | `increase(csrf_rejected_total[10m]) > 0` | aviso **[24h]** | origen ajeno intentando modificar datos | cybersecurity |
+| `InvalidSessionBurst` | > 20 `auth.session.invalid` de una IP en 10 min | aviso **[24h]** | posible reutilización o fuerza bruta de cookies | cybersecurity |
+| `PrivilegeChange` | `increase(staff_privilege_changes_total{kind=~"role_changed\|initial_manager"}[5m]) > 0` | info (aviso **[24h]** si `new_role="manager"` o `initial_manager`) | confirmar con el encargado que el cambio es legítimo | cybersecurity |
+| `LoginOutsideHours` | `increase(auth_login_attempts_total{result="success"}[5m]) > 0 and on() business_hours_open == 0` (login correcto entre 21:00 y 07:00) | aviso **[24h]** | acceso fuera de horario; en Loki, `auth.login.succeeded` de esa franja para ver `user_id` y `client_ip`. Si el local cierra algún día más tarde, se silencia en Alertmanager para esa noche | cybersecurity |
 | `PaymentVoidsHigh` | `increase(payments_voided_total[1d]) > 3` | aviso | posible fraude interno; revisar `audit_log` | cybersecurity (informar al humano) |
 | `CashClosingDifference` | `abs(cash_closing_difference_cents) > 500` (5 €) | info | lo revisa el encargado | — (humano) |
-| `TrafficSpike` | tasa de peticiones > 5× la mediana de la misma hora de los últimos 7 días, o > 20 req/s sostenidas 2 min | aviso | un dispositivo en bucle o un ataque; agrupar por `client_ip` en Loki | cybersecurity / developer |
+| `TrafficSpike` | tasa de peticiones > 5× la mediana de la misma hora de los últimos 7 días, o > 20 req/s sostenidas 2 min | aviso **[24h]** | un dispositivo en bucle o un ataque; agrupar por `client_ip` en Loki | cybersecurity / developer |
 
 ---
 
@@ -697,8 +974,8 @@ en texto en `docs/estado.md` (sección "Hallazgos reportados a otros agentes"),
 leyendo logs y métricas con comandos, por ejemplo:
 
 ```
-# Errores de app de la última hora (PROD)
-journalctl --user -u app.service --since "1 hour ago" -o cat | jq -c 'select(.level=="error") | {time,event,route,request_id,err:.err.message}'
+# Errores de app de la última hora (PROD; logs k8s-file, M-06 B)
+podman logs --since 1h app | jq -c 'select(.level=="error") | {time,event,route,request_id,err:.err.message}'
 # Logins fallidos agrupados por IP (DEMO/PROD, Loki)
 logcli query --since=1h '{service="app",category="security"} | json | event="auth.login.failed"' -o jsonl | jq -r '.client_ip' | sort | uniq -c
 # p95 de propagación a barra
@@ -740,7 +1017,14 @@ Registrados en `docs/estado.md` con su responsable.
 7. **Usuario de BD de solo monitorización** (`pg_monitor`) para
    `postgres_exporter` y `pg_stat_statements` precargado (§5.4). → infrastructure,
    software-engineer (migración que crea la extensión).
-8. **Recogida de métricas de contenedores y de logs de journald compatible con
-   la §3.4 de las reglas** (§5.5 y §6.5): posible excepción para montar
-   `/var/log/journal` en solo lectura. → infrastructure, cybersecurity; requiere
-   aprobación humana si se acepta la excepción.
+8. **Recogida de logs y métricas de contenedores compatible con la §3.4 de
+   las reglas** (§5.5 y §6.5). **Resuelto (M-06):** el humano eligió la
+   opción B, sin excepción: `k8s-file` con `log_opt path` a un directorio
+   dedicado leído en `ro` por Alloy, y temporizador systemd del usuario →
+   `.prom` → `node_exporter` solo `textfile`, con las condiciones 1–7 de
+   `docs/seguridad.md` §6.3. → infrastructure (implementa, unifica su §10 y
+   §11.1), cybersecurity (revisa el script y las unidades; decide sobre las
+   lecturas pendientes de §6.5).
+9. **Regla de redacción `/pin/i`** (SEC-017, §4.3 b) también en
+   `docs/arquitectura.md` §11, junto con `confirmPin` en la lista explícita.
+   → software-engineer.
