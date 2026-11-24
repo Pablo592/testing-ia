@@ -25,10 +25,11 @@ para **cuadrar la caja y saber qué se vende más**.
 - **CA-F02** Dado el resumen, entonces ve la lista de productos vendidos (de los cobros vigentes del día) con unidades e importe, ordenada de mayor a menor importe.
 - **CA-F03** Dados pedidos con cobro "Abierto" al consultar el resumen, entonces se muestra el aviso "Hay N pedidos sin cobrar" con acceso a la lista.
 - **CA-F04** Dado el encargado, cuando introduce el efectivo contado en caja, entonces el sistema muestra la diferencia respecto al total en efectivo esperado (positiva o negativa) y permite guardar el cierre con esa cifra.
-- **CA-F05** Dado un día ya cerrado, cuando se consulta, entonces se muestran las cifras del cierre guardado; los cobros de ese día anulados después del cierre aparecen señalados por separado, sin cambiar las cifras guardadas. **[Cambio 2026-11-23, 1.7d, decisión del orquestador con el criterio del humano "menor carga"]** Lo mismo se aplica a los pedidos de ese día cancelados después del cierre: aparecen en esa sección aparte, con el usuario que los canceló y el encargado que autorizó ("sin autorización" si no la necesitó), sin cambiar las cifras guardadas.
+- **CA-F05** Dado un día ya cerrado, cuando se consulta, entonces se muestran las cifras del cierre guardado; los cobros de ese día anulados después del cierre aparecen señalados por separado, sin cambiar las cifras guardadas. **[Cambio 2026-11-23, 1.7d, decisión del orquestador con el criterio del humano "menor carga"]** Lo mismo se aplica a los pedidos de ese día cancelados después del cierre: aparecen en esa sección aparte, con el usuario que los canceló y el encargado que autorizó ("sin autorización" si no la necesitó), sin cambiar las cifras guardadas. **[Cambio 2026-11-24, 1.7f]** Los cobros registrados ese día después del cierre siguen CA-F15.
+- **CA-F15** **[Nuevo 2026-11-24, 1.7f, H-1.7e-01; criterio del humano "menor carga"]** Dado un día ya cerrado (CA-F05), cuando se registra un cobro ese mismo día después de la hora del cierre (de un pedido de ese día o de un día anterior), entonces: (a) el cobro cuenta en el día en que se registra (CA-F08), que es el día cerrado, y no se traslada al día siguiente; (b) no cambia las cifras guardadas del cierre (totales, efectivo esperado y diferencia de caja), ni el desglose de CA-F13, ni los productos vendidos de ese día; (c) aparece en la sección aparte de CA-F05 como "Cobros tras el cierre" (número e importe), en la fila del usuario que registró el cobro y con "Sin autorización" como encargado que autorizó, porque cobrar no necesita autorización; (d) si ese cobro se anula después, deja de contar en "Cobros tras el cierre" y cuenta en "Cobros anulados" de esa misma sección (CA-F09). Un cobro de un pedido de ese día registrado en un día posterior cuenta en el resumen del día en que se registra (CA-F08) y no aparece en la sección del día del pedido.
 - **CA-F06** Dado el selector de fecha, cuando el encargado elige cualquier día entre hoy y 90 días atrás (ambos incluidos), entonces puede consultar su resumen.
 - **CA-F12** Dado el selector de fecha, cuando el encargado intenta elegir un día de hace más de 90 días, entonces no se puede seleccionar. (Los datos de esos días no se borran: 90 días es solo la ventana de consulta; ver supuesto 11 y pregunta 10 del README.)
-- **CA-F07** Los totales del resumen coinciden al céntimo con la suma de los cobros vigentes (no anulados) registrados (HU-04) para ese día.
+- **CA-F07** Los totales del resumen coinciden al céntimo con la suma de los cobros vigentes (no anulados) registrados (HU-04) para ese día. **[Cambio 2026-11-24, 1.7f]** En un día cerrado, la comprobación se hace sobre las cifras del cierre guardado: los cobros registrados ese día hasta la hora del cierre y vigentes al guardarlo. Los cobros posteriores al cierre se comprueban en la sección aparte (CA-F05, CA-F15).
 
 ### UX (medibles)
 - **CA-U01** El resumen del día actual se abre en 1 toque desde el menú del encargado.
@@ -58,3 +59,10 @@ _Cambios 2026-11-23 (tarea 1.7d, interpretaciones de UX): CA-F13 precisa
 CA-F05 amplía la sección aparte a los pedidos cancelados después del cierre
 (decisión del orquestador del 2026-11-23 con el criterio del humano "menor
 carga"). Mismos IDs, sin IDs nuevos ni retirados._
+
+_Cambios 2026-11-24 (tarea 1.7f, hallazgo H-1.7e-01 de UX, criterio del humano
+"menor carga"): CA-F15 nuevo, sobre los cobros registrados en un día ya cerrado
+después del cierre: cuentan en ese día (CA-F08), no cambian el cierre guardado y
+aparecen en "Cobros tras el cierre" de la sección aparte. CA-F05 remite a CA-F15
+y CA-F07 precisa qué se comprueba en un día cerrado. Ningún ID retirado ni
+renumerado._

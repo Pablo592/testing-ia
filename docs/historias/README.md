@@ -226,6 +226,21 @@ Texto original de las preguntas:
 
 ## Registro de cambios
 
+- **2026-11-24, ronda 1.7f [Cambio 2026-11-24, 1.7f]** (hallazgo H-1.7e-01 de
+  UX, `docs/ux/wireframes/09-resumen-dia.md`; criterio del humano "menor
+  carga"): **HU-08/CA-F15 nuevo.** Un cobro registrado en un día ya cerrado
+  después del cierre cuenta en ese día, el de su registro (HU-08/CA-F08,
+  HU-04/CA-F16), no cambia el cierre guardado (cifras, desglose ni productos
+  vendidos) y aparece en la sección aparte de CA-F05 como "Cobros tras el
+  cierre", en la fila del usuario que cobró con "Sin autorización". Si después
+  se anula, pasa a "Cobros anulados" de esa sección. Un cobro registrado en un
+  día posterior al del pedido cuenta en ese día posterior y no aparece en la
+  sección del día del pedido. Se descarta trasladar el cobro al día siguiente
+  o bloquear los cobros de un día cerrado: más carga y en contra de CA-F08.
+  HU-08/CA-F05 remite a CA-F15 y HU-08/CA-F07 precisa la comprobación en un día
+  cerrado (marca de cambio en los dos). ID nuevo: HU-08/CA-F15. Ninguno
+  retirado ni renumerado.
+
 - **2026-11-23, ronda 1.7d [Cambio 2026-11-23, 1.7d]** (interpretaciones de UX
   sobre HU-08/CA-F13, `docs/ux/wireframes/09-resumen-dia.md`; criterio "menor
   carga"): confirmadas las dos. HU-08/CA-F13 precisa que en las anulaciones de

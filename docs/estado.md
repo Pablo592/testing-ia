@@ -34,6 +34,10 @@ historias las propone el Product Owner sin entrevista al cliente real).
 | 1.7c | infrastructure | Ronda de cierre: SEC-023, duración de DEMO (T-22), `mkdir .secrets` en `run.sh`, CA y pantalla completa en barra para el manual | En curso |
 | 1.7d | product-owner | Ronda de cierre: interpretaciones de HU-08/CA-F13 propuestas por UX | Hecho (las dos interpretaciones de UX confirmadas en HU-08/CA-F13). Cancelaciones posteriores al cierre: se tratan como las anulaciones posteriores (criterio de menor carga) |
 | 1.7e | ux-designer | Quitar las marcas "pendiente de confirmar por el PO" de `09-resumen-dia.md` y reflejar las cancelaciones posteriores al cierre en la sección aparte | Hecho (`09-resumen-dia.md`: marcas quitadas, wireframe "Día cerrado" con la sección "Cambios tras el cierre" (cancelaciones y anulaciones); matriz del README de wireframes; H-1.7e-01 nuevo, H-1.7e-02 corregido) |
+| 1.7f | product-owner | H-1.7e-01: cobros hechos después del cierre sobre pedidos de ese día (HU-08) | Hecho (HU-08/CA-F15 nuevo: el cobro cuenta en el día en que se registra, no cambia el cierre guardado y sale como "Cobros tras el cierre" en la sección aparte; CA-F05 y CA-F07 precisados) |
+| 1.7g | ux-designer | HU-08/CA-F15 en `09-resumen-dia.md`: columna "Cobros tras el cierre", texto vacío, 375 px y matriz; cerrar H-1.7e-01 | En curso |
+| 1.7h | software-engineer | HU-08/CA-F15: corte del resumen de un día cerrado en la hora del cierre (o instantánea), consulta de la sección aparte y CA-N02 | En curso |
+| 1.7i | testing | HU-08/CA-F15 y CA-F07/CA-F05 revisados en `docs/testing.md` | En curso |
 | 1.2b | ux-designer | Actualizar wireframes con los cambios del PO (ronda 1.1c) + SEC-007 y mensajes de bloqueo | Hecho (reconfirmación de PIN en cobro y Personal, desbloqueo, estados de bloqueo en login, "Activar sonido"/Wake Lock y 409 en la cola, "AÑADIDO hh:mm"; P-12 Ajustes condicionada a HU-09) |
 
 ## Decisiones del humano
