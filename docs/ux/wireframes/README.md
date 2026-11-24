@@ -2,7 +2,7 @@
 
 Formato: ASCII en Markdown (se lee en cualquier editor). Son wireframes de **estructura y comportamiento**: los colores, tamaños y componentes salen de `../design-system.md`, y los flujos, el recuento de toques y la telemetría, de `../flujos.md`.
 Estado: **pendiente de aprobación humana de la dirección visual** antes de programar.
-Última actualización: tarea 1.2c (2026-11-23), con HU-01..HU-08 tras las rondas 1.1d, 1.1e y 1.1f del PO y la arquitectura 1.3c (`POST /auth/pin` solo para el cambio obligatorio). HU-09 queda fuera del MVP.
+Última actualización: tarea 1.7e (2026-11-24, P-11: CA-F05 y CA-F13 confirmados por el PO en 1.7d; sección "Cambios tras el cierre"). Anterior: tarea 1.2c (2026-11-23), con HU-01..HU-08 tras las rondas 1.1d, 1.1e y 1.1f del PO y la arquitectura 1.3c (`POST /auth/pin` solo para el cambio obligatorio). HU-09 queda fuera del MVP.
 
 | ID | Archivo | Pantalla | Historias | Prioridad |
 |---|---|---|---|---|
@@ -114,10 +114,10 @@ Los criterios se citan con su ID estable `HU-xx/CA-xnn` (`docs/historias/README.
 | HU-08/CA-U01 | Resumen en 1 toque desde el menú del encargado | Gestión -> P-11 | Opción directa |
 | HU-08/CA-U02 | 2 decimales + €; diferencia negativa con "-" y "Falta" | P-11 | Formato + texto |
 | HU-08/CA-F01 | Cifras del día | P-11 | Tarjetas |
-| HU-08/CA-F13 [1.2c] | Cancelaciones y anulaciones por usuario y autorizador ("sin autorización") | P-11 | Tabla "Cancelaciones y anulaciones por usuario" |
+| HU-08/CA-F13 [1.2c, 1.7e] | Cancelaciones y anulaciones por usuario y autorizador ("sin autorización"; "No aplica (encargado)" en anulaciones); en día cerrado, las del cierre guardado | P-11 | Tabla "Cancelaciones y anulaciones por usuario" |
 | HU-08/CA-F14 [1.2c] | La suma del desglose coincide con los totales | P-11 | Fila "Total" igual a las tarjetas |
 | HU-08/CA-F03 | "Hay N pedidos sin cobrar" con acceso | P-11 | Aviso + "Ver pedidos" |
-| HU-08/CA-F05 | Día cerrado; anulados tras el cierre aparte | P-11 | Solo lectura + sección aparte |
+| HU-08/CA-F05 [1.7e] | Día cerrado; cancelados y anulados tras el cierre aparte, con usuario y autorizador | P-11 | Solo lectura + sección "Cambios tras el cierre" |
 | HU-08/CA-F06, CA-F12 | Fechas de hoy a 90 días atrás; anteriores no seleccionables | P-11 | Selector con días deshabilitados |
 
 Estados vacío / cargando / error / éxito: cada wireframe tiene su tabla "Estados".
