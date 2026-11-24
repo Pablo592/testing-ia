@@ -18,7 +18,9 @@ historias las propone el Product Owner sin entrevista al cliente real).
 | 1.1c | product-owner | Resolver hallazgos de UX | Hecho (9 resueltos; estado "Servido"; HU-09 propuesta; supuestos 18–22 a validar) |
 | 1.1d | product-owner | Criterios del PIN (SEC-001/004/007/008) + hallazgos T-01..T-09 de Testing | Hecho (IDs estables CA-F/U/N en HU-01..HU-09; supuestos 6, 11, 12, 22 revisados y 23, 24 nuevos, a validar por el humano; registro de cambios en el README) |
 | 1.3b | software-engineer | Actualizar arquitectura con los cambios del PO (rondas 1.1b y 1.1c) + T-10, T-11, M-01..M-04 + SEC-001/002/004/005/006/007/012 | Hecho (sin cambios de decisión principal; revisiones en ADRs y §14) |
-| 1.4b | cybersecurity | Verificar SEC-001 y actualizar `docs/permisos.md` con las rutas nuevas del SE | En curso |
+| 1.4b | cybersecurity | Verificar SEC-001 (PO + SE), actualizar `docs/permisos.md` con las rutas nuevas del SE, verificar la parte de infrastructure de SEC-002/003/009..015, temporizador de M-06 y PIN en HU-09 | En curso |
+| 1.6b | testing | Pasar `docs/testing.md` a los IDs estables y verificar T-01..T-09 | En curso |
+| 1.2c | ux-designer | Alinear wireframes con la ronda 1.1d (SEC-008 en P-11, IDs CA-) + flujos de telemetría (M-03) | En cola |
 | 1.2b | ux-designer | Actualizar wireframes con los cambios del PO (ronda 1.1c) + SEC-007 y mensajes de bloqueo | Hecho (reconfirmación de PIN en cobro y Personal, desbloqueo, estados de bloqueo en login, "Activar sonido"/Wake Lock y 409 en la cola, "AÑADIDO hh:mm"; P-12 Ajustes condicionada a HU-09) |
 
 ## Bloqueos
