@@ -43,6 +43,15 @@
 > T-36), rutas de la SPA y "Acceso denegado" (§5.2, T-31) y `BEGIN ISOLATION
 > LEVEL READ COMMITTED` explícito en el cerrojo de cierre (§4.4, T-27).
 > Registro en la §17.
+>
+> Revisión 2026-11-24 (tarea 2.1i, Etapa 2): validación estricta de
+> `TRUSTED_PROXIES` (SEC-029, §10.1), peticiones pasivas con
+> `X-Activity: passive` (SEC-030, §7), `search_path=public` en el *pool*,
+> borrado de la cookie en el `401` y `details` cerrado (§5), escrituras del
+> *hub* acotadas (§7), `404` antes de los hooks de sesión (T-40), forma de
+> `parseSettings` (T-38), `403` de `POST /auth/pin` antes de zod (T-39),
+> envoltorios de comandos (T-41), `@mi-app/web/pin-messages` (T-42) e
+> intervalo del *hub* en `AppDeps` (T-43). Registro en la §17.
 
 ## 1. Visión general
 
@@ -155,15 +164,20 @@ export interface DatabaseDeps {
   user: string; password: string;       // la contraseña ya leída del fichero de secreto
   poolMax?: number;                     // por defecto 10
 }
+// Toda conexión creada a partir de DatabaseDeps (app, migrate, comandos) fija
+// search_path=public en el arranque de la conexión: opción `options: '-c search_path=public'`
+// del Pool de `pg` [2.1i]. Al ser un parámetro de la conexión, prevalece sobre
+// un `ALTER DATABASE/ROLE … SET search_path` (defensa tipo CVE-2018-1058).
 
 export interface AppDeps {
   clock: Clock;                         // SystemClock en main.ts, FakeClock en los tests
   database: DatabaseDeps;               // buildApp crea el pool y lo cierra en onClose
   pinHasher: PinHasher;                 // solo lo recibe el módulo auth (ver abajo)
   publicOrigin: string;                 // origen exacto aceptado en Origin (RS-24), p. ej. 'https://caja.local:8443'
-  trustedProxies: string[];             // IP o CIDR de proxy; solo de ellas se acepta X-Forwarded-For (RS-06). [] = ninguna
+  trustedProxies: string[];             // IP o CIDR de proxy, reglas de §10.1 (SEC-029); solo de ellas se acepta X-Forwarded-For (RS-06). [] = ninguna
   installation: { tableCount: number; delayThresholdMinutes: number };  // §4.1
   sessionMaxHours?: number;             // caducidad absoluta, entero 1–12, por defecto 12 (§10.1, T-36)
+  kitchenActivityIntervalMs?: number;   // periodo del temporizador del hub (§7, barra); entero 10–60000, por defecto 60000 (T-43). No es variable de entorno
   logDestination?: NodeJS.WritableStream; // destino de pino (por defecto stdout); misma redacción (§11)
   logLevel?: string;                    // por defecto 'info'
   onRoute?: (route: { method: string | string[]; url: string; config?: unknown }) => void;
@@ -177,7 +191,13 @@ export function buildApp(deps: AppDeps): Promise<FastifyInstance>;
   `app.metricsText()`. Los tests usan `inject()` o `listen({ port: 0 })`.
 - **Valida sus dependencias** con la misma función que `config.ts`
   (`parseSettings`, §10.1): fuera de rango → rechaza la promesa (defensa en
-  profundidad; en producción ya ha fallado `config.ts`).
+  profundidad; en producción ya ha fallado `config.ts`). En concreto,
+  `trustedProxies` pasa por el mismo validador de elementos que
+  `TRUSTED_PROXIES` (§10.1, SEC-029) y `kitchenActivityIntervalMs` por su
+  rango; si falla, rechaza con `ConfigError` (`variable` = nombre del campo).
+- **`trustProxy` de Fastify [2.1i, SEC-029]:** se le pasa el *array* ya
+  validado (`trustedProxies`) o `false` si está vacío; nunca una cadena, un
+  número ni `true`.
 - **`onRoute`** se registra como **primer** hook `onRoute`, antes de cualquier
   plugin de rutas, así ve todas las rutas (RS-17).
 - **Decorador `metricsText(): Promise<string>`**: texto Prometheus de un
@@ -234,6 +254,41 @@ export function unlockUser(deps: Pick<CommandDeps, 'clock' | 'database' | 'logDe
 - Envoltorios: código de salida `0` en `created`/`skipped`/`unlocked`, `2` en
   `not_found`, `1` en cualquier error (el mensaje en stderr nunca contiene el
   PIN). Ambos escriben un log JSON con la misma redacción.
+- **Envoltorios y cómo se prueban [2.1i, T-41].** Toda la lógica del
+  envoltorio (leer la configuración, llamar a la función, traducir el
+  resultado a código de salida y escribir en stderr) está en una función de
+  `@mi-app/api/commands/cli`:
+
+  ```ts
+  export function runCommand(
+    name: 'create-initial-manager' | 'unlock-user',
+    argv: readonly string[],                 // argumentos tras el nombre del script
+    io: { env: Record<string, string | undefined>; stderr: NodeJS.WritableStream;
+          clock?: Clock; logDestination?: NodeJS.WritableStream },
+  ): Promise<0 | 1 | 2>;                     // nunca lanza: todo error → 1
+  ```
+
+  `runCommand` llama a `loadConfig(io.env)` (§10.1). Los ficheros de la
+  imagen son solo `process.exitCode = await runCommand(…, process.argv.slice(2), { env: process.env, stderr: process.stderr })`:
+  - `dist/commands/create-initial-manager.js` (sin argumentos; nombre y PIN
+    de `INITIAL_MANAGER_NAME_FILE` / `INITIAL_MANAGER_PIN_FILE`; un argumento
+    de más → `1`);
+  - `dist/commands/unlock-user.js <nombre>` (exactamente un argumento no
+    vacío; si no, `1` con un mensaje de uso en stderr).
+
+  En la imagen distroless se ejecutan con su `node` y `WORKDIR` de la imagen:
+  `podman exec <app> /nodejs/bin/node dist/commands/unlock-user.js "Ana"`
+  (el binario exacto lo fija Infrastructure en el Containerfile y en
+  `docs/infraestructura.md`).
+  **Prueba:** (1) en integración, en proceso, `runCommand` con un `env` que
+  apunta a ficheros temporales del test (contraseña de `app_rw`, un *pepper*
+  propio de la prueba, nombre y PIN): los códigos 0/2/1 y que stderr y el log
+  no contienen el PIN; (2) en la suite `containers`, un único humo por
+  comando contra la imagen real, con un servicio efímero que añade
+  Infrastructure a `compose.test.yaml` (misma imagen que `app`, `app_rw`,
+  `pin_pepper` y los secretos del encargado inicial de esa ejecución,
+  `cap-drop: ALL`, raíz `ro`, en `backend`), que comprueba el código de salida
+  del proceso.
 - `unlockUser` acepta un `CommandDeps` completo (es un subconjunto): los tests
   pueden pasar el mismo objeto a los dos.
 
@@ -312,7 +367,9 @@ estructura interna).
 | `@mi-app/api/app` | `buildApp`, tipos `AppDeps`, `Clock`, `DatabaseDeps` (§2.1) |
 | `@mi-app/api/auth/hasher` | `createPinHasher({ pepper: Buffer \| string }): PinHasher`, tipo `PinHasher` |
 | `@mi-app/api/commands` | `createInitialManager`, `unlockUser`, tipos `CommandDeps`, `InvalidPinError` (§2.1) |
-| `@mi-app/api/config` | `parseSettings(env)` y `loadConfig()` (§10.1) |
+| `@mi-app/api/commands/cli` | `runCommand(name, argv, io): Promise<0 \| 1 \| 2>` (§2.1, T-41) |
+| `@mi-app/api/config` | `parseSettings(env): Settings`, `loadConfig(env?): Config`, `ConfigError` (con `variable: string`), tipos `Settings`, `Config` (§10.1, T-38) |
+| `@mi-app/web/pin-messages` | `pinRuleMessage(rule: string): string`: texto de UX de cada `PinRule` (`docs/ux/wireframes/01-login.md`, "Reglas de PIN"); función **total**: una regla desconocida devuelve el texto genérico de esa tabla. Fichero `apps/web/src/features/pin/pin-messages.ts`, lo usan el cambio obligatorio del PIN (HU-01/HU-07) y Personal (HU-07) (T-42) |
 
 `Role = 'waiter' | 'kitchen' | 'manager'`. Los esquemas zod y DTOs de la API
 se añaden como subrutas de `@mi-app/shared` cuando los pida cada historia
@@ -891,6 +948,34 @@ interface ApiError {
   `user_disabled`, `pin_reset`, `pin_changed`, `account_locked_manual`. Sin
   cookie o con un token desconocido, sin `details`. Revelar el motivo a quien
   tiene la cookie de esa sesión no da información a terceros.
+  **Condiciones [2.1i, recomendaciones de la 2.1f]:**
+  - `details` es exactamente `{ reason: 'idle' | 'absolute' }` o
+    `{ reason: 'revoked', revokedReason: <valor de la lista> }`: esquema zod
+    `.strict()` en `packages/shared` (`UnauthenticatedDetails`), sin
+    `userId`, nombre, fechas ni quién revocó. Si la fila de la sesión ya se
+    purgó (30 días), el token es desconocido.
+  - Sin cookie, con un token desconocido o con un valor de cookie mal
+    formado: cuerpo idéntico salvo `requestId` (`code`, `message` fijo, sin
+    `details`). **Tiempo:** si hay cookie, siempre se calcula el SHA-256 y se
+    hace **una** consulta por `token_hash` (índice único) que trae sesión y
+    usuario a la vez, exista o no; no hay rama con trabajo extra para el
+    token conocido antes de responder `401`. Sin cookie no se consulta la BD.
+  - **Borrado de la cookie:** todo `401 UNAUTHENTICATED` de una petición que
+    traía `__Host-sid` (cualquier motivo, también token desconocido o mal
+    formado) responde además
+    `Set-Cookie: __Host-sid=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Strict`,
+    idéntica en todos los casos. Sin cookie en la petición, sin `Set-Cookie`.
+    (RS-10 sigue valiendo para la cookie que **crea** la sesión: sin
+    `Max-Age` ni `Expires`.) La app, al recibir el primer `401`, aborta sus
+    peticiones en curso (`AbortController` del cliente HTTP) antes de mostrar
+    P-01, para que ninguna respuesta tardía de la sesión vieja borre la cookie
+    de un login nuevo.
+- **`404 NOT_FOUND` [2.1i, T-40]:** toda ruta bajo `/api/` que no existe
+  (ruta o método no declarados, p. ej. `GET`/`PATCH /api/v1/settings`)
+  responde `404` con `code = 'NOT_FOUND'`, sin `details`, **igual para
+  todos**: con o sin sesión, con PIN provisional, con cualquier rol y con
+  cualquier `Origin` (RS-18). No toca la BD ni lleva `Set-Cookie`. Ver el
+  orden de comprobaciones a continuación.
 - **`403` por permiso (RBAC)**: `code = 'FORBIDDEN'`, sin `details`. Los demás
   `403` usan su propio código (`PIN_CHANGE_REQUIRED`,
   `MANAGER_APPROVAL_INVALID`, `PIN_INVALID`, `USER_DISABLED`…).
@@ -907,6 +992,24 @@ interface ApiError {
   rol sin permiso recibe `403` aunque el cuerpo sea inválido, y nada de lo
   anterior al *handler* toca la BD salvo la lectura de la sesión y la
   actualización de `sessions.last_activity_at` (§7).
+  - **Rutas inexistentes (T-40):** Fastify ejecuta los hooks `onRequest`
+    globales también cuando no encuentra la ruta. Por eso los cuatro hooks
+    de guarda (`Origin`, sesión, PIN provisional, permiso) empiezan con
+    `if (request.is404) return;` (propiedad de Fastify, verdadera solo cuando
+    la petición va al *not-found handler*), aplicado en un único helper que
+    envuelve los cuatro, no repetido a mano. Solo `request_id` corre siempre.
+    El *not-found handler* responde el `404 NOT_FOUND` de arriba bajo
+    `/api/` y la SPA (`index.html`, §5.2) fuera de `/api/`. Una ruta
+    declarada nunca tiene `is404 = true`, así que no abre una vía para
+    saltarse las guardas; la denegación por defecto de rutas sin `config`
+    (RS-17) se mantiene.
+  - **`403 FORBIDDEN` de `POST /auth/pin` sin PIN provisional (T-39):** es
+    parte del hook de permiso (`onRequest`), no del *handler*: la ruta
+    declara `config: { permission: 'session:self', provisionalPinOnly: true }`
+    y, con `mustChangePin = false`, responde `403 FORBIDDEN` **antes** del
+    analizador de cuerpo y de zod (un cuerpo inválido o ausente da igualmente
+    `403`) y sin llamar a `verifyPin`. Con `mustChangePin = true` sigue el
+    orden normal (`415`/`400`, luego `verifyPin`).
 
 **Autorización del encargado (HU-06, supuesto 22).** Las operaciones que la
 requieren aceptan en el cuerpo
@@ -996,10 +1099,10 @@ Permisos: **W** = camarero/cajero, **K** = barra/cocina, **M** = encargado
 |---|---|---|---|
 | `GET /auth/login-options` | público | HU-01 | rejilla de P-01 (SEC-005): solo `[{name, role}]` de usuarios **activos**, sin `id`, bloqueo ni `mustChangePin`; `Cache-Control: no-store`; mismo límite por IP que el login |
 | `POST /auth/login` | público | HU-01 | `{name, pin}` → `200 {user:{id,name,role,mustChangePin}}` + cookie; `401 INVALID_CREDENTIALS`; `423 LOCKED {retryAfterSeconds}`; `423 ACCOUNT_LOCKED_MANUAL`; `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}` (por IP, antes del hash); `403 USER_DISABLED` (solo si el PIN es correcto) |
-| `POST /auth/logout` | sesión | HU-01 | revoca la sesión |
+| `POST /auth/logout` | sesión | HU-01 | revoca la sesión; `204` con el mismo `Set-Cookie` de borrado que el `401` (§5) [2.1i] |
 | `GET /auth/me` | sesión (permitida con `mustChangePin`) | HU-01, HU-07 | `{user:{id, name, role, mustChangePin}, permissions:[…], session:{expiresAt}, serverTime, businessDate, localConfig}`. `session.expiresAt` = `sessions.expires_at` (caducidad absoluta de 12 h, ISO 8601 UTC): la app avisa 15 min antes (HU-01/CA-N06, aviso de barra) calculando con su desfase respecto a `serverTime`, no con el reloj de la tablet. No se expone la caducidad por inactividad (la lleva el cliente con su temporizador de 15 min). `localConfig` (configuración de instalación, §4.1) filtrado por rol: W `{tableCount}`, K `{delayThresholdMinutes}`, M ambos |
 | `POST /auth/pin` | sesión **con `mustChangePin = true`** | HU-07/CA-F04, CA-F09 | **Solo el cambio obligatorio del PIN provisional** (ronda 1.1f: ninguna historia pide el cambio voluntario; un PIN que se sospecha visto lo restablece el encargado con `reset-pin`). Con `mustChangePin = false` → `403 FORBIDDEN` sin verificar nada (no suma a ningún contador). `{currentPin, newPin}` → `204`; pone `must_change_pin = false`; revoca las demás sesiones del usuario; única ruta (con `/auth/me` y logout) permitida con `mustChangePin`. `currentPin` pasa por `verifyPin` (SEC-016): `403 PIN_INVALID` (incorrecto; no `401`, la sesión sigue válida); `423 LOCKED {retryAfterSeconds}`; `423 ACCOUNT_LOCKED_MANUAL` (al llegar a 20 fallos: todas las sesiones del usuario, incluida esta, quedan revocadas); `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}` (solo por IP, antes del hash; sin límite por sesión, T-20); `400` si `newPin` incumple las reglas de PIN. El resto de rutas con `mustChangePin` → `403 PIN_CHANGE_REQUIRED` (§5) |
-| `POST /session/activity` | sesión | HU-01 | latido de interacción (como mucho 1/min si hay toques sin otras peticiones) |
+| `POST /session/activity` | sesión | HU-01 | latido de interacción (como mucho 1/min si hay toques sin otras peticiones); `204`. El cliente nunca lo marca pasivo; si no pudo enviarse por falta de red y hubo toques, lo envía al recibir `hello`, antes de los *snapshots* (§7, SEC-030) |
 | `GET /events` | sesión | HU-02..HU-06 | flujo SSE (§6) |
 | `GET /menu` | W, K, M | HU-02, HU-05 | categorías y productos activos ordenados, con `available` (K sin precio) |
 | `PATCH /products/:id/availability` | W, M | HU-05 | `{available}` |
@@ -1183,7 +1286,8 @@ las ve el usuario. Se acepta la propuesta de Testing (`tests/README.md` §5):
   un reinicio de `app`) y **cada pantalla montada** pide su snapshot (P-05:
   `GET /kitchen/queue`; P-02: `GET /orders/floor` + `GET /payments/today`;
   las que muestran productos: `GET /menu`) y lo **reemplaza** por completo. No
-  hay snapshot global de la *layout* (§5.2: "Acceso denegado" no carga datos). Los eventos que lleguen durante la carga se
+  hay snapshot global de la *layout* (§5.2: "Acceso denegado" no carga datos).
+  Todas estas recargas van con `X-Activity: passive` (§7, SEC-030). Los eventos que lleguen durante la carga se
   aplican si su `version` es mayor que la del snapshot. No se usa
   `Last-Event-ID`: el estado completo es pequeño (≤ decenas de pedidos).
 - **Orden y consistencia:** se publica tras el `COMMIT`; el cliente descarta los
@@ -1244,8 +1348,37 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
   efecto en la siguiente petición (HU-07), y la desactivación además revoca
   sesiones y cierra el flujo SSE al instante.
 - **Inactividad 15 min (HU-01) [2.1c, T-37]:** cuenta como actividad
-  cualquier petición REST con sesión válida salvo `POST /telemetry` (y no el
-  flujo SSE ni sus `ping`), más `POST /session/activity`.
+  cualquier petición REST con sesión válida salvo `POST /telemetry`, las
+  marcadas como pasivas (abajo, SEC-030) y el flujo SSE con sus `ping`; más
+  `POST /session/activity`.
+  - **Peticiones pasivas [2.1i, SEC-030]:** una petición con la cabecera
+    `X-Activity: passive` (valor exacto `passive` en minúsculas; cualquier
+    otro valor o la ausencia de la cabecera = activa, sin error) pasa por
+    todas las comprobaciones de sesión (revocada, 12 h, 15 min) igual que
+    cualquier otra, pero **no** actualiza `last_activity_at`. Regla uniforme
+    en servidor para todas las rutas y métodos, sin lista de rutas: la
+    cabecera solo puede **restar** actividad, así que no hace falta confiar en
+    ella. Un cliente que lo marque todo como pasivo solo acorta su propia
+    sesión (caduca a los 15 min de su última petición activa o del login); uno
+    que no marque nada vuelve al comportamiento anterior, acotado por la
+    caducidad de 12 h y por el temporizador del cliente (riesgo residual que
+    ya aceptó SEC-030). La barra con flujo abierto no cambia (está exenta de
+    la inactividad). Sin CORS (mismo origen), la cabecera no añade
+    *preflight*; Caddy la reenvía tal cual.
+  - **Qué marca el cliente como pasivo** (un único cliente HTTP en
+    `apps/web/src/api/` con la opción `{ passive: true }`, que añade la
+    cabecera): toda petición que **no** nace de un gesto del usuario
+    (toque, tecla, envío de formulario o navegación que él inicia), es
+    decir, la que dispara el código por sí solo: `GET /auth/me` siempre
+    (arranque de la app, `hello`, `session.updated`, `403 FORBIDDEN` de §5.2);
+    los *snapshots* que una pantalla montada pide al recibir `hello` o al
+    reconectar (incluida la reconexión forzada por el vigilante de 5 s); la
+    recarga por cambio de `businessDate` en el `ping` y por `menu.changed`; y
+    cualquier recarga por temporizador. Son **activas**: lo que hace un
+    *handler* de un gesto (incluida la carga de la pantalla a la que el
+    usuario navega y los reintentos automáticos de una acción suya, §9) y
+    `POST /session/activity`. El login crea la sesión con
+    `last_activity_at = now`.
   - **Regla exacta**: con `now = clock.now()`, la sesión está caducada por
     inactividad si `now >= last_activity_at + 15 min` (a los 14 min 59 s
     sigue viva; a los 15 min 0 s, `401 UNAUTHENTICATED` con
@@ -1273,6 +1406,30 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
     ordenado de los flujos) no deje a la barra fuera al reconectar. El
     middleware, para `kitchen` con flujo abierto, no aplica la regla de
     inactividad (sí la de 12 h).
+  - **Escrituras del *hub* acotadas [2.1i, condiciones de la 2.1f]:** el
+    *hub* lleva, por sesión `kitchen`, el número de flujos abiertos; la
+    sesión está en la lista mientras sea ≥ 1. Las dos escrituras usan la
+    hora del `Clock` (`$now`, nunca `now()` de SQL) y la misma condición:
+
+    ```sql
+    UPDATE sessions s SET last_activity_at = GREATEST(s.last_activity_at, $now)
+    FROM users u
+    WHERE s.id = ANY($ids) AND u.id = s.user_id
+      AND u.role = 'kitchen' AND u.active
+      AND s.revoked_at IS NULL AND s.expires_at > $now
+    ```
+
+    (a) **Al cerrarse un flujo** de una sesión de la lista: `$ids = [id]`;
+    si era su último flujo, la sesión sale de la lista en el mismo paso
+    síncrono, antes de lanzar la escritura. (b) **Temporizador** cada
+    `kitchenActivityIntervalMs` (por defecto 60 s, §2.1, T-43): `$ids` es una
+    copia de la lista tomada en ese instante; si está vacía no se escribe.
+    Así ninguna de las dos resucita una sesión revocada o caducada, ni se
+    aplica a un encargado o a un usuario que dejó de ser barra (la
+    condición sobre `users` cubre la carrera con un cambio de rol, que
+    además cierra el flujo, ADR-004), y `GREATEST` no retrocede la marca. Un
+    flujo cerrado por `session.revoked` no escribe nada (`revoked_at` ya no es
+    nulo).
   - El cliente también cierra la pantalla al llegar a 15 min sin interacción
     (aviso a los 14 min) con su propio temporizador.
 - **Caducidad absoluta (SEC-004, RS-13, T-36):** `expires_at = created_at +
@@ -1548,7 +1705,7 @@ cualquiera de las dos falla. Los nombres coinciden con
 | `DELAY_THRESHOLD_MINUTES` | no | entero 1–60 | `10` | §4.1 |
 | **`SESSION_MAX_HOURS`** (nueva) | no | **entero 1–12** | **`12`** | caducidad absoluta de las sesiones nuevas (§7, SEC-004). Mayor que 12, menor que 1, decimal o no numérica → no arranca (RS-13). No se expone en `localConfig`: el cliente ya recibe `session.expiresAt` |
 | `PUBLIC_ORIGIN` (nueva) | no | origen URL exacto `esquema://host[:puerto]`, sin ruta ni barra final | **obligatoria** (sin valor por defecto) | `Origin` aceptado (RS-24), p. ej. `https://caja.local:8443`; en DEV, el origen del servidor Vite |
-| `TRUSTED_PROXIES` (nueva) | no | lista separada por comas de IP o CIDR; vacía = ninguna | vacía | `trustProxy` de Fastify: solo de esas direcciones se acepta `X-Forwarded-For` (RS-06, SEC-003). En TESTING/DEMO/PROD, la IP (o la subred interna mínima) de `proxy`; en DEV, vacía (no hay Caddy) |
+| `TRUSTED_PROXIES` (nueva) | no | lista separada por comas, 1–4 elementos, cada uno IP literal o CIDR ≥ /24 (IPv4) o ≥ /120 (IPv6); vacía o ausente = ninguna. Reglas exactas abajo (SEC-029) | vacía | `trustProxy` de Fastify (*array* validado, §2.1): solo de esas direcciones se acepta `X-Forwarded-For` (RS-06, SEC-003). En TESTING/DEMO/PROD, **la IP única** de `proxy` (p. ej. `10.89.240.2`); un CIDR solo para una red dedicada `proxy`↔`app`; en DEV, vacía (no hay Caddy) |
 | `LOG_LEVEL` | no | `fatal`…`trace` | `info` | pino |
 | `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_NAME`, `DATABASE_USER` | no | — | obligatorias | conexión (`app_rw` en `app`; `app_owner` en `migrate`) |
 | `DATABASE_PASSWORD_FILE` | **sí** (fichero) | ruta | obligatoria | contraseña del rol |
@@ -1560,6 +1717,60 @@ cualquiera de las dos falla. Los nombres coinciden con
   `BUSINESS_TIMEZONE`. `TZ=UTC` del contenedor no afecta a la lógica.
 - `parseSettings` es lo que prueba el unitario de RS-13 (sin secretos ni
   ficheros). `buildApp` usa la misma validación sobre `AppDeps` (§2.1).
+- **Forma del resultado [2.1i, T-38]** (los nombres de `AppDeps`, para que
+  `main.ts` pase los campos sin traducir):
+
+  ```ts
+  export interface Settings {
+    host: string; port: number; metricsPort: number; logLevel: string;
+    publicOrigin: string;
+    trustedProxies: string[];                       // ya validado; [] si vacía
+    installation: { tableCount: number; delayThresholdMinutes: number };
+    sessionMaxHours: number;                        // siempre presente (12 por defecto)
+    database: { host: string; port: number; database: string; user: string };  // sin contraseña
+  }
+  export interface Config extends Omit<Settings, 'database'> {
+    database: DatabaseDeps;                         // con la contraseña leída de DATABASE_PASSWORD_FILE
+    pinPepper?: Buffer;                             // si PIN_PEPPER_FILE está definida
+    initialManager?: { name: string; pin: string }; // si están las dos INITIAL_MANAGER_*_FILE
+  }
+  export class ConfigError extends Error { readonly variable: string }
+  export function parseSettings(env: Record<string, string | undefined>): Settings;
+  export function loadConfig(env?: Record<string, string | undefined>): Config; // por defecto process.env
+  ```
+
+  Cada punto de entrada exige lo que necesita: `main.ts` y
+  `create-initial-manager` fallan con `ConfigError('PIN_PEPPER_FILE')` si
+  falta `pinPepper`; `create-initial-manager`, si falta `initialManager`.
+  `ConfigError.message` contiene el nombre de la variable y nunca su valor.
+- **Reglas de `TRUSTED_PROXIES` [2.1i, SEC-029]** (función pura
+  `parseTrustedProxies` interna de `config.ts`, la misma que usa `buildApp`
+  sobre cada elemento de `trustedProxies`):
+  1. Ausente o cadena vacía `""` → `[]`. Cualquier otro valor se parte por
+     `,` **sin recortar espacios**.
+  2. Entre 1 y 4 elementos (una lista larga de /24 equivaldría a un rango
+     amplio). Más de 4 → error.
+  3. Cada elemento, tal cual, debe ser uno de:
+     - **IPv4 literal**: cuatro números decimales 0–255 separados por `.`,
+       sin ceros a la izquierda (`010.0.0.1` no);
+     - **IPv6 literal**: `net.isIPv6(x) === true`, sin `%zona` ni corchetes;
+     - **CIDR**: una de las dos anteriores + `/` + prefijo decimal sin ceros a
+       la izquierda, **24–32** para IPv4 y **120–128** para IPv6 (en la
+       IPv6 con IPv4 incrustada, `::ffff:a.b.c.d/n`, se mide como IPv6). No
+       se exige que los bits de host sean cero (`proxy-addr` aplica la
+       máscara).
+  4. Por tanto se rechazan, entre otros: elementos vacíos (`a,`, `,a`,
+     `a,,b`), con espacios (`" a"`, `"a, b"`), nombres de `proxy-addr`
+     (`loopback`, `linklocal`, `uniquelocal`), nombres de host, `true`/
+     `false`, números de saltos (`1`, `2`), prefijos cortos (`0.0.0.0/0`,
+     `::/0`, `10.0.0.0/8`, `fd00::/64`) y prefijos fuera de rango o mal
+     escritos (`/33`, `/129`, `/`, `/024`).
+  5. **Ante cualquier error, no arranca:** `parseSettings` lanza
+     `ConfigError` con `variable = 'TRUSTED_PROXIES'` y un mensaje con la
+     posición del elemento (1, 2…) y la regla incumplida, nunca el valor;
+     `main.ts` lo registra y termina con código 1 como el resto de errores
+     de configuración. Nunca se ignora un elemento inválido ni se cae a
+     `trustProxy: true`.
 
 ## 11. Observabilidad (puntos de enganche)
 
@@ -1716,3 +1927,23 @@ son detalles de contrato dentro de ADR-001, ADR-005 y ADR-008. Sin ADR nuevo.
 | T-31 (Testing y UX, baja) | Rutas `/`, `/pedidos`, `/cola`, `/menu`, `/personal`, `/resumen` (las de Testing) con guarda por permiso; "Acceso denegado" dentro de la *layout* sin montar la pantalla ni pedir sus datos; los *snapshots* los pide cada pantalla montada. En HU-01 se crean las cinco rutas, con Menú, Personal y Resumen vacías | §5.2, §6 |
 | T-27 (decisión del humano) | `BEGIN ISOLATION LEVEL READ COMMITTED` **explícito** en cierre, cobro, anulación y cancelación, con un único helper `withCashClosingLock` (`setIsolationLevel('read committed')` de Kysely). Lo implementa el Developer con HU-08 (cobro y anulación con HU-04, cancelación con HU-06, si llegan antes) | §4.4, §9 |
 | `session.revoked` | El evento lleva `reason` (mismos valores que `revokedReason`), para el banner de P-01 | §6 |
+
+### 17.1 Tarea 2.1i (Etapa 2, 2026-11-24): hallazgos de la 2.1f (Cybersecurity) y de la 2.1e (Testing)
+
+Ninguna cambia un ADR: son detalles dentro de ADR-001, ADR-004 y ADR-005.
+Sin ADR nuevo.
+
+| Origen | Decisión | Dónde |
+|---|---|---|
+| SEC-029 (media) | **Aceptado tal cual y concretado.** `TRUSTED_PROXIES`: ausente/`""` → `[]`; si no, 1–4 elementos separados por `,` sin recortar; cada uno IPv4 literal sin ceros a la izquierda, IPv6 literal (`net.isIPv6`, sin zona) o CIDR con prefijo 24–32 (IPv4) / 120–128 (IPv6). Se rechazan vacíos, espacios, nombres (`loopback`, `linklocal`, `uniquelocal`, hosts), `true`, números de saltos y prefijos cortos o mal escritos. Error → `ConfigError('TRUSTED_PROXIES')` sin el valor y no arranca. `buildApp` valida igual `trustedProxies` y pasa a Fastify el *array* o `false`. Añadido (no pedido por SEC-029): tope de 4 elementos, para que una lista de /24 no equivalga a un rango amplio | §2.1, §10.1 |
+| SEC-030 (baja) | **Aceptado.** Cabecera `X-Activity: passive` (valor exacto): se hacen todas las comprobaciones de sesión pero no se escribe `last_activity_at`. Regla uniforme en servidor para todas las rutas, porque la cabecera solo resta. El cliente la pone en `GET /auth/me`, en los *snapshots* por `hello`/reconexión, en las recargas por `businessDate`/`menu.changed` y por temporizador; nunca en acciones del usuario ni en `POST /session/activity`, que se reenvía al reconectar si hubo toques sin red. Si un cliente lo marca todo como pasivo, solo acorta su propia sesión; si no marca nada, queda como antes (12 h + temporizador del cliente) | §5.1, §6, §7 |
+| 2.1f: `search_path` | **Aceptado.** `options: '-c search_path=public'` en todo *pool* creado desde `DatabaseDeps` (app, migrate, comandos). Como parámetro de la conexión, prevalece sobre `ALTER DATABASE/ROLE … SET` | §2.1 |
+| 2.1f: borrar la cookie en el `401` | **Aceptado.** Todo `401 UNAUTHENTICATED` de una petición con `__Host-sid` (cualquier motivo, también token desconocido o mal formado) lleva el mismo `Set-Cookie` de borrado; sin cookie en la petición, ninguno. El logout también la borra. El cliente aborta las peticiones en curso al primer `401`, para que una respuesta tardía no borre la cookie de un login nuevo | §5, §5.1 |
+| 2.1f: `details` del `401` y token desconocido | **Aceptado.** Esquema `.strict()` `UnauthenticatedDetails` (`reason` y `revokedReason` de la lista cerrada, nada más). Sin cookie, con token desconocido o mal formado: mismo cuerpo salvo `requestId`. Tiempo: con cookie, siempre SHA-256 + una consulta por `token_hash` | §5 |
+| 2.1f: escrituras del *hub* | **Aceptado.** Una sola sentencia para el cierre del flujo y para el temporizador, con `GREATEST`, `$now` del `Clock`, `revoked_at IS NULL`, `expires_at > $now` y `users.role = 'kitchen' AND users.active`, sobre la lista de sesiones con flujo abierto en ese instante (contador de flujos por sesión) | §7 |
+| T-40 (media; RS-18 de Cybersecurity) | **Opción (a): `404 NOT_FOUND` para todos.** Los hooks de guarda (`Origin`, sesión, PIN provisional, permiso) no hacen nada si `request.is404` (un solo helper); `request_id` sí corre. Bajo `/api/` responde `404` sin `details`, sin BD y sin `Set-Cookie`, con o sin sesión, rol u `Origin`. RS-18 no cambia. Que las rutas existen no es un secreto (están en el *bundle* de la SPA), y así no se toca la BD ni se renueva la sesión con rutas inexistentes. **Pendiente:** que Cybersecurity lo confirme como dueña de RS-18 | §5 |
+| T-38 (baja) | **Aceptada la propuesta de Testing:** `Settings` con los nombres de `AppDeps` (`installation.{…}`, `database.{host, port, database, user}` sin contraseña); `Config` de `loadConfig(env?)` añade `database: DatabaseDeps`, `pinPepper?` e `initialManager?`; `ConfigError.variable` exportado | §3.1, §10.1 |
+| T-39 (baja) | El `403 FORBIDDEN` de `POST /auth/pin` con `mustChangePin = false` va en el hook de permiso (`onRequest`, `config.provisionalPinOnly`): **antes** del analizador de cuerpo y de zod, y sin `verifyPin` | §5 |
+| T-41 (baja; también infrastructure) | La lógica del envoltorio pasa a `runCommand(name, argv, io)` (`@mi-app/api/commands/cli`, nunca lanza, devuelve 0/1/2). Scripts `dist/commands/create-initial-manager.js` y `dist/commands/unlock-user.js <nombre>`. Prueba en proceso en integración (códigos y stderr sin PIN) y un humo por comando en la suite `containers` con un servicio efímero que añade Infrastructure a `compose.test.yaml` | §2.1, §3.1 |
+| T-42 (baja) | Subruta `@mi-app/web/pin-messages`: `pinRuleMessage(rule: string): string`, función total (regla desconocida → texto genérico de UX), en `apps/web/src/features/pin/pin-messages.ts` | §3.1 |
+| T-43 (baja) | **Aceptado el intervalo en `AppDeps`:** `kitchenActivityIntervalMs?` (entero 10–60000, por defecto 60000; no es variable de entorno). El valor escrito sigue saliendo del `Clock`, así que el test usa un intervalo corto + `FakeClock`. El reinicio brusco de `app` con la cola abierta se sigue verificando en la Etapa 3 | §2.1, §7 |
