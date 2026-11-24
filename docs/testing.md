@@ -12,13 +12,19 @@
 > `docs/permisos.md`, `docs/infraestructura.md` (§9 TESTING, §12.5 IP de
 > origen) y `docs/logging.md` (rondas 1.6c y 1.6e: §4.3 (b), §4.5, §6.3, §6.6).
 >
+> **1.7i (2026-11-24):** HU-08/CA-F15 nuevo y CA-F05, CA-F07 precisados (PO
+> 1.7f): casos de día cerrado con `FakeClock` en §5.2.3, interpretaciones
+> I-13..I-16 (§4.5), matriz y recuento (207 criterios) actualizados;
+> `TX-MON-01` ajustado a la decisión de Infrastructure sobre T-22
+> (`docs/infraestructura.md` §11.3). Hallazgos T-23..T-25 en §14.4.
+>
 > **1.6d:** interpretaciones confirmadas por el PO (§4.5); casos nuevos de
 > HU-01/CA-F12, CA-F13, HU-03/CA-F09, CA-N05 y HU-05/CA-N03 (lista cerrada);
 > verificación de PIN única (`verifyPin`, SEC-016, §5.2.1); RS-46;
 > configuración de instalación (§5.2.2); redacción recursiva de logs y
 > retención de Loki (§5.10). Códigos de error alineados con
 > `docs/arquitectura.md` §5/§5.1 (§8.7, §10). Cierre de T-14..T-17 y hallazgos
-> T-19..T-22 en §14.
+> T-19..T-22 en §14.3.
 >
 > **1.6b:** la matriz (§10) usa los **IDs estables** del PO (`HU-xx/CA-xnn`);
 > la numeración provisional de la versión 1.6 queda retirada. El cierre de
@@ -172,10 +178,11 @@ Testing no numera criterios: solo los cita.
   **retirada**: no coincidía con los IDs estables (p. ej. la orientación de
   tablet era `HU-02/CA-N04` provisional y ahora es `HU-02/CA-N05`; la
   accesibilidad queda sola en `CA-N04`). No hay tests escritos con ella.
-- Recuento a 2026-11-23 (tras la ronda 1.1f): HU-01 23 · HU-02 35 · HU-03 34 ·
-  HU-04 34 · HU-05 16 · HU-06 27 · HU-07 16 · HU-08 21 = **206 criterios** en
-  el MVP (+2 de la 1.1f: HU-01/CA-F12 y CA-F13; HU-09, con 14, queda fuera;
-  sus IDs no se retiran por si se recupera),
+- Recuento a 2026-11-24 (tras la ronda 1.7f): HU-01 23 · HU-02 35 · HU-03 34 ·
+  HU-04 34 · HU-05 16 · HU-06 27 · HU-07 16 · HU-08 22 = **207 criterios** en
+  el MVP (+2 de la 1.1f: HU-01/CA-F12 y CA-F13; +1 de la 1.7f: HU-08/CA-F15;
+  ningún retirado; HU-09, con 14, queda fuera; sus IDs no se retiran por si
+  se recupera),
   sin huecos ni duplicados, y todas las referencias cruzadas `HU-xx/CA-xnn` de
   las historias apuntan a criterios que existen (comprobado con script).
 
@@ -223,7 +230,8 @@ allí y Testing ajusta el test; un test no se relaja por su cuenta. Verificado
 por Testing en la 1.6d (columna "Resultado PO"): la lectura vigente coincide
 con la que aplican los tests, salvo I-06, que se sustituye por la lista
 cerrada. I-11 e I-12 son nuevas (1.6d) y están pendientes de los hallazgos
-T-19 y T-20 (§14.3).
+T-19 y T-20 (§14.3). I-13..I-16 son nuevas (1.7i, HU-08 día cerrado) y están
+pendientes de T-23..T-25 (§14.4), salvo I-14, que sigue el wireframe vigente.
 
 | ID | Criterio | Resultado PO | Interpretación aplicada |
 |---|---|---|---|
@@ -239,6 +247,10 @@ T-19 y T-20 (§14.3).
 | I-10 | HU-04/CA-F23, HU-07/CA-N04 | Confirmada | Un `confirmPin` incorrecto cuenta como 1 fallo del encargado de la sesión (HU-01/CA-F06) y 1 del dispositivo (HU-01/CA-F11), igual que una autorización de HU-06. El límite adicional por sesión (5 fallos/10 min, `docs/seguridad.md` §6.1.4) es de Cybersecurity y **no** añade mensaje propio en las historias (ver T-20) |
 | I-11 | HU-02/CA-F01 | Nueva, pendiente de T-19 (SE) | Mesa entera en 1..99 pero > `TABLE_COUNT` (21..99 con 20 mesas) → `422 TABLE_OUT_OF_RANGE` (`docs/arquitectura.md` §4.1, §5.1). Mesa fuera del dominio del campo (0, −1, 100, 1,5, `"7"`) → `400` de validación con `path: ["tableNumber"]`, por la regla general de §5 ("`400` validación con campo y regla") y el `CHECK BETWEEN 1 AND 99`. Si el SE decide `422` también para 0, se cambia el test |
 | I-12 | HU-01/CA-F12 (c) y (d), HU-04/CA-F23, HU-07/CA-N04, HU-07/CA-F04 | Nueva, pendiente de T-20 (SE, Cybersecurity) | Mientras la cuenta del titular de la sesión está en bloqueo temporal, toda reconfirmación (`confirmPin`) o `currentPin` de esa sesión recibe `423 LOCKED` ("Cuenta bloqueada. Espera X min"), **también** cuando la misma sesión acumula 5 fallos (lo que la arquitectura respondería con `429` por el límite de sesión, paso 2 de `verifyPin`); y al terminar el bloqueo se puede volver a intentar (CA-F12 (d)). Los tests siguen la historia; si la arquitectura no cambia, fallarán y se reportan |
+| I-13 | HU-08/CA-F05, CA-F07, CA-F15 | Nueva (1.7i), pendiente de T-23 (SE 1.7h, PO para la redacción) | Reparto por la hora del cierre guardado, como en el borrador de `docs/arquitectura.md` §4.4 (1.7h): lo registrado **antes** de `closed_at` (`<`) está en las cifras del cierre; lo registrado **en o después** de `closed_at` (`>=`), en "Cambios tras el cierre". Sea cual sea el mecanismo, cada cobro, anulación y cancelación del día está **exactamente en uno** de los dos sitios: nunca en los dos ni en ninguno, tampoco si el cobro y el cierre son simultáneos (§5.2.3, C-08 y C-09) |
+| I-14 | HU-08/CA-F15 (d), CA-F09, CA-F13 | Nueva (1.7i), coincide con `docs/ux/wireframes/09-resumen-dia.md` | Cuando se anula un cobro registrado tras el cierre, sale de "Cobros tras el cierre" de la fila de quien cobró y cuenta en "Cobros anulados" de la sección en la fila del **encargado que anuló**, con "No aplica (encargado)" (como en el desglose, CA-F13), por el importe del cobro completo. Si se anula en un día posterior, cuenta en la sección del día del cobro original (CA-F09), no en la del día de la anulación |
+| I-15 | HU-08/CA-F03 en un día cerrado | Nueva (1.7i), pendiente de T-25 (PO); coincide con el borrador 1.7h (`openOrders` siempre actual) | El aviso "Hay N pedidos sin cobrar" **no** es una cifra del cierre guardado: se calcula al consultar (CA-F03 "al consultar el resumen"). Un cobro tras el cierre lo reduce en 1 y anular ese cobro lo vuelve a subir (el pedido se reabre, HU-04/CA-F16) |
+| I-16 | HU-08/CA-F05 (cancelaciones), CA-F11 | Nueva (1.7i), pendiente de T-24 (PO); coincide con el borrador 1.7h (`cancelled_at` en `[closed_at, fin del día)`) | "Pedidos de ese día cancelados después del cierre" = pedidos **cancelados** ese día después del cierre, sea cual sea el día del pedido (CA-F11 cuenta por día de cancelación), igual que CA-F15 hace con los cobros. Un pedido del día D cancelado en D+1 cuenta en D+1 y no aparece en la sección de D |
 
 ## 5. Tipos de prueba
 
@@ -493,6 +505,54 @@ formulario de Personal) se pierde y la siguiente acción lleva a P-01. Después,
   `422 TABLE_OUT_OF_RANGE`; 0, −1, 100, 1,5 y `"7"` → `400` con
   `path: ["tableNumber"]` (pendiente de T-19). Ninguno crea pedido ni consume
   número del día. La rejilla de la UI ofrece exactamente 1..20.
+
+#### 5.2.3 Día cerrado y cambios tras el cierre (HU-08/CA-F05, CA-F07, CA-F13, CA-F14, CA-F15) [1.7i]
+
+`tests/integration/api/HU-08-dia-cerrado.int.test.ts`, con `buildApp(deps)`,
+`FakeClock` (T-10) y la BD real del archivo. El reloj fija la **hora del
+cierre** y la de **cada cobro, anulación y cancelación**; no se fabrica nada en
+la BD salvo los pedidos de días anteriores (§8.1). Día de referencia
+D = 2026-11-20 en `Europe/Madrid`; cierre guardado a las 23:10:00 por Marta
+(encargado). Antes del cierre se crean cobros en efectivo y tarjeta, una
+cancelación con autorización, una sin ella y una anulación, y al menos dos
+pedidos de D sin cobrar.
+
+**Oráculo independiente.** Tras el cierre se guarda la respuesta completa de
+`GET /reports/daily?date=D` como **S0**: tarjetas de CA-F01, efectivo
+esperado, efectivo contado y diferencia (CA-F04), desglose de CA-F13 y
+productos vendidos (CA-F02). "No cambia el cierre" se comprueba como igualdad
+profunda con S0 de esos bloques (no solo de los totales) y con la fila de
+`cash_closings` leída antes y después (CA-N03). La sección aparte se compara
+con filas esperadas escritas a mano en el test (usuario, autorizador, número e
+importe por columna), no con lo que devuelva la propia API.
+
+| Caso | Reloj (`FakeClock`) y acción | Resultado esperado | Criterios |
+|---|---|---|---|
+| C-01 | Cierre a D 23:10:00 | Respuesta = S0; sección "Cambios tras el cierre" presente y vacía (texto de día sin cambios del wireframe vigente) | CA-F05, CA-F04 |
+| C-02 | D 23:20:00: la camarera Lucía cobra en efectivo un pedido de D (9,20 €); D 23:25:00: Pedro cobra con tarjeta otro pedido de D (4,50 €) | Bloques de S0 **iguales** (total, efectivo, tarjeta, efectivo esperado, diferencia, desglose CA-F13 y productos vendidos). Sección: "Cobros tras el cierre" Lucía · "Sin autorización" · 1 · 9,20 € y Pedro · "Sin autorización" · 1 · 4,50 €; fila "Total" 2 · 13,70 €. `GET /payments/:id` → `businessDate` = D. El aviso de CA-F03 baja en 2 (I-15) | CA-F15 (a)(b)(c), CA-F08 |
+| C-03 | D+1 00:10:00: se consulta D+1 (sin cierre) | Los cobros de C-02 **no** cuentan en D+1 (no se trasladan) | CA-F15 (a) |
+| C-04 | D 23:30:00: Marta anula el cobro de Lucía de C-02 | S0 igual. Sección: la fila de Lucía ya no tiene "Cobros tras el cierre" ("—" o desaparece si no le queda nada); Marta · "No aplica (encargado)" · "Cobros anulados" 1 · 9,20 € (I-14); "Total" de "Cobros tras el cierre" 1 · 4,50 €. El pedido se reabre: aviso de CA-F03 +1 | CA-F15 (d), CA-F09, CA-F13 |
+| C-05 | D 23:40:00: Pedro vuelve a cobrar el pedido reabierto en C-04 | S0 igual. Sección: Pedro · "Sin autorización" · "Cobros tras el cierre" 2 · 13,70 €; Marta sigue con 1 · 9,20 € en anulados. Solo el cobro vigente aparece como cobro (CA-F10) | CA-F15, CA-F10 |
+| C-06 | Pedido de D enviado a las 22:00 y sin cobrar al cerrar; D+1 00:05:00: se cobra | Cuenta en D+1 (CA-F01, CA-F02 de D+1; y en las cifras del cierre de D+1 si D+1 se cierra después); **no** aparece en la sección de D; S0 igual | CA-F15 (último párrafo), CA-F08 |
+| C-07 | Pedido de D−1 con cobro "Abierto" (fabricado en la BD de pruebas); D 23:20:00: se cobra | Aparece en "Cobros tras el cierre" de D en la fila de quien cobró; S0 igual; el resumen de D−1 (cerrado o no) no cambia y su sección no lo lista | CA-F15 (a)(c), CA-F08 |
+| C-08 | Bordes de la hora del cierre: cobros a D 23:09:59.999 y a D 23:10:00.001 (`FakeClock` en ms) y cierre a D 23:10:00.000; repetido con el cobro **y** el cierre en el mismo instante (reloj sin avanzar, cobro después del cierre en la secuencia) | 23:09:59.999 → en S0 (cifras y productos); 23:10:00.001 → en la sección. Mismo instante (cobro con `paid_at` = `closed_at`): en la sección (I-13, `>=`); en cualquier caso, **exactamente en uno** de los dos sitios | CA-F07, CA-F15, I-13 |
+| C-09 | Concurrencia: 20 `POST /payments` en paralelo con un `POST /reports/daily/D/closing` (pool real de la BD, 50 repeticiones) | En cada repetición: (suma de cobros en las cifras del cierre) + (suma de "Cobros tras el cierre") = suma de todos los cobros de D; ningún cobro en los dos ni en ninguno; efectivo esperado del cierre = suma de los cobros en efectivo que incluye (I-13, T-23) | CA-F07, CA-F15 (b) |
+| C-10 | Cobro de D registrado **antes** del cierre (D 22:30) y anulado después (D 23:30) | Sigue sumando en S0 como vigente (lo era al guardar); sección: "Cobros anulados" de Marta, "No aplica (encargado)". Remisión de CA-F05: es el caso original de 1.1, no cambia | CA-F05, CA-F07, CA-F13 |
+| C-11 | Cobro tras el cierre de D (D 23:20) anulado en D+1 09:00 | Cuenta en "Cobros anulados" de la sección de D (día del cobro original); no en los anulados de D+1 (I-14) | CA-F15 (d), CA-F09 |
+| C-12 | Cancelaciones tras el cierre: pedido de D cancelado a D 23:30 "Pendiente" (sin autorización) y otro "En preparación" autorizado por Marta; pedido de D−1 cancelado a D 23:35; pedido de D cancelado a D+1 00:15 | S0 igual. Sección de D: "Pedidos cancelados" en las filas de quien canceló con "Sin autorización" / "Marta", incluido el de D−1 (I-16); el cancelado en D+1 cuenta en D+1 y no en la sección de D | CA-F05, CA-F11, CA-F13 |
+| C-13 | CA-F07 en día cerrado con `dia-500` (§9.1), cierre a mitad de la tarde y cambios posteriores | Cifras guardadas = oráculo precalculado sobre los cobros con hora ≤ cierre y vigentes al cierre (no anulados, o anulados después); sección = oráculo de los cobros, anulaciones y cancelaciones posteriores; al céntimo | CA-F07, CA-F15 |
+| C-14 | Después de C-02..C-12 | Suma de las filas del desglose = tarjetas de pedidos cancelados y cobros anulados **del cierre guardado** (CA-F14 en día cerrado); la fila "Total" de la sección = suma de sus filas | CA-F14, CA-F13 |
+| C-15 | Cualquier día cerrado: `POST /reports/daily/D/closing` otra vez | `409`; `cash_closings` igual (CA-N03) | CA-F05, CA-N03 |
+
+Además: **E2E** (proyecto en serie, §9.3) del flujo cerrar D → cobrar un pedido
+abierto → ver la fila con el nombre, "Sin autorización" y "1 · 9,20 €" en
+"Cobros tras el cierre" y las tarjetas sin cambiar → anularlo → verlo en
+"Cobros anulados" de la sección. Como en la pila HTTP real el reloj es el del
+sistema (§8.1), el E2E usa "hoy" con el cierre guardado al principio del test.
+**Visual** (§5.4): día cerrado con las tres columnas de la sección en
+375/768/1440 px. **Accesibilidad**: axe sobre la sección (tabla con
+`<caption>` y `<th scope="col">`). **Rendimiento** (CA-N02): `dia-500`
+cerrado con la sección llena se mide igual que un día abierto (§5.6.1).
 
 ### 5.3 End-to-end (Playwright)
 
@@ -795,26 +855,42 @@ Mismo barrido sobre los logs de `proxy` y `db` en TESTING. Las métricas se
 leen de `/metrics` (puerto 9464, red interna del ejecutor) antes y después de
 cada caso, comparando el incremento.
 
-**`[TX-MON-01]` Retención de Loki en DEMO (`docs/logging.md` §6.6).** Antes de
-la Etapa 5 se comprueba que el compactor **borra** de verdad, no solo que la
-consulta sale vacía:
-1. Configuración desplegada: `compactor.retention_enabled: true`,
-   `retention_period: 168h` (DEMO) y **sin** `max_query_lookback` ni límite de
+**`[TX-MON-01]` Retención de Loki en DEMO (`docs/logging.md` §6.6;
+`docs/infraestructura.md` §11.3; T-22) [1.7i].** Antes de la puerta de la
+Etapa 4 se comprueba que el compactor **borra** de verdad, no solo que la
+consulta sale vacía. DEMO dura de 3 a 5 días laborables y no se alarga para
+esta prueba: Loki de DEMO usa `retention_period: 24h` (misma imagen y mismo
+`compactor` que PROD).
+0. **T0** = despliegue de DEMO (smoke de Testing, con tráfico real desde el
+   principio). En T0 Testing anota la hora y el recuento inicial de *chunks*
+   del volumen de Loki, sin root:
+   `podman unshare find "$(podman volume inspect <volumen de loki> --format '{{.Mountpoint}}')/chunks" -type f | wc -l`
+   (o el tamaño con `du -s`). **TX-MON-01 no se ejecuta antes de T0 + 30 h**
+   (24 h de retención + hasta 2 h de `max_chunk_age` + 2 h de
+   `retention_delete_delay` + ciclos de compactación y margen); si se
+   ejecutara antes, el resultado no vale y se repite.
+1. **Configuración desplegada** (se lee del contenedor de Loki en marcha, no
+   del repositorio): `compactor.retention_enabled: true`,
+   `retention_delete_delay: 2h`, `limits_config.retention_period: 24h`,
+   **sin** `retention_stream` y **sin** `max_query_lookback` ni otro límite de
    consulta que oculte datos antiguos (si lo hubiera, una consulta vacía no
    demostraría nada).
-2. Evidencia de ejecución: la métrica de Loki de última ejecución correcta de
-   la retención del compactor (`loki_compactor_apply_retention_last_successful_run_timestamp_seconds`
-   o la equivalente de la versión desplegada) es posterior a la fecha de
-   vencimiento + `retention_delete_delay` (2 h) + intervalo de compactación.
-3. Resultado: una consulta LogQL `{service="app"}` sobre un intervalo vencido
-   (más de 7 días + 2 h atrás) devuelve 0 líneas y los *chunks* de ese
-   intervalo ya no están en el volumen de Loki (recuento de objetos o tamaño
-   del directorio de *chunks* antes y después de la ejecución del compactor).
-4. Control: una consulta sobre un intervalo no vencido devuelve líneas.
-Requiere que DEMO lleve en marcha más de 7 días + 2 h con logs; si la Etapa 4
-dura menos, ver T-22. En PROD (30/90 días) no se espera al vencimiento: se
-comprueba la configuración desplegada (punto 1, con `retention_stream` de 90
-días para `category="security"`) en el smoke.
+2. **Evidencia 1, métrica del compactor:** la de última ejecución correcta de
+   la retención (`loki_compactor_apply_retention_last_successful_run_timestamp_seconds`
+   o la equivalente de la versión desplegada) es posterior a T0 + 24 h + 2 h
+   (`max_chunk_age`) + 2 h (`retention_delete_delay`).
+3. **Evidencia 2, *chunks* eliminados del volumen:** el recuento (o tamaño)
+   de *chunks* tomado con el mismo comando antes y después de esa ejecución
+   del compactor baja, y una consulta LogQL `{service="app"}` sobre las
+   primeras horas tras T0 (ya vencidas) devuelve 0 líneas.
+4. **Evidencia 3, consulta de control con datos:** la misma consulta sobre
+   las últimas 2 h devuelve líneas (prueba de que Loki recibe y responde, y de
+   que el 0 del punto 3 no es por falta de datos).
+Pasa solo si se cumplen las tres evidencias y el punto 1. **PROD:** no se
+espera al vencimiento; en el smoke de la Etapa 5 solo se comprueba la
+configuración desplegada (`retention_period: 720h`, `retention_stream` de
+`2160h` para `category="security"`, compactor con `retention_enabled: true`
+y sin `max_query_lookback`) y la retención de Prometheus.
 
 ## 6. Qué se ejecuta en cada etapa
 
@@ -823,7 +899,7 @@ días para `category="security"`) en el smoke.
 | **1 Planificación** | Esta estrategia; revisión de verificabilidad de criterios (hallazgos en `docs/estado.md`); cuando exista `compose.dev.yaml`, primera ejecución de `TX-CONT-01` sobre DEV | `containers` |
 | **2 Desarrollo** (por historia) | **Antes** de que el Developer empiece: tests de la historia (unitarios de reglas, integración, E2E, a11y, capturas) en rojo, revisados contra los criterios. Después, en cada entrega: | `unit` + `integration` + `e2e` de la historia **+ regresión completa de las historias anteriores** + `security` (matriz de autorización) + `containers` + `a11y` de las pantallas tocadas + capturas para UX |
 | **3 Testing** | Verificación completa sin asumir nada: todas las suites, rendimiento en las condiciones del supuesto 12 (§5.6.1), ZAP, regresión visual, mutación (`shared`), exploratorio con guiones (red, multidispositivo, sonido, reloj), revisión manual de lectores de pantalla, alertas de HU-01/CA-N05 con la pila de Monitoring. **Con el hardware de referencia** (si el cliente lo ha entregado, pregunta 7): HU-03/CA-U01 (medición física), CA-F09 y CA-F14 (sonido audible) y CA-N05 (pantalla encendida, §8.6), HU-02/CA-U05 en la tablet de referencia (§5.6.3). Entrega al PO la matriz con el resultado por criterio; el de los criterios de rendimiento es el de TESTING y es definitivo (I-08) | todas |
-| **4 Demo** | Smoke en DEMO; **observación** de los tiempos con dispositivos y Wi-Fi reales (§5.6.2: una desviación es un hallazgo, no bloquea por sí sola); verificación manual de sonido, pantalla encendida y legibilidad en la pantalla real de barra (HU-03/CA-U01, CA-F09, CA-F14, CA-N05: estos sí son vinculantes, I-08); RS-06 con dos dispositivos reales; retención de Loki (`TX-MON-01`, §5.10); apoyo a la prueba de usabilidad (UX) | `smoke`, `performance/realtime`, `TX-MON-01`, manual |
+| **4 Demo** | Smoke en DEMO; **observación** de los tiempos con dispositivos y Wi-Fi reales (§5.6.2: una desviación es un hallazgo, no bloquea por sí sola); verificación manual de sonido, pantalla encendida y legibilidad en la pantalla real de barra (HU-03/CA-U01, CA-F09, CA-F14, CA-N05: estos sí son vinculantes, I-08); RS-06 con dos dispositivos reales; retención de Loki (`TX-MON-01`, §5.10, no antes de T0 + 30 h); apoyo a la prueba de usabilidad (UX) | `smoke`, `performance/realtime`, `TX-MON-01`, manual |
 | **5 Producción** | Tras `terraform apply` aprobado y despliegue: smoke de PROD (no destructivo), `TX-CONT-01` y configuración de retención de Loki/Prometheus desplegada (§5.10, punto 1 de `TX-MON-01`) | `smoke`, `containers` |
 
 ## 7. Ejecución en el entorno TESTING efímero
@@ -1044,7 +1120,7 @@ para que los datos de las suites anteriores no influyan).
 | `base` | 2 encargados (PIN de 6 dígitos), 2 camareros, 1 barra, 1 desactivado, 1 encargado con PIN provisional, 1 usuario con bloqueo indefinido; 3 categorías, ~12 productos con precios que exponen errores de coma flotante (0,10 · 1,10 · 2,20 · 999,99), 1 agotado, 1 desactivado; 20 mesas | Integración, E2E |
 | `un-encargado` | Como `base` con un solo encargado activo | HU-06/CA-F12, HU-07/CA-F05 |
 | `menu-200` | 200 productos en 20 categorías | HU-05/CA-N03, rendimiento |
-| `dia-500` | 500 pedidos de un día con cobros en efectivo y tarjeta, cancelaciones con y sin autorización de 3 usuarios y 2 encargados, anulaciones (incluida una posterior al cierre) y pedidos abiertos; totales y desglose por usuario esperados precalculados de forma independiente | HU-08 (CA-F07, CA-F13, CA-F14, rendimiento) |
+| `dia-500` | 500 pedidos de un día con cobros en efectivo y tarjeta, cancelaciones con y sin autorización de 3 usuarios y 2 encargados, anulaciones y pedidos abiertos; **[1.7i]** variante cerrada: cierre guardado a media tarde y, después, cobros tras el cierre (de pedidos del día y del día anterior, alguno anulado y recobrado), anulaciones de cobros previos y cancelaciones; totales, desglose por usuario, cifras del cierre y sección "Cambios tras el cierre" esperados precalculados de forma independiente | HU-08 (CA-F05, CA-F07, CA-F13, CA-F14, CA-F15, rendimiento) |
 | `visual` | Datos fijos que reproducen los wireframes (pedidos #39–#45, mesa 7, "ANA", nota "leche de avena") | Capturas y regresión visual |
 
 - Se crean con **constructores** (`tests/fixtures/`) que usan la API pública
@@ -1078,7 +1154,7 @@ para que los datos de las suites anteriores no influyan).
   resumen del día van en un proyecto de Playwright **en serie** con su propia
   pila.
 
-## 10. Matriz de trazabilidad (IDs estables, 2026-11-23)
+## 10. Matriz de trazabilidad (IDs estables, 2026-11-24)
 
 Leyenda: **U** unitario · **I** integración (API + BD; con `FakeClock` cuando
 hay tiempo) · **R** tiempo real (SSE, integración) · **E** E2E · **V** visual ·
@@ -1316,23 +1392,24 @@ pantalla, teclado y zoom; axe no cubre todo WCAG).
 | ID | Criterio (resumen) | Tipos | Rev. |
 |---|---|---|---|
 | CA-F01 | Cifras de la fecha seleccionada (por defecto hoy) | I, E | 2026-11-23 |
-| CA-F08 | El cobro cuenta en el día del cobro (23:50 → 00:05) | U, I (FakeClock) | 2026-11-23 |
+| CA-F08 | El cobro cuenta en el día del cobro (23:50 → 00:05), también con el día del pedido ya cerrado (§5.2.3, C-06, C-07) | U, I (FakeClock) | 2026-11-24 |
 | CA-F09 | Cobro anulado: no suma; cuenta en "cobros anulados" del día original | I | 2026-11-23 |
 | CA-F10 | Recobrado: solo el cobro vigente suma, en su día | I (FakeClock) | 2026-11-23 |
 | CA-F11 | Cancelado: cuenta en el día en que se canceló | I (FakeClock) | 2026-11-23 |
-| CA-F13 | Cancelaciones y anulaciones por usuario y autorizador, nombres en texto | I (`dia-500`), E | 2026-11-23 |
-| CA-F14 | La suma del desglose coincide con los totales | I (`dia-500`) | 2026-11-23 |
+| CA-F13 | Cancelaciones y anulaciones por usuario y autorizador, nombres en texto; anulaciones con "No aplica (encargado)"; en día cerrado, las del cierre guardado y lo posterior en la sección aparte (§5.2.3, C-04, C-10, C-12, C-14) | I (`dia-500`, FakeClock), E | 2026-11-24 |
+| CA-F14 | La suma del desglose coincide con los totales; en día cerrado, con los del cierre guardado aunque haya cambios posteriores (§5.2.3, C-14) | I (`dia-500`, FakeClock) | 2026-11-24 |
 | CA-F02 | Productos vendidos por importe descendente | I, E | 2026-11-23 |
-| CA-F03 | "Hay N pedidos sin cobrar" con acceso a la lista | I, E | 2026-11-23 |
+| CA-F03 | "Hay N pedidos sin cobrar" con acceso a la lista; en día cerrado, calculado al consultar (§5.2.3, C-02, C-04) ⚠ I-15, T-25 | I, E | 2026-11-24 |
 | CA-F04 | Efectivo contado → diferencia; guardar el cierre | U, I, E | 2026-11-23 |
-| CA-F05 | Día cerrado: cifras del cierre; anulados posteriores aparte | I, E | 2026-11-23 |
+| CA-F05 | Día cerrado: cifras del cierre (S0); anulados y cancelados posteriores en "Cambios tras el cierre" con usuario y autorizador; remite a CA-F15 para los cobros (§5.2.3, C-01, C-10, C-12, C-15) ⚠ I-16, T-24 | I (FakeClock), E, V, A | 2026-11-24 |
+| CA-F15 | Cobro tras el cierre del mismo día: cuenta en ese día, no cambia cifras, efectivo esperado, diferencia, desglose ni productos; "Cobros tras el cierre" con el usuario y "Sin autorización"; anulado → "Cobros anulados" de la sección; pedido de D cobrado en D+1 cuenta en D+1 y no en la sección de D; pedido de D−1 cobrado en D tras el cierre sí aparece en la de D (§5.2.3, C-02..C-09, C-11) ⚠ I-13, I-14, I-15, T-23, T-25 | I (FakeClock), E, V, A, P (`dia-500`) | 2026-11-24 |
 | CA-F06 | Consultable cualquier día entre hoy y 90 días atrás | I (FakeClock), E | 2026-11-23 |
 | CA-F12 | Más de 90 días: no seleccionable (los datos siguen en BD) | I (FakeClock), E | 2026-11-23 |
-| CA-F07 | Totales al céntimo con los cobros vigentes | I (`dia-500`) | 2026-11-23 |
+| CA-F07 | Totales al céntimo con los cobros vigentes; en día cerrado, cifras guardadas = cobros hasta la hora del cierre vigentes al guardarlo, y lo posterior se comprueba en la sección (§5.2.3, C-08, C-09, C-13) ⚠ I-13, T-23 | I (`dia-500`, FakeClock) | 2026-11-24 |
 | CA-U01 | Resumen de hoy en 1 toque | E (contador) | 2026-11-23 |
 | CA-U02 | 2 decimales y €; negativo con "-" y "Falta" | U, E, A | 2026-11-23 |
 | CA-N01 | Solo el encargado ve el resumen y guarda el cierre | S | 2026-11-23 |
-| CA-N02 | Pantalla con todas las cifras ≤ 2 s p95 con 500 pedidos | P (Playwright), D | 2026-11-23 |
+| CA-N02 | Pantalla con todas las cifras ≤ 2 s p95 con 500 pedidos; también `dia-500` cerrado con la sección "Cambios tras el cierre" llena | P (Playwright), D | 2026-11-24 |
 | CA-N03 | Cierre registrado e inmodificable | I (BD, RS-32) | 2026-11-23 |
 | CA-N04 | No se borra nada por antigüedad | I (FakeClock a +400 días: los datos siguen), S (RS-32: `app_rw` sin `DELETE`) | 2026-11-23 |
 | CA-N05 | WCAG 2.2 AA | A, M | 2026-11-23 |
@@ -1363,7 +1440,7 @@ la opción "Ajustes" no aparece en el menú del encargado (§5.2.2).
 | TX-CFG-01 | `TABLE_COUNT` (1–99) y `DELAY_THRESHOLD_MINUTES` (1–60) fuera de rango impiden arrancar `app` (§5.2.2) | U, I (imagen real) |
 | TX-LOG-01 | Redacción recursiva de claves `/pin/i` y de `__Host-sid` (`docs/logging.md` §4.3, §4.5; RS-29, RS-31) | U |
 | TX-LOG-02 | Logs de `app`, `proxy` y `db` sin PIN, *pepper*, cookie ni datos personales; eventos y métricas de SEC-016 (§5.10) | I |
-| TX-MON-01 | El compactor de Loki borra los logs vencidos en DEMO (§5.10) ⚠ T-22 | C (DEMO) |
+| TX-MON-01 | El compactor de Loki borra los logs vencidos en DEMO (`retention_period: 24h`, no antes de T0 + 30 h): métrica del compactor, *chunks* eliminados y consulta de control con datos; en PROD solo configuración (720 h / 2160 h `security`) (§5.10) | C (DEMO), smoke (PROD) |
 
 ## 11. Criterios de "terminado" (puerta de la Etapa 2, por historia)
 
@@ -1463,7 +1540,16 @@ ronda 1.1f y contra `docs/arquitectura.md` tras la 1.3c.
 | T-19 | software-engineer | HU-02/CA-F01; `docs/arquitectura.md` §4.1 (tabla de configuración) y §5.1 (`POST /orders`) | Solo se define el código para la mesa "> N" (`422 TABLE_OUT_OF_RANGE`). No se dice qué responde la API a `tableNumber` 0, negativo, > 99, no entero o de un tipo que no es número, ni a un `tableNumber` en un pedido de mostrador. Sin eso, el test de la mesa 0 no tiene resultado esperado (la §8.7 anterior decía `400` para la 0 y la 21, y la 21 era un error) | Escribir en §5.1: "`tableNumber` fuera de 1–99, no entero o con `type = counter` → `400` de validación (`path: ["tableNumber"]`); 1–99 pero > `TABLE_COUNT` → `422 TABLE_OUT_OF_RANGE`". Mientras tanto se aplica I-11 | baja |
 | T-20 | software-engineer, cybersecurity (product-owner si se cambia el criterio) | HU-01/CA-F12 (c) y (d), HU-04/CA-F23, HU-07/CA-N04, HU-07/CA-F04; `docs/arquitectura.md` §7 (`verifyPin`, pasos 2 y 3); ADR-005 revisión (c) | El límite por sesión (paso 2) se comprueba **antes** que el bloqueo de la cuenta (paso 3). En el caso más probable (el encargado falla 5 veces seguidas la reconfirmación en su propia sesión, o el usuario con PIN provisional falla 5 veces el PIN actual) el 5.º fallo bloquea la cuenta 5 min **y** agota el límite de la sesión 10 min. Resultado: (1) durante el bloqueo recibe `429 TOO_MANY_ATTEMPTS` ("Demasiados intentos"), no el `423 LOCKED` / "Cuenta bloqueada. Espera X min" que exige CA-F12 (c); (2) cuando acaba el bloqueo (5 min) sigue rechazado otros ~5 min, contra CA-F12 (d) "cuando termina el bloqueo, puede volver a intentarlo"; (3) I-10 dice que el límite de sesión no tiene mensaje propio en las historias, así que no hay texto para ese `429`. Los tests (P-6 de §5.2.1) no pueden pasar con la historia y la arquitectura a la vez | Opción A (recomendada, sin cambiar la historia): en `verifyPin`, para `confirm` y `change` (el PIN es del propio titular de la sesión) comprobar el bloqueo de la cuenta antes que el límite de sesión, y que el límite de sesión **no** se aplique cuando el usuario verificado es el de la sesión: ya lo cubre su bloqueo de cuenta, y el límite de sesión sigue protegiendo las aprobaciones, que es para lo que lo pidió Cybersecurity (`docs/seguridad.md` §6.3, "evita usar una tablet de camarero para bloquear al encargado"). Opción B: el PO cambia CA-F12 para admitir "Demasiados intentos. Espera X min" con el tiempo mayor de los dos y lo incorpora a I-10. Mientras tanto los tests siguen la historia (I-12) | media |
 | T-21 | software-engineer | `docs/arquitectura.md` §5 ("Autorización del encargado") y §7 paso 2 | (a) "Sumando los tres usos" del límite por sesión no es alcanzable por la API: una sesión de camarero solo hace aprobaciones, una de encargado solo reconfirmaciones (sus acciones de HU-06 omiten `managerApproval`) y una con PIN provisional solo `POST /auth/pin`. No es un error, pero la suma solo se puede probar en unitario. (b) No se dice qué pasa si una sesión de encargado **envía** `managerApproval` (la UI lo omite, pero un cliente manipulado puede mandarlo): ¿se ignora sin verificar ni contar, o se verifica? Si se verificara sin contar, permitiría probar PIN de otros encargados sin límite | (a) Anotar en §7 que la suma por sesión solo se da en la práctica con un uso por sesión, o confirmar que es intencionado (defensa en profundidad). (b) Escribir: "con sesión de encargado, `managerApproval` se ignora: no se verifica ni cuenta, y `authorized_by = actor`" (o rechazarlo con `400`). Testing prueba la opción que se elija | baja |
-| T-22 | monitoring (infrastructure para la configuración de DEMO) | `docs/logging.md` §6.6 ("Testing comprueba en DEMO que el compactor borra") | La comprobación propuesta ("consulta de un intervalo ya vencido sin resultados") no basta y puede no poder hacerse: (1) una consulta vacía también sale si hay `max_query_lookback` o si nunca hubo datos, sin que el compactor haya borrado nada; (2) con `retention_period: 168h` hace falta que DEMO lleve más de 7 días + 2 h (`retention_delete_delay`) + un ciclo de compactación con logs; no está dicho que la Etapa 4 dure tanto, y Loki rechaza por defecto líneas con marca de tiempo antigua (`reject_old_samples_max_age`), así que no se pueden "fabricar" logs vencidos | (a) Definir la evidencia como en `TX-MON-01` (§5.10): configuración sin `max_query_lookback`, métrica de última ejecución correcta de la retención del compactor y *chunks* del intervalo vencido eliminados del volumen, más una consulta de control con datos. (b) Si DEMO va a durar menos de 7 días + 2 h, hacer la comprobación en un Loki de TESTING o de DEMO con `retention_period: 24h` (el mínimo de Loki) desplegado ≥ 26 h antes de la puerta, y dejar en PROD solo la comprobación de configuración. Infrastructure indica la duración prevista de DEMO | baja |
+| T-22 | monitoring (infrastructure para la configuración de DEMO) | `docs/logging.md` §6.6 ("Testing comprueba en DEMO que el compactor borra") | La comprobación propuesta ("consulta de un intervalo ya vencido sin resultados") no bastaba: una consulta vacía también sale si hay `max_query_lookback` o si nunca hubo datos, y con la retención inicial de DEMO (7 días) habría hecho falta que DEMO durase más que la Etapa 4 prevista, sin poder fabricar logs antiguos (`reject_old_samples_max_age`) | (a) evidencia por métrica del compactor, *chunks* eliminados y consulta de control; (b) Loki de DEMO con `retention_period: 24h`. **Estado (1.7i):** Infrastructure eligió (b) (`docs/infraestructura.md` §11.3: DEMO 3–5 días laborables, 24 h sin `retention_stream` ni `max_query_lookback`, mismo compactor que PROD, TX-MON-01 no antes de T0 + 30 h, PROD solo configuración 720 h / 2160 h `security`) y Testing lo aplica en `TX-MON-01` (§5.10). **Resuelto por Testing e Infrastructure.** Queda la parte de Monitoring: `docs/logging.md` §6.6 sigue diciendo 168 h en DEMO y "consulta de un intervalo vencido" (tarea 1.7b) | baja |
+
+### 14.4 Hallazgos nuevos (tarea 1.7i, HU-08 día cerrado)
+
+| ID | Responsable | Criterio / archivo | Problema | Propuesta | Severidad |
+|---|---|---|---|---|---|
+| T-23 | software-engineer (tarea 1.7h); product-owner para la redacción de CA-F07 | HU-08/CA-F05, CA-F07, CA-F15; `docs/arquitectura.md` §4 (`cash_closings`) y §5.1 (`GET /reports/daily`, `POST /reports/daily/:date/closing`) | (1) Hasta la 1.3c la arquitectura solo describía las **anulaciones** posteriores al cierre (`voided_at > closed_at`), no las cancelaciones (1.7d) ni los cobros posteriores (CA-F15). (2) Riesgo de carrera: un cobro cuya transacción empieza antes del cierre y confirma después (o con la misma marca de tiempo) podía quedar fuera de la instantánea **y** de la sección (desaparece del día cerrado y la caja no cuadra, contra CA-F07 y CA-F15 (b)). (3) Regla del instante igual sin definir; CA-F07 dice "hasta la hora del cierre", que se lee como inclusiva, mientras el borrador 1.7h usa `< closed_at` para la instantánea | **Cubierto en el borrador de la 1.7h** (`docs/arquitectura.md` §4.4, en curso): instantánea en `summary`, sección calculada con `>= closed_at` para cancelaciones, anulaciones y cobros, y cerrojo `CASH_CLOSING_LOCK` (exclusivo en el cierre, compartido en cobro, anulación y cancelación, con la hora leída después de tomarlo), que elimina la carrera. Testing lo verifica al cerrarse la 1.7h y lo prueba con C-08, C-09 y C-13 (§5.2.3); I-13 ya sigue el borrador. Resto para el PO: que CA-F07 diga "registrados **antes de** la hora del cierre" (o que acepte que el mismo instante va a la sección), para que historia y arquitectura no se lean distinto | media hasta que se cierre la 1.7h; después, baja (solo la redacción) |
+| T-24 | product-owner | HU-08/CA-F05 (cancelaciones, 1.7d), CA-F11 | "Los pedidos **de ese día** cancelados después del cierre" admite dos lecturas: pedidos con fecha de ese día, o cancelaciones registradas ese día. Con CA-F11 (cuenta por día de cancelación) y la regla de CA-F15 para los cobros, un pedido de D−1 cancelado en D tras el cierre debería ir en la sección de D, y uno de D cancelado en D+1, en D+1; con la otra lectura, iría a la sección de D−1 o de D y contaría dos veces | Precisar CA-F05: "los pedidos cancelados ese día después del cierre (CA-F11), sea cual sea el día del pedido". Mientras tanto los tests aplican I-16 | baja |
+| T-25 | product-owner (ux-designer para el texto) | HU-08/CA-F03 en un día cerrado; CA-F05 | CA-F05 dice que un día cerrado muestra "las cifras del cierre guardado", pero no si el aviso "Hay N pedidos sin cobrar" es una de ellas. Con CA-F15 importa: tras un cobro posterior al cierre, el aviso congelado seguiría contando un pedido que ya está cobrado | Confirmar I-15 (el aviso se calcula al consultar; no es cifra del cierre) o decir lo contrario en CA-F03 | baja |
 
 Además, §4.5 recoge las **interpretaciones** vigentes: I-01..I-10 confirmadas
-o corregidas por el PO (1.1f) e I-11, I-12 pendientes de T-19 y T-20.
+o corregidas por el PO (1.1f), I-11, I-12 pendientes de T-19 y T-20, e
+I-13..I-16 (1.7i) pendientes de T-23..T-25 (I-14 sigue el wireframe vigente).
