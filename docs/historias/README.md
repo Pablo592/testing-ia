@@ -231,8 +231,11 @@ Texto original de las preguntas:
   carga"): confirmadas las dos. HU-08/CA-F13 precisa que en las anulaciones de
   cobro el autorizador es "No aplica (encargado)" y que, en un día cerrado, el
   desglose usa las cifras del cierre guardado y las anulaciones posteriores van
-  en la sección aparte de CA-F05. Mismo ID; ninguno nuevo, retirado ni
-  renumerado.
+  en la sección aparte de CA-F05. **Decisión del orquestador del 2026-11-23
+  con el criterio del humano "menor carga":** HU-08/CA-F05 se amplía para que
+  los pedidos cancelados el mismo día después del cierre vayan también en esa
+  sección aparte, con quién los canceló y quién autorizó, sin cambiar el cierre
+  guardado. Mismos IDs; ninguno nuevo, retirado ni renumerado.
 
 - **2026-11-23, ronda 1.1f [Cambio 2026-11-23, 1.1f]** (hallazgos T-14..T-17 e
   interpretaciones I-01..I-10 de Testing, `docs/testing.md` §4.5 y §14.2;
