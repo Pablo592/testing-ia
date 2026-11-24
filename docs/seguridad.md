@@ -27,6 +27,12 @@
 > T-35) y tres puntos de la 2.1c (motivo del `401`, `TRUSTED_PROXIES` con
 > CIDR, actividad por petición), con prueba propia en Podman 5.7.0 rootless
 > (§6.5). Hallazgos nuevos SEC-028 (baja), SEC-029 (media) y SEC-030 (baja).
+> Revisión 2.1k, 2026-11-24 (Etapa 2, HU-01): decisiones del SE de la 2.1i
+> (commit `4f96dbb`, `docs/arquitectura.md` §2.1, §5, §7, §10.1, §17.1):
+> T-40 (`404` con `is404`, RS-18), SEC-029, SEC-030 y las recomendaciones de
+> la 2.1f, con prueba propia en el scratchpad (Fastify 5.12.8, `pg` 8 y
+> PostgreSQL 19 efímero en Podman rootless) (§6.6). SEC-029 y SEC-030 pasan
+> a corregido (diseño). Hallazgos nuevos SEC-031 y SEC-032 (baja).
 > Entradas: `docs/historias/` (README + HU-01..HU-09, IDs estables `CA-`),
 > `docs/arquitectura.md`, `docs/decisiones/ADR-001..008`, `docs/ux/`,
 > `docs/infraestructura.md`, `compose.dev.yaml`, `compose.test.yaml`,
@@ -61,7 +67,7 @@
 3. Actores de amenaza
 4. Superficies de ataque y fronteras de confianza
 5. Amenazas (STRIDE)
-6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c)
+6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c; §6.5, revisión 2.1f; §6.6, revisión 2.1k)
 7. Requisitos de seguridad verificables (para Testing)
 8. Revisión de la arquitectura frente a la política de contenedores (§3)
 9. Hallazgos (SEC-xxx)
@@ -980,6 +986,161 @@ prueba queda. Guion y SQL en el scratchpad de la sesión, fuera del repo.
   la toque. El temporizador del cliente es el control principal y la
   caducidad de 12 h limita el máximo, de ahí baja: **SEC-030**.
 
+### 6.6 Revisión 2.1k (2026-11-24): decisiones del SE de la 2.1i (T-40, SEC-029, SEC-030, recomendaciones de la 2.1f)
+
+Entradas: commit `4f96dbb` (`docs/arquitectura.md` §2.1, §3.1, §5, §5.1, §6,
+§7, §10.1, §17.1); `deploy/db/initdb/10-roles.sh` y
+`deploy/db/testing/20-test-admin.sh` (esquema `public`).
+
+**Pruebas propias (no destructivas, fuera del repositorio).** En el
+scratchpad, `fastify@5.12.8` y `pg@8` instalados con `--ignore-scripts` en
+un directorio propio y *scripts* aparte con `fastify.inject()` (sin red ni
+puertos): (1) cuatro hooks `onRequest` de guarda con
+`if (request.is404) return;`, *not-found handler* y *error handler*, sobre
+rutas declaradas e inexistentes; (2) `trustProxy` con *array* frente a
+`X-Forwarded-For`/`-Host`/`-Proto` y direcciones IPv4 mapeadas; (3)
+PostgreSQL 19 efímero (`--user 999:999 --cap-drop=ALL
+--security-opt no-new-privileges`, solo en `127.0.0.1`, contraseña de
+usar y tirar, contenedor `--rm` ya detenido) con
+`ALTER ROLE … SET search_path = evil, public` y
+`ALTER DATABASE … SET search_path = evil`. Resultados abajo.
+
+**1. T-40 — `404` para todos con `request.is404`: CONFIRMADO con una
+corrección (SEC-031, baja).** RS-18 queda como la decide el SE (opción a):
+toda ruta o método no declarado bajo `/api/` → `404 NOT_FOUND` igual para
+todos, sin BD ni `Set-Cookie`. Lo que he comprobado:
+- `is404` lo calcula Fastify a partir del contexto de la ruta (el del
+  *not-found handler* no tiene `url`); el cliente no puede influir en él.
+  Con una ruta declarada es `false` en todos los casos probados (`?query`,
+  `%6D` codificado que Fastify decodifica y encuentra, `HEAD` automático), y
+  en ellos las cuatro guardas corren: no abre una vía para saltárselas.
+- Con ruta inexistente las cuatro guardas se saltan y la respuesta es el
+  `404`: `GET`/`PATCH /api/v1/settings`, método no declarado
+  (`DELETE /api/v1/auth/me`, `PUT /api/v1/orders` → `404`, Fastify no
+  responde `405`), barra final (`/api/v1/auth/me/` → `404`, con
+  `ignoreTrailingSlash` por defecto en `false`) y `OPTIONS`.
+- Las rutas `HEAD` que Fastify crea para cada `GET` (`exposeHeadRoutes`)
+  pasan por `onRoute` con la misma `config` (`permission`), así que la
+  denegación por defecto (RS-17) las ve y las guardas corren (`HEAD` sin
+  sesión → `401`).
+- `reply.callNotFound()` desde un *handler* declarado: las guardas ya han
+  corrido y luego responde el *not-found handler*; no hay salto de control.
+  El `404` de negocio (RS-46, cobro de otro día) sigue siendo del *handler*.
+- **Fallo:** Fastify **sí analiza el cuerpo** de las peticiones que van al
+  *not-found handler*. `PATCH /api/v1/settings` con `{bad` y JSON →
+  `400 FST_ERR_CTP_INVALID_JSON_BODY`; con un cuerpo mayor que el límite →
+  `413`; el *error handler* se ejecuta con `is404 = true`. Así RS-18 no da
+  "`404` igual para todos" y además el servidor analiza JSON sin
+  autenticar en rutas que no existen (acotado por el límite de 64 KiB de
+  RS-23, por eso baja). Comprobado también que si el helper, en vez de
+  `return`, **responde el `404` en el primer hook de guarda**
+  (`return reply.code(404).send(cuerpo)`), los tres casos dan `404` sin
+  tocar el analizador. → SEC-031.
+- Observación (no es hallazgo): `/API/v1/…` y `//api/v1/…` no casan con
+  ninguna ruta (Fastify distingue mayúsculas) y caen en la SPA; solo
+  devuelve `index.html`, que es público. §5.2 dice "`GET`" para la SPA: un
+  `POST` fuera de `/api/` debe dar `404`, no `index.html` (lo recoge
+  SEC-031).
+- Valoración de fondo: la existencia de rutas no es secreta (está en el
+  *bundle*), y no tocar la BD ni renovar `last_activity_at` con rutas
+  inexistentes es mejor que el orden anterior. `request_id` sigue
+  corriendo (trazabilidad). Aceptado.
+
+**2. SEC-029 — reglas de `TRUSTED_PROXIES` (§10.1): CUMPLE.** Estado a
+corregido (diseño). Las reglas 1–5 recogen todo lo pedido (literal o CIDR
+≥ /24 / ≥ /120; rechazo de nombres de `proxy-addr`, `true`, saltos,
+vacíos, prefijos cortos; *array* validado a Fastify, nunca la cadena; falla
+cerrado sin el valor en el mensaje) y lo endurecen: sin recortar espacios
+(un `" "` no arranca), sin ceros a la izquierda (evita ambigüedades
+octales), sin zona IPv6 (`net.isIPv6` las acepta, bien excluidas). **Tope de
+4 elementos: aprobado**; 4 × /24 = 1024 direcciones como máximo. La
+IPv6 mapeada `::ffff:a.b.c.d/n` medida como IPv6 (≥ /120) equivale a un
+IPv4 ≥ /24: coherente. Comprobado con `proxy-addr` vía Fastify:
+`['10.89.240.2']` confía en `10.89.240.2` y en `::ffff:10.89.240.2` (socket
+de doble pila) y no en `10.89.240.3`; `request.ip` es el último elemento no
+confiable de `X-Forwarded-For` (correcto con Caddy). Riesgo residual
+aceptado: un /24 puede ser la LAN entera del local; no se explota porque
+`app` solo es accesible desde `proxy-app`/`backend` (los dispositivos no
+llegan a `app:3000`) y §10.1 fija la IP única de `proxy` en
+TESTING/DEMO/PROD. **Condición nueva para la verificación en código:** con
+`trustProxy`, Fastify toma `request.host`, `hostname` y `protocol` de
+`X-Forwarded-Host`/`-Proto` del proxy de confianza (comprobado). Ninguna
+lógica de seguridad puede usarlos: el `Origin` se compara solo con
+`publicOrigin` (RS-24), la cookie lleva siempre `Secure` y no se construyen
+URL absolutas desde `Host`. Se revisa con el código de HU-01.
+
+**3. SEC-030 — `X-Activity: passive` (§7): CUMPLE.** Estado a corregido
+(diseño). La cabecera solo resta (no hay que confiar en ella), la regla es
+uniforme en servidor sin lista de rutas, las pasivas pasan por todas las
+comprobaciones de sesión (revocada, 12 h, 15 min) **antes** de decidir no
+escribir, el valor es exacto (cualquier otro = activa, sin error) y la
+lista del cliente cubre los casos de SEC-030 (`hello`, reconexión,
+vigilante de 5 s, `businessDate`, `menu.changed`, temporizadores) más
+`GET /auth/me` siempre. Reenviar `POST /session/activity` al reconectar si
+hubo toques reales es correcto: refleja interacción y el servidor
+comprueba los 15 min antes de escribir, así que no resucita una sesión ya
+caducada. Sin CORS no hay *preflight*; no se registra la cabecera en logs
+(no es sensible). El riesgo de un cliente que no marque nada queda como
+antes (12 h + temporizador del cliente), aceptado en SEC-030.
+
+**4. Recomendaciones de la 2.1f aceptadas por el SE.**
+- **`search_path=public` en el *pool*: CUMPLE.** Comprobado con PostgreSQL
+  19 y `pg@8`: sin la opción, un rol con `ALTER ROLE … SET search_path =
+  evil, public` conecta con `evil, public`; con
+  `options: '-c search_path=public'` conecta con `public`, también con un
+  `ALTER DATABASE … SET search_path = evil` añadido. El parámetro de
+  arranque prevalece sobre `ALTER ROLE/DATABASE`. Con `REVOKE ALL ON SCHEMA
+  public FROM PUBLIC` y `public` de `app_owner` (`10-roles.sh` y
+  `20-test-admin.sh`), `app_rw` no puede crear objetos en el único esquema
+  de la ruta; `pg_catalog` se busca antes de forma implícita y las tablas
+  temporales solo afectan a la propia sesión. Verificación con código: un
+  integración `SHOW search_path` = `public` en una conexión del *pool* de
+  `app`, de `migrate` y de los comandos.
+- **Borrado de `__Host-sid` en todo `401 UNAUTHENTICATED` con cookie:
+  CUMPLE**, con una condición (SEC-032, baja). El `Set-Cookie` es válido
+  para el prefijo `__Host-` (`Secure`, `Path=/`, sin `Domain`), idéntico
+  en todos los motivos (no distingue token conocido de inventado), solo si
+  la petición traía la cookie, y el logout lo repite; el `401
+  INVALID_CREDENTIALS` del login no borra nada (correcto: no es una sesión).
+  El riesgo nuevo que se añade: un `401` de la sesión vieja que llega
+  **después** de un login nuevo en el mismo navegador borra la cookie
+  nueva, porque el borrado no depende del valor. Impacto solo de
+  disponibilidad (el usuario vuelve a P-01 y entra otra vez; no hay
+  confusión de identidades ni escalada). Abortar con `AbortController` las
+  peticiones en curso lo cierra para el cliente HTTP, pero el texto de §5
+  no cubre los otros canales: el `EventSource` de `GET /events` (y la
+  reconexión del vigilante de 5 s), el envío de telemetría si usa
+  `sendBeacon` o `fetch({ keepalive: true })` (no se pueden abortar de
+  forma fiable) y los temporizadores de recarga. → SEC-032.
+- **`UnauthenticatedDetails` estricto y tiempo igualado: CUMPLE.**
+  `.strict()` con `reason` y `revokedReason` de la lista cerrada cumple la
+  condición (a) de §6.5; cuerpo idéntico salvo `requestId` sin cookie, con
+  token desconocido o mal formado cumple (b); con cookie, siempre SHA-256 y
+  **una** consulta por `token_hash` (índice único) que trae sesión y
+  usuario, sin trabajo extra para el token conocido antes de responder,
+  iguala el tiempo entre "existió" e "inventado"; sin cookie no hay
+  consulta, lo que solo revela que no se envió cookie (lo sabe quien
+  pregunta). Condición para el código: cualquier escritura o evento por
+  la sesión caducada (p. ej. marcarla revocada, `auth.session.expired`)
+  va después de enviar la respuesta o no se hace; un log de una línea es
+  aceptable. Verificación: integración que compara medianas de 100
+  peticiones con token revocado y con token inventado (< 5 ms, mismo
+  criterio que RS-16d con un umbral acorde a una consulta).
+- **Escritura acotada del *hub*: CUMPLE** las condiciones (b) de §6.5: una
+  sola sentencia para el cierre del flujo y el temporizador, `GREATEST`
+  (no retrocede), `$now` del `Clock`, `revoked_at IS NULL`,
+  `expires_at > $now`, `u.role = 'kitchen' AND u.active` (cubre la carrera
+  con un cambio de rol o una desactivación), sobre la copia de la lista de
+  sesiones con flujo abierto en ese instante, que sale de la lista antes de
+  lanzar la escritura del cierre. No resucita sesiones revocadas o
+  caducadas ni se aplica al encargado con la cola abierta (RS-12).
+  `kitchenActivityIntervalMs` (10–60000, no es variable de entorno) no
+  añade superficie. Verificación con código: integración con `FakeClock`
+  (sesión de barra revocada, caducada, cambiada a `waiter` y desactivada
+  con el flujo abierto → `last_activity_at` no cambia).
+
+**Altos o críticos en esta revisión: ninguno.**
+
 ---
 
 ## 7. Requisitos de seguridad verificables (para Testing)
@@ -1020,7 +1181,7 @@ contra TESTING/DEMO), **S** estático (SAST/lint/CI), **C** contenedores/host.
 | ID | Requisito | Verificación |
 |---|---|---|
 | RS-17 | Denegación por defecto: toda ruta registrada declara un permiso o está en la lista pública (`POST /auth/login`, `GET /auth/login-options`) | S/I: test que recorre las rutas de Fastify y falla si alguna no tiene permiso |
-| RS-18 | Matriz rol × endpoint de `docs/permisos.md` §3 (W, K, M, sin sesión, PIN provisional), incluidas las rutas que no existen (`GET/PATCH /settings` → `404`) | I con la tabla esperada **escrita a mano** desde `docs/permisos.md` §3 (no se importa `permissions.ts`), comprobando que los `403` no tienen efecto; test aparte que compara `permissions.ts` con esa tabla (T-18) |
+| RS-18 | Matriz rol × endpoint de `docs/permisos.md` §3 (W, K, M, sin sesión, PIN provisional), incluidas las rutas que no existen (`GET/PATCH /settings` → `404`). [2.1k, T-40, SEC-031] Toda ruta o método no declarado bajo `/api/` → `404 NOT_FOUND` idéntico (salvo `requestId`) para todos: sin sesión, con cookie válida/caducada/inventada, PIN provisional, W/K/M, sin `Origin` o con `Origin` ajeno, **y con cualquier cuerpo** (JSON inválido, `Content-Type` no admitido, cuerpo > límite); sin `details`, sin `Set-Cookie`, sin consultar la BD y sin cambiar `last_activity_at` | I con la tabla esperada **escrita a mano** desde `docs/permisos.md` §3 (no se importa `permissions.ts`), comprobando que los `403` no tienen efecto; test aparte que compara `permissions.ts` con esa tabla (T-18). Casos de 404 (T-40): `GET`/`PATCH /api/v1/settings` en cada estado de la fila; `PATCH /api/v1/settings` con `{bad`, con `text/plain` y con 65 KiB; `DELETE /api/v1/auth/me` (método no declarado); `GET /api/v1/auth/me/` (barra final); sesión con 14 min de inactividad → tras el `404`, a los 15 min el `GET /auth/me` da `401 idle` (no renueva); contador de consultas de la BD sin cambios. Rutas `HEAD` generadas por Fastify incluidas en RS-17 (llevan la `config` del `GET`) |
 | RS-19 | Para el rol `kitchen`, ninguna respuesta REST ni evento SSE contiene claves que casen con `/cents|price|total|amount|tendered|change/i` | I (recorrido recursivo del JSON) |
 | RS-20 | Esquemas zod `.strict()`: campos desconocidos → `400` (p. ej. `unitPriceCents` en líneas, `pinHash`/`failedAttempts`/`lockedUntil` en `PATCH /staff/:id`) | I |
 | RS-21 | UUID de cliente existente con otro dueño o contenido → `409` sin datos del recurso existente | I |
@@ -1427,7 +1588,7 @@ de bloqueo por la regla de contenedores. RS-39 sigue pendiente de la Etapa 2.
 - Responsable: software-engineer (`docs/arquitectura.md` §10.1) y developer (`config.ts`)
 - Cómo corregir: en `parseSettings`, cada elemento debe ser una IPv4/IPv6 literal o un CIDR con prefijo **≥ /24** (IPv4) o **≥ /120** (IPv6); se rechazan (no arranca) `0.0.0.0/0`, `::/0`, nombres (`loopback`, `linklocal`, `uniquelocal`), `true`, números de saltos y elementos vacíos o con espacios; se pasa a Fastify un *array* ya validado, nunca la cadena original. En TESTING, DEMO y PROD el valor es la IP única de `proxy` (`/32`); un CIDR solo para una red dedicada `proxy`↔`app`. Documentarlo en §10.1 y en `docs/infraestructura.md` §6.
 - Cómo verificar: unitario de `parseSettings` (como RS-13) con `10.0.0.0/8`, `uniquelocal`, `0.0.0.0/0`, `::/0`, `true`, `1`, `10.89.240.2,` → no arranca; `10.89.240.2` y `10.89.240.0/29` → arranca. RS-06 en integración: `X-Forwarded-For` desde una IP no listada se ignora.
-- Estado: abierto (media, no bloquea; debe estar corregido al implementar `config.ts` en HU-01)
+- Estado: **corregido (diseño, 2.1k)**. `docs/arquitectura.md` §10.1 (reglas 1–5 de `parseTrustedProxies`) y §2.1 (`buildApp` valida igual y pasa a Fastify el *array* o `false`) cumplen lo pedido y lo endurecen (tope de 4 elementos, sin recorte de espacios, sin ceros a la izquierda, sin zona IPv6, mensaje sin el valor). Valoración en §6.6. Pasa a **verificado** con el código de HU-01: unitario de `parseSettings` con los casos de "Cómo verificar" más `" "`, `10.89.240.2 ` (espacio final), `010.89.240.2`, `fe80::1%eth0`, `[::1]`, `::/119`, `::ffff:10.0.0.0/104` y 5 elementos válidos → no arranca, y `::ffff:10.89.240.0/120` y 4 elementos válidos → arranca; unitario de `buildApp` con `trustedProxies: ['uniquelocal']` → rechaza con `ConfigError`; integración RS-06; revisión de código de que ninguna lógica de seguridad usa `request.host`/`hostname`/`protocol` (§6.6)
 
 ## SEC-030: Las peticiones automáticas del cliente cuentan como actividad para la inactividad de 15 min
 - Severidad: baja
@@ -1436,11 +1597,53 @@ de bloqueo por la regla de contenedores. RS-39 sigue pendiente de la Etapa 2.
 - Responsable: software-engineer (§7 y §9) y developer
 - Cómo corregir: marcar las peticiones que no nacen de una acción del usuario (p. ej. cabecera `X-Activity: passive` en los *snapshots* por `hello`/reconexión y en cualquier recarga automática) y no actualizar `last_activity_at` con ellas (sí se comprueban caducidad e inactividad). Las acciones del usuario y `POST /session/activity` siguen contando como ahora. La cabecera solo puede **restar** actividad, nunca sumarla, así que no hace falta confiar en ella.
 - Cómo verificar: integración con reloj falso: sesión de camarero, 14 min sin actividad, `GET` con `X-Activity: passive` → `200`; a los 15 min → `401` con `reason: idle`. E2E: tras un corte de red con la pantalla montada y sin tocar nada, la sesión se cierra a los 15 min de la última interacción.
+- Estado: **corregido (diseño, 2.1k)**. `docs/arquitectura.md` §7 ("Peticiones pasivas") y §6: `X-Activity: passive` con valor exacto, regla uniforme en servidor que solo resta actividad, comprobaciones de sesión completas también en las pasivas, y lista del cliente (`GET /auth/me` siempre, *snapshots* por `hello`/reconexión, recargas por `businessDate`/`menu.changed`/temporizador). Valoración en §6.6. Pasa a **verificado** con el código de HU-01: los casos de "Cómo verificar" más (a) `X-Activity: Passive`, `passive ` y `passive, x` cuentan como activas; (b) con la sesión a 14 min, una pasiva no mueve `last_activity_at` (lectura de la fila) y a los 15 min el siguiente `GET` → `401 idle`; (c) en el cliente, revisión de código de que solo el cliente HTTP único pone la cabecera y que ningún *handler* de gesto pasa `{ passive: true }`
+
+## SEC-031: Las rutas inexistentes analizan el cuerpo y no siempre responden `404`
+- Severidad: baja
+- Ubicación: docs/arquitectura.md:995-1003 (§5, "Rutas inexistentes (T-40)": los hooks de guarda hacen `if (request.is404) return;` y responde el *not-found handler*) y :1243-1246 (§5.2, SPA para "cualquier `GET`")
+- Descripción: con el diseño de T-40, Fastify ejecuta el analizador de cuerpo antes del *not-found handler*. Comprobado con Fastify 5.12.8 (`inject`, §6.6): `PATCH /api/v1/settings` con `Content-Type: application/json` y cuerpo `{bad` → `400 FST_ERR_CTP_INVALID_JSON_BODY`; con un cuerpo mayor que el límite → `413 FST_ERR_CTP_BODY_TOO_LARGE`; el *error handler* corre con `is404 = true`. RS-18 exige `404` idéntico para todos; además el servidor analiza JSON sin autenticar en rutas que no existen (acotado por los 64 KiB de RS-23, de ahí baja). Fuera de `/api/`, §5.2 limita la SPA a `GET`, pero el diseño no dice qué responde un `POST`/`PATCH` a una ruta inexistente fuera de `/api/`.
+- Responsable: software-engineer (§5 y §5.2) y developer
+- Cómo corregir: en el helper de las guardas, si `request.is404`, **responder** en el primer hook de guarda en vez de solo salir: bajo `/api/` (o con un método distinto de `GET`/`HEAD` en cualquier ruta) `return reply.code(404).send({ code: 'NOT_FOUND', message, requestId })` sin `details` ni `Set-Cookie`; con `GET`/`HEAD` fuera de `/api/`, salir y dejar que el *not-found handler* sirva `index.html`. El *not-found handler* mantiene el mismo `404` (lo usa `reply.callNotFound()`). Comprobado en el scratchpad que así JSON inválido, `Content-Type` desconocido y cuerpo > límite dan `404` sin tocar el analizador.
+- Cómo verificar: RS-18 (casos de `404` añadidos en la 2.1k): `PATCH /api/v1/settings` con `{bad`, con `text/plain` y con 65 KiB, con y sin sesión → `404 NOT_FOUND` idéntico salvo `requestId`, sin `Set-Cookie` y sin consultas a la BD; `POST /pedidos` → `404` (no `index.html`); `GET /pedidos` → `index.html`.
+- Estado: abierto (baja, no bloquea; debe estar corregido al implementar las guardas en HU-01)
+
+## SEC-032: El aborto al primer `401` no cubre todos los canales que pueden borrar la cookie de un login nuevo
+- Severidad: baja
+- Ubicación: docs/arquitectura.md:963-972 (§5, "Borrado de la cookie": "aborta sus peticiones en curso (`AbortController` del cliente HTTP)") y §6 (flujo SSE con `EventSource` y vigilante de 5 s)
+- Descripción: el `Set-Cookie` de borrado del `401` no depende del valor de la cookie, así que cualquier respuesta `401` de la sesión vieja que el navegador procese después de un login nuevo borra la cookie nueva. El diseño lo cierra solo para el cliente HTTP (`AbortController`). Quedan fuera: el `EventSource` de `GET /events` y su reconexión forzada por el vigilante de 5 s (una petición de reconexión lanzada con la cookie vieja cuya respuesta llega tras el login), el envío de telemetría si usa `navigator.sendBeacon` o `fetch({ keepalive: true })` (no se pueden abortar de forma fiable) y los temporizadores de recarga que lancen peticiones nuevas entre el `401` y el login. Impacto solo de disponibilidad (el usuario vuelve a P-01 y repite el login; no hay mezcla de identidades), de ahí baja.
+- Responsable: software-engineer (§5) y developer (`apps/web/src/api/`)
+- Cómo corregir: al primer `401`, en este orden y antes de habilitar el login de P-01: (1) `abort()` de todas las peticiones del cliente HTTP; (2) `close()` del `EventSource` y cancelación del vigilante de 5 s y de los reintentos de reconexión; (3) cancelación de todos los temporizadores de recarga y de la cola de telemetría (que va por el cliente HTTP con `AbortController`, sin `sendBeacon` ni `keepalive`). Mientras P-01 está visible no sale ninguna petición con sesión. Documentarlo en §5 junto al borrado de la cookie.
+- Cómo verificar: E2E con Toxiproxy (o retraso de red de Playwright): con la sesión caducada por inactividad, retrasar 3 s la respuesta de una petición en curso y de la reconexión SSE, hacer login nuevo durante el retraso y comprobar que la cookie nueva sigue presente y la siguiente petición da `200`. Revisión de código: ningún uso de `sendBeacon` ni `keepalive` en `apps/web/`.
 - Estado: abierto (baja, no bloquea)
+
 
 ---
 
-### Resumen de la revisión 2.1f (Etapa 2, HU-01, 2026-11-24)
+### Resumen de la revisión 2.1k (Etapa 2, HU-01, 2026-11-24)
+- **Altos o críticos abiertos: ninguno.**
+- Dictámenes (§6.6): **T-40** confirmado (`404 NOT_FOUND` para todos con
+  `is404`; RS-18 ampliado) con la corrección de **SEC-031**; **SEC-029**
+  cumple (tope de 4 aprobado) → corregido (diseño); **SEC-030** cumple →
+  corregido (diseño); `search_path=public` cumple (probado: prevalece sobre
+  `ALTER ROLE/DATABASE`); borrado de `__Host-sid` en el `401` cumple, con
+  **SEC-032**; `UnauthenticatedDetails` estricto y tiempo igualado cumple;
+  escritura acotada del *hub* cumple.
+- Nuevos: **SEC-031** (baja; software-engineer + developer: el `404` de
+  rutas inexistentes debe responderse en el primer hook de guarda, porque
+  Fastify analiza el cuerpo y da `400`/`413`); **SEC-032** (baja;
+  software-engineer + developer: el aborto al primer `401` debe cubrir
+  también `EventSource`, telemetría y temporizadores).
+- Abiertos que no bloquean: SEC-003 (media), SEC-025 (baja), SEC-028
+  (baja; cambio de infrastructure en la 2.1h aún no revisado por
+  Cybersecurity), SEC-031 (baja), SEC-032 (baja).
+- Corregidos pendientes de verificación con código o en un entorno
+  posterior: SEC-026, SEC-029, SEC-030.
+- Contenedores: sin cambios (esta revisión no toca compose ni `deploy/`).
+  Escaneo de imágenes (RS-39): pendiente de que exista la imagen de la app.
+
+
+### Resumen de la revisión 2.1f (Etapa 2, HU-01, 2026-11-24; histórico, sustituido por el de 2.1k)
 - **Altos o críticos abiertos: ninguno.**
 - Dictámenes (§6.5): `test_admin`/`app_template` aprobado y **sin**
   `pg_signal_backend`; `db_test_admin_password` en `db` aprobado;

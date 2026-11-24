@@ -4,7 +4,10 @@
 > revisión 1.4b, 2026-11-23 (rutas de la revisión 1.3b del SE, §3.4; HU-09
 > fuera del MVP por decisión del humano); revisión 1.4c, 2026-11-23 (ajuste a
 > la revisión 1.3c del SE: `verifyPin`, `POST /auth/pin` solo para el PIN
-> provisional, sin tabla ni eventos de ajustes, UID 1000:1000; T-20).
+> provisional, sin tabla ni eventos de ajustes, UID 1000:1000; T-20);
+> revisión 2.1k, 2026-11-24 (decisiones del SE de la 2.1i: `404` de rutas
+> inexistentes para todos (T-40, SEC-031), borrado de la cookie en el `401`
+> (SEC-032) y peticiones pasivas (SEC-030), §3.2 y §5).
 > Fuentes: `docs/historias/` (HU-01..HU-08), `docs/arquitectura.md` §5 y §7,
 > ADR-003, ADR-005, `docs/seguridad.md` (decisiones §6 y hallazgos SEC-xxx).
 > **Pendiente:** revisión conjunta con Developer al empezar la Etapa 2. La
@@ -106,7 +109,10 @@ Caddy responde `404` a los tres y el 9464 no se publica ni se enruta.
 
 Rutas que **no existen** en el MVP (denegación por defecto, `404`):
 `GET /settings`, `PATCH /settings` (HU-09 fuera, decisión del humano
-2026-11-23). No hay permisos `settings:*` ni tabla `settings`. Si HU-09
+2026-11-23). [2.1k, T-40] Toda ruta o método no declarado bajo `/api/v1`
+responde `404 NOT_FOUND` igual para todos (sin sesión, cualquier rol, PIN
+provisional, cualquier `Origin` y cualquier cuerpo), antes de leer el cuerpo
+y sin consultar la BD (`docs/seguridad.md` RS-18, SEC-031). No hay permisos `settings:*` ni tabla `settings`. Si HU-09
 vuelve en otra versión: solo M, sin `confirmPin` (`docs/seguridad.md` §6.3).
 
 **Cambio respecto a `docs/arquitectura.md` §7:** se separan `staff:read`,
@@ -163,8 +169,8 @@ sesión afectada.
 | Bloqueo por usuario | 5 → 5 min; 10 → 15 min; 15 → 60 min; 20 → indefinido (desbloquea un encargado o `unlock-user`). El contador solo se reinicia con un acceso correcto o desbloqueo |
 | Límite por origen | 10 fallos/10 min por IP de **cualquier verificación de PIN** (login, `managerApproval`, `confirmPin` y `currentPin`) → `429` 10 min para cualquier usuario y ruta de PIN desde esa IP, antes del hash. Por sesión: 5 aprobaciones (`managerApproval`) fallidas/10 min → `429`. **[T-20]** `confirmPin` y `currentPin` (PIN del propio titular de la sesión) no tienen límite por sesión: los acota el bloqueo de su cuenta, que se comprueba antes y responde `423` (HU-01/CA-F12) |
 | MFA | No en el MVP (ver `docs/seguridad.md` §6.1.8); compensado por red restringida, bloqueo y reconfirmación de PIN |
-| Token de sesión | 256 bits CSPRNG; cookie `__Host-sid`, `HttpOnly; Secure; SameSite=Strict; Path=/`, sin caducidad persistente; en BD solo SHA-256 |
-| Inactividad | 15 min (camarero, encargado). Rol `kitchen`: sin caducidad por inactividad mientras el SSE está abierto |
+| Token de sesión | 256 bits CSPRNG; cookie `__Host-sid`, `HttpOnly; Secure; SameSite=Strict; Path=/`, sin caducidad persistente; en BD solo SHA-256. [2.1k] Todo `401 UNAUTHENTICATED` de una petición con la cookie y el logout responden `Set-Cookie: __Host-sid=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Strict` (idéntico en todos los motivos); al primer `401` el cliente corta todos sus canales (peticiones, `EventSource`, temporizadores, telemetría) antes de permitir otro login (SEC-032) |
+| Inactividad | 15 min (camarero, encargado). Rol `kitchen`: sin caducidad por inactividad mientras el SSE está abierto. [2.1k, SEC-030] Las peticiones con `X-Activity: passive` (las que lanza la app sin gesto del usuario) se comprueban igual pero no renuevan la actividad; las rutas inexistentes (`404`) tampoco |
 | Caducidad absoluta | 12 h para todos; configurable solo a la baja |
 | Revocación | Logout, desactivación, restablecimiento de PIN, cambio obligatorio del PIN provisional (el resto de sesiones del usuario), **bloqueo indefinido** (todas las sesiones de la cuenta, venga el fallo de login, aprobación, `confirmPin` o `currentPin`; HU-01/CA-F13), caducidad. Toda revocación cierra el flujo SSE y la pantalla vuelve al login en ≤ 1 s (RS-14). Cambio de rol: cierra SSE, no revoca |
 | Reautenticación | `confirmPin` en anular cobro y escrituras de Personal (salvo cambio solo de nombre). No en HU-06 con sesión propia de encargado |
