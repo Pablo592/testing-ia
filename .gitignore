@@ -18,3 +18,7 @@ node_modules/
 *.tfplan
 *.tfvars
 !*.tfvars.example
+
+# Resultados de las ejecuciones de tests (T-35): informes, trazas y vídeos
+tests/results/*
+!tests/results/.gitkeep

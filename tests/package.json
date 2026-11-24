@@ -1,0 +1,26 @@
+{
+  "name": "@mi-app/tests",
+  "private": true,
+  "type": "module",
+  "description": "Suite de pruebas (Testing). Se ejecuta solo en contenedores con tests/run.sh.",
+  "scripts": {
+    "test:unit": "vitest run --config vitest.unit.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:security": "vitest run --config vitest.integration.config.ts --project security",
+    "test:e2e": "playwright test --config playwright.config.ts",
+    "trazabilidad": "node --experimental-strip-types tools/trazabilidad.ts"
+  },
+  "dependencies": {
+    "@mi-app/api": "workspace:*",
+    "@mi-app/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.2",
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.0",
+    "pg": "^8.16.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

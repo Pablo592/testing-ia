@@ -1,0 +1,104 @@
+// HU-01 E2E con PIN erróneo real (proyecto serie-pin, un worker, en serie).
+// Gasta 4 fallos de la IP de la suite (presupuesto en tests/README.md).
+// Los bloqueos largos se fabrican en BD (docs/testing.md §5.3).
+import { expect, test } from '@playwright/test';
+import { cerrarSemilla, fabricarBloqueo, fabricarFallos, sembrarUsuario } from '../support/e2e/semilla.ts';
+import { BarraSuperior, CambioPin, entrarComo, PantallaLogin, TEXTOS } from '../support/e2e/pantallas.ts';
+import { junto } from '../support/e2e/medidas.ts';
+import { pinAleatorio, pinIncorrecto } from '../support/datos.ts';
+
+test.describe.configure({ mode: 'serial' });
+
+test.afterAll(async () => {
+  await cerrarSemilla();
+});
+
+test('[HU-01/CA-F05][HU-01/CA-U03] PIN incorrecto: "Usuario o PIN incorrectos" en texto junto al campo y el PIN se vacía (1 fallo)', { tag: ['@HU-01', '@CA-F05', '@CA-U03'] }, async ({ page }) => {
+  const u = await sembrarUsuario({ rol: 'waiter' });
+  const login = new PantallaLogin(page);
+  await login.abrir();
+  await login.elegir(u);
+  await login.enviarPin(pinIncorrecto(u.pin));
+
+  const alerta = login.alerta();
+  await expect(alerta).toHaveText(new RegExp(TEXTOS.credenciales));
+  // En texto (no solo color): el texto está en el árbol de accesibilidad.
+  await expect(page.getByText(TEXTOS.credenciales)).toBeVisible();
+  // Junto al campo.
+  await junto(login.campoPin(), alerta);
+  // PIN vaciado y "Entrar" deshabilitado hasta volver a escribirlo; el foco vuelve al campo.
+  await expect(login.campoPin()).toHaveValue('');
+  await expect(login.entrar()).toBeDisabled();
+  // No se dice cuántos intentos quedan.
+  await expect(page.getByText(/intentos? (restantes|quedan)|te quedan/i)).toHaveCount(0);
+  // Reintento con el correcto: entra.
+  await login.enviarPin(u.pin);
+  await expect(new BarraSuperior(page).titulo('Pedidos')).toBeVisible();
+});
+
+test('[HU-01/CA-F05] usuario inexistente: el mismo mensaje "Usuario o PIN incorrectos" (1 fallo)', { tag: ['@HU-01', '@CA-F05'] }, async ({ page }) => {
+  const login = new PantallaLogin(page);
+  await login.abrir();
+  await login.escribirUsuario(`Nadie ${Date.now().toString(36)}`);
+  await login.enviarPin(pinAleatorio('waiter'));
+  await expect(login.alerta()).toHaveText(new RegExp(TEXTOS.credenciales));
+});
+
+test('[HU-01/CA-F12] (b) el fallo que activa el bloqueo da el mensaje normal; (c) el siguiente, aunque el PIN sea correcto, "Cuenta bloqueada. Espera 5 min" (1 fallo)', { tag: ['@HU-01', '@CA-F12'] }, async ({ page }) => {
+  // Sesión con PIN provisional: el PIN actual se vuelve a pedir en esta sesión.
+  const u = await sembrarUsuario({ rol: 'manager', pinProvisional: true });
+  const login = new PantallaLogin(page);
+  await login.iniciarSesion(u);
+  const cambio = new CambioPin(page);
+  await cambio.visible();
+  await fabricarFallos(u.id, 4);
+
+  await cambio.cambiar(pinIncorrecto(u.pin), pinAleatorio('manager'));
+  await expect(page.getByRole('alert')).toContainText(TEXTOS.pinActualMal);
+
+  // Ya bloqueada 5 min: con el PIN correcto se rechaza sin comprobarlo.
+  await cambio.cambiar(u.pin, pinAleatorio('manager'));
+  await expect(page.getByRole('alert')).toContainText(TEXTOS.cuentaBloqueadaEspera(5));
+  // (a) la sesión sigue: no vuelve al inicio de sesión.
+  await cambio.visible();
+  await expect(page.getByRole('button', { name: 'Cerrar sesión' })).toBeEnabled();
+});
+
+test('[HU-01/CA-F12] (c) bloqueo temporal fabricado con la sesión abierta: "Cuenta bloqueada. Espera X min" junto al campo; la sesión sigue (0 fallos)', { tag: ['@HU-01', '@CA-F12'] }, async ({ page }) => {
+  const u = await sembrarUsuario({ rol: 'waiter', pinProvisional: true });
+  const login = new PantallaLogin(page);
+  await login.iniciarSesion(u);
+  const cambio = new CambioPin(page);
+  await cambio.visible();
+  await fabricarBloqueo(u.id, { fallos: 10, segundos: 14 * 60 + 10 });
+  await cambio.cambiar(u.pin, pinAleatorio('waiter'));
+  await expect(page.getByRole('alert')).toContainText(TEXTOS.cuentaBloqueadaEspera(15));
+  await expect(page.getByRole('button', { name: 'Guardar PIN' })).toBeDisabled();
+  await cambio.visible();
+});
+
+test('[HU-01/CA-F13][RS-14] bloqueo indefinido desde otro dispositivo: la cola de barra abierta vuelve al login en ≤ 1 s y, al entrar, "Cuenta bloqueada…" (1 fallo)', { tag: ['@HU-01', '@CA-F13'] }, async ({ page, request }) => {
+  const u = await sembrarUsuario({ rol: 'kitchen' });
+  await entrarComo(page, u);
+  // 19 fallos acumulados (fabricados tras el acierto del login).
+  await fabricarFallos(u.id, 19);
+
+  // 20.º fallo desde "otro dispositivo" (otro contexto HTTP del ejecutor).
+  const t0 = Date.now();
+  const r = await request.post('/api/v1/auth/login', {
+    data: { name: u.nombre, pin: pinIncorrecto(u.pin) },
+    headers: { origin: new URL(page.url()).origin },
+  });
+  expect(r.status()).toBe(401);
+
+  await expect(page.getByRole('heading', { name: TEXTOS.quienEres })).toBeVisible({ timeout: 1000 });
+  expect(Date.now() - t0).toBeLessThanOrEqual(1500); // 1 s del criterio + latencia de la propia petición
+  await expect(page.getByText(TEXTOS.bloqueoIndefinido)).toBeVisible();
+  // La pantalla no conserva datos de la cola.
+  await expect(page.getByRole('heading', { level: 1, name: 'Cola' })).toHaveCount(0);
+
+  const login = new PantallaLogin(page);
+  await login.elegir(u);
+  await login.enviarPin(u.pin);
+  await expect(login.alerta()).toContainText(TEXTOS.bloqueoIndefinido);
+});

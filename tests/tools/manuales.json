@@ -1,0 +1,6 @@
+{
+  "_nota": "Verificaciones manuales registradas (docs/testing.md §1.3, §10 'M'). Complementan a los tests automáticos del mismo criterio; su resultado se anota en docs/testing.md §12.",
+  "HU-01/CA-N04": "Etapa 3: revisión con VoiceOver (iPad) y TalkBack/NVDA en P-01 (guion de docs/testing.md §5.5); axe no cubre todo WCAG 2.2 AA.",
+  "HU-01/CA-N05": "Etapa 3 y DEMO: las alertas ManagerLocked y AccountLockedManual (docs/logging.md §7.4) llegan por Alertmanager al provocar un bloqueo de encargado y uno indefinido con la pila de Monitoring (RS-47 D). El registro del evento es automático (integración).",
+  "HU-01/CA-N03": "Etapa 3 (vinculante): k6 con las condiciones del supuesto 12 (Toxiproxy, 10 simultáneos, ≥ 200 muestras). DEMO solo observa (I-08)."
+}

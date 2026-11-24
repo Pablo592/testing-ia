@@ -1,7 +1,16 @@
 # Estrategia de pruebas — Toma de pedidos para cafetería (MVP)
 
 > Responsable: Testing Engineer · Etapa 1, tareas 1.6 (2026-11-21), 1.6b y
-> 1.6d (2026-11-23) · Estado: **propuesta, pendiente de la puerta de la Etapa 1**.
+> 1.6d (2026-11-23) · Estado: **aprobada en la puerta de la Etapa 1 (2026-11-24)**;
+> Etapa 2 en curso.
+>
+> **2.1 (2026-11-24, Etapa 2, HU-01):** tests de HU-01 escritos antes de la
+> implementación (ficheros y cobertura por criterio en §10, "Ficheros de
+> HU-01"), `tests/run.sh` con los requisitos 1–5 de `docs/infraestructura.md`
+> §7.1 y el contrato con el Developer en `tests/README.md`. Corregidos restos
+> de T-19/T-20 ya resueltos en la arquitectura 1.7a (I-11, I-12, §5.2, P-6) y
+> un ejemplo erróneo de §5.1 (12345 es una secuencia). Hallazgos nuevos
+> T-28..T-37 (§14.5).
 >
 > Entradas: `docs/reglas-equipo.md`, `docs/historias/` (HU-01..HU-08 y README,
 > rondas 1.1d con IDs estables, 1.1e con las decisiones del humano y 1.1f con
@@ -267,8 +276,8 @@ con `docs/arquitectura.md` §4.4 y §5.1 (1.7h). Verificado por Testing en la
 | I-08 | Supuesto 12 y criterios de dispositivo real | Confirmada | Rendimiento del supuesto 12: vinculante en TESTING, DEMO solo observa (una desviación es un hallazgo). HU-03/CA-U01, HU-03/CA-N05 y HU-02/CA-U05 (dispositivo de referencia) se verifican en el hardware (marca **H**) y su resultado es vinculante |
 | I-09 | HU-03/CA-F14 | Confirmada **e incorporada** al criterio (T-15) | Aviso "Sonido bloqueado" en ≤ 1 s desde que se abre la cola o desde que falla un aviso. Ya no es interpretación: es el texto del criterio |
 | I-10 | HU-04/CA-F23, HU-07/CA-N04 | Confirmada | Un `confirmPin` incorrecto cuenta como 1 fallo del encargado de la sesión (HU-01/CA-F06) y 1 del dispositivo (HU-01/CA-F11), igual que una autorización de HU-06. El límite adicional por sesión (5 fallos/10 min, `docs/seguridad.md` §6.1.4) es de Cybersecurity y **no** añade mensaje propio en las historias (ver T-20) |
-| I-11 | HU-02/CA-F01 | Nueva, pendiente de T-19 (SE) | Mesa entera en 1..99 pero > `TABLE_COUNT` (21..99 con 20 mesas) → `422 TABLE_OUT_OF_RANGE` (`docs/arquitectura.md` §4.1, §5.1). Mesa fuera del dominio del campo (0, −1, 100, 1,5, `"7"`) → `400` de validación con `path: ["tableNumber"]`, por la regla general de §5 ("`400` validación con campo y regla") y el `CHECK BETWEEN 1 AND 99`. Si el SE decide `422` también para 0, se cambia el test |
-| I-12 | HU-01/CA-F12 (c) y (d), HU-04/CA-F23, HU-07/CA-N04, HU-07/CA-F04 | Nueva, pendiente de T-20 (SE, Cybersecurity) | Mientras la cuenta del titular de la sesión está en bloqueo temporal, toda reconfirmación (`confirmPin`) o `currentPin` de esa sesión recibe `423 LOCKED` ("Cuenta bloqueada. Espera X min"), **también** cuando la misma sesión acumula 5 fallos (lo que la arquitectura respondería con `429` por el límite de sesión, paso 2 de `verifyPin`); y al terminar el bloqueo se puede volver a intentar (CA-F12 (d)). Los tests siguen la historia; si la arquitectura no cambia, fallarán y se reportan |
+| I-11 | HU-02/CA-F01 | Resuelta por T-19 (`docs/arquitectura.md` §5.1, 1.7a): coincide | Mesa entera en 1..99 pero > `TABLE_COUNT` (21..99 con 20 mesas) → `422 TABLE_OUT_OF_RANGE` (`docs/arquitectura.md` §4.1, §5.1). Mesa fuera del dominio del campo (0, −1, 100, 1,5, `"7"`) → `400` de validación con `path: ["tableNumber"]`, por la regla general de §5 ("`400` validación con campo y regla") y el `CHECK BETWEEN 1 AND 99`. Si el SE decide `422` también para 0, se cambia el test |
+| I-12 | HU-01/CA-F12 (c) y (d), HU-04/CA-F23, HU-07/CA-N04, HU-07/CA-F04 | Resuelta por T-20 opción A (`docs/arquitectura.md` §7, 1.7a): sin límite de sesión para `confirm`/`change`; historia y arquitectura coinciden | Mientras la cuenta del titular de la sesión está en bloqueo temporal, toda reconfirmación (`confirmPin`) o `currentPin` de esa sesión recibe `423 LOCKED` ("Cuenta bloqueada. Espera X min"), **también** cuando la misma sesión acumula 5 fallos (lo que la arquitectura respondería con `429` por el límite de sesión, paso 2 de `verifyPin`); y al terminar el bloqueo se puede volver a intentar (CA-F12 (d)). Los tests siguen la historia; si la arquitectura no cambia, fallarán y se reportan |
 | I-13 | HU-08/CA-F05, CA-F07, CA-F15 | Confirmada (PO 1.7k, T-23; escrita en CA-F05 y aplicada en CA-F07 y CA-F15) | Reparto por la hora del cierre guardado, como en `docs/arquitectura.md` §4.4 (1.7h): lo registrado **antes** de `closed_at` (`<`) está en las cifras del cierre; lo registrado **en o después** de `closed_at` (`>=`), en "Cambios tras el cierre". Sea cual sea el mecanismo, cada cobro, anulación y cancelación del día está **exactamente en uno** de los dos sitios: nunca en los dos ni en ninguno, tampoco si el cobro y el cierre son simultáneos (§5.2.3, C-08 y C-09) |
 | I-14 | HU-08/CA-F15 (d), CA-F09, CA-F13 | Confirmada (PO 1.7k; escrita en CA-F15 (d)); coincide con `docs/ux/wireframes/09-resumen-dia.md` y con `docs/arquitectura.md` §4.4 (anulados por `voided_by`, `not_applicable`) | Cuando se anula un cobro registrado tras el cierre, sale de "Cobros tras el cierre" de la fila de quien cobró y cuenta en "Cobros anulados" de la sección en la fila del **encargado que anuló**, con "No aplica (encargado)" (como en el desglose, CA-F13), por el importe del cobro completo. Si se anula en un día posterior, cuenta en la sección del día del cobro original (CA-F09), no en la del día de la anulación |
 | I-15 | HU-08/CA-F03 en un día cerrado | Confirmada (PO 1.7k, T-25; escrita en CA-F03 y CA-F05); coincide con `docs/arquitectura.md` §5.1 (`openOrders` siempre actual) | El aviso "Hay N pedidos sin cobrar" **no** es una cifra del cierre guardado: se calcula al consultar (CA-F03 "al consultar el resumen"). Un cobro tras el cierre lo reduce en 1 y anular ese cobro lo vuelve a subir (el pedido se reabre, HU-04/CA-F16) |
@@ -286,7 +295,7 @@ Alcance mínimo:
   no dígitos, todos iguales (1111, 000000), secuencias de ≥ 4 en cualquier
   posición (1234, 4321, 0123, 9876, 381234), bloque repetido (1212, 123123,
   121212), lista de PIN prohibidos (2580, 112233, 147258…) y aceptados (4831,
-  739164; 1357 y 12345 solo si no están en la lista), matriz de permisos
+  739164; 1357 solo si no está en la lista; 12345 se rechaza por secuencia), matriz de permisos
   **contra la tabla esperada escrita en el test**, máquina de estados (todas las
   parejas estado × acción, válidas e inválidas, incluido Servido y `requeue`),
   cálculo de fecha de negocio `Europe/Madrid` (23:59:59 / 00:00:00, cambio de
@@ -386,11 +395,10 @@ Alcance mínimo:
   bloquea al encargado (`423` en el siguiente intento, aunque el PIN sea
   correcto). Cambiar **solo** el nombre no lo exige. El PIN de otro encargado
   no vale como `confirmPin`. En E2E: el motivo de la anulación y los datos del
-  formulario de Personal siguen escritos tras el fallo. **[1.6d]** Corrección:
-  si los 5 fallos son de la **misma sesión**, la arquitectura responde al 6.º
-  con `429` (límite de sesión) y no con `423`; la historia (HU-01/CA-F12)
-  pide "Cuenta bloqueada. Espera X min". Los tests esperan lo que dice la
-  historia (I-12) y el conflicto está reportado (T-20). Sesión abierta con la
+  formulario de Personal siguen escritos tras el fallo. **[1.6d, resuelto en la 1.7a]**
+  Con 5 fallos en la misma sesión la arquitectura respondía `429`; tras T-20
+  (opción A) `confirm` y `change` no tienen límite por sesión y el 6.º intento
+  recibe `423`, como pide HU-01/CA-F12. Sesión abierta con la
   cuenta bloqueada (T-14 resuelto): §5.2.1.
 
 #### 5.2.1 Verificación de PIN única (`verifyPin`, SEC-016; HU-01/CA-F12, CA-F13)
@@ -413,7 +421,7 @@ fallos más admite esa IP o esa sesión antes del `429`).
 | P-3 | PIN provisional, `currentPin` incorrecto | `403 PIN_INVALID` (no `401`): la sesión sigue válida (`GET /auth/me` → `200`); `failed_attempts` +1; cuenta para la IP y para la sesión |
 | P-4 | PIN provisional, `newPin` que incumple la regla (encargado con 5 dígitos, `111111`, `123456`, de la lista) y `currentPin` correcto | `400` con la regla incumplida; el PIN no cambia |
 | P-5 | Cuenta en bloqueo temporal (5 fallos de login desde la IP B) y `currentPin` **correcto** desde la sesión provisional en la IP A | `423 LOCKED {retryAfterSeconds}`; *hasher* no llamado; nada cambia; no cuenta (I-01, HU-01/CA-F12 (c)) |
-| P-6 | 5 `currentPin` incorrectos en la misma sesión; 6.º con el PIN correcto | Fallos 1–5: `403 PIN_INVALID` (el 5.º activa el bloqueo de 5 min con el mensaje normal, CA-F12 (b)). 6.º: **`423 LOCKED`** según la historia (I-12); la arquitectura daría `429 TOO_MANY_ATTEMPTS` (T-20) |
+| P-6 | 5 `currentPin` incorrectos en la misma sesión; 6.º con el PIN correcto | Fallos 1–5: `403 PIN_INVALID` (el 5.º activa el bloqueo de 5 min con el mensaje normal, CA-F12 (b)). 6.º: **`423 LOCKED`** sin hash; a los 5 min, `204` (I-12; T-20 resuelto en la 1.7a) |
 | P-7 | Límite por IP: 10 fallos de cualquier ruta de PIN desde la IP A en 10 min; después `currentPin` correcto desde esa IP | `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}`, *hasher* no llamado, nada cambia. Control: otra sesión provisional desde la IP B con `currentPin` correcto → `204` (el límite es de la IP) |
 | P-8 | `failed_attempts = 19` (fabricado en BD) y `currentPin` incorrecto | `423 ACCOUNT_LOCKED_MANUAL`; `locked_manual = true`; **todas** las sesiones del usuario, incluida esta, revocadas (siguiente petición `401`) (HU-01/CA-F13) |
 
@@ -1247,6 +1255,46 @@ pantalla, teclado y zoom; axe no cubre todo WCAG).
 | CA-N05 | Cada bloqueo y rechazo por dispositivo registrado; alerta si es encargado o indefinido | I (eventos, RS-30), M (alerta con Monitoring, Etapa 3) | 2026-11-23 |
 | CA-N06 | Toda sesión, también la de barra, caduca a las 12 h | U, I, E (RS-13) | 2026-11-23 |
 
+#### Ficheros de HU-01 (tarea 2.1, 2026-11-24)
+
+Escritos antes de la implementación contra el contrato de `tests/README.md`
+(fallan hasta que exista el código). `sh tests/run.sh trazabilidad`: 23/23.
+
+| Fichero (`tests/…`) | Capa | Criterios |
+|---|---|---|
+| `unit/shared/pin-reglas.unit.test.ts` | U | CA-N01 (RS-01, RS-02) |
+| `unit/shared/permisos.unit.test.ts` | U | CA-F01, CA-F02, CA-F03, CA-N02 (RS-18, T-18) |
+| `unit/shared/bloqueo.unit.test.ts` | U | CA-F06 (RS-03, I-01) |
+| `unit/shared/minutos-restantes.unit.test.ts` | U | CA-F06, CA-F11, CA-F12 (I-03) |
+| `integration/api/HU-01-login.int.test.ts` | I | CA-F01..F03 (`/auth/me`, permisos y `localConfig`), CA-F05 (RS-07), CA-F07, CA-F08 (RS-10, RS-11, RS-14), CA-N01 (RS-08, RS-31), CA-U01 (rejilla), RS-24 |
+| `integration/api/HU-01-bloqueo.int.test.ts` | I (FakeClock) | CA-F06 (25 intentos, RS-03), CA-N05 (eventos y métricas, RS-30, RS-47) |
+| `integration/api/HU-01-dispositivo.int.test.ts` | I (FakeClock, `remoteAddress`) | CA-F11 (RS-05, RS-06, I-02), CA-N05 |
+| `integration/api/HU-01-verify-pin.int.test.ts` | I (FakeClock, SSE) | CA-F12 y CA-F13 por `currentPin` y por login (P-1..P-8 de §5.2.1), RS-14, RS-15, RS-16b; HU-07/CA-F04 |
+| `integration/api/HU-01-sesion.int.test.ts` | I (FakeClock, SSE) | CA-F09 (RS-12), CA-N06 (RS-13) |
+| `integration/realtime/HU-01-revocacion.int.test.ts` | R | CA-F08 (RS-14) |
+| `integration/api/HU-01-encargado-inicial.int.test.ts` | I (BD aislada) | Encargado inicial (RS-09), CA-F06 con `unlock-user` (RS-09b) |
+| `integration/api/HU-01-logs.int.test.ts` | I | CA-N01 (RS-29, TX-LOG-02 parcial), RS-30 |
+| `integration/api/HU-01-autoria.int.test.ts` | I | CA-F10 (se ejecuta al entrar HU-02 y HU-04 en el alcance) |
+| `security/matriz-autorizacion.sec.test.ts` | S | CA-F04, CA-N02 (RS-15, RS-17, RS-18; filas de HU-02..HU-08 según alcance) |
+| `e2e/HU-01-iniciar-sesion.e2e.ts` | E | CA-F01..F04, CA-F06, CA-F07, CA-F08, CA-F09, CA-F11 (presentación del `429`), CA-N01, CA-N06, CA-U01, CA-U04 |
+| `e2e/HU-01-errores.pin.e2e.ts` | E (serie, 4 fallos reales) | CA-F05, CA-U03, CA-F12, CA-F13 (cola de barra → login en ≤ 1 s) |
+| `e2e/HU-01-teclado.dispositivo.e2e.ts` | E (6 dispositivos) | CA-U02, CA-U04, CA-N04 (objetivos) |
+| `a11y/HU-01-login.a11y.ts` | A | CA-N04, CA-U03, CA-U04 |
+| `visual/HU-01-login.visual.ts` | V | Capturas `tests/screenshots/HU-01/` (375/768/1024/1440/1920) |
+| `performance/k6/HU-01-login.js` + `performance/HU-01.semilla.ts` | P | CA-N03 (control rápido en Etapa 2; vinculante en Etapa 3) |
+
+Pendiente por dependencia (no se puede verificar solo con HU-01):
+- **CA-F10**: necesita `POST /orders` (HU-02) y `POST /payments` (HU-04).
+- **CA-F12 (c)** con `confirmPin` (anular cobro, Personal) y **CA-F13** con
+  `confirmPin` y `managerApproval`: se añaden en los ficheros de HU-04, HU-06 y
+  HU-07. En HU-01 se cubren con `currentPin` y con el login.
+- **CA-F04 por API**: ninguna ruta de HU-01 está restringida por rol (salvo
+  `POST /auth/pin` sin PIN provisional); las filas de la matriz de las demás
+  historias se activan al entrar en el alcance. En HU-01 se verifica por URL
+  (E2E) y con RS-17.
+- **CA-N05 (alerta)** y **CA-N04 (lector de pantalla)**: manuales registrados
+  en `tests/tools/manuales.json` (Etapa 3).
+
 ### HU-02 Tomar un pedido
 | ID | Criterio (resumen) | Tipos | Rev. |
 |---|---|---|---|
@@ -1528,6 +1576,7 @@ captura o traza de Playwright), **agente responsable**.
 | Fecha | Etapa | Suite | Imágenes (digest) / commit | Resultado | Cobertura | Notas |
 |---|---|---|---|---|---|---|
 | — | 1 | — | — | Sin ejecuciones: aún no hay código ni `compose.test.yaml` | — | — |
+| 2026-11-24 | 2 (tarea 2.1) | `trazabilidad` (`tests/run.sh`, `runner-unit` sin red) | `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:91651731…` / commit `9f87021` | **Pasa**: HU-01 23/23 criterios con test o verificación manual; sin IDs inexistentes ni retirados | — | `run.sh` probado de extremo a extremo (secretos en `$XDG_RUNTIME_DIR`, `trap` con `down -v`, `comprobar_enlaces` antes y después). El resto de suites no se puede ejecutar: no existe la imagen de la app (`APP_IMAGE`) ni el código (tarea 2.2); fallarán por diseño hasta entonces |
 
 ## 13. Fallos abiertos
 
@@ -1596,6 +1645,21 @@ ronda 1.1f y contra `docs/arquitectura.md` tras la 1.3c.
 | T-25 | product-owner (ux-designer para el texto) | HU-08/CA-F03 en un día cerrado; CA-F05 | CA-F05 dice que un día cerrado muestra "las cifras del cierre guardado", pero no si el aviso "Hay N pedidos sin cobrar" es una de ellas. Con CA-F15 importa: tras un cobro posterior al cierre, el aviso congelado seguiría contando un pedido que ya está cobrado | Confirmar I-15 (el aviso se calcula al consultar; no es cifra del cierre) o decir lo contrario en CA-F03 | baja. **Cerrado (1.7m).** Verificado: HU-08/CA-F03 (1.7k) dice que en un día cerrado el aviso se calcula al consultar, baja con un cobro tras el cierre y vuelve a contar el pedido si ese cobro se anula; CA-F05 repite que no es cifra guardada; `docs/arquitectura.md` §4.4 (pedidos sin cobrar fuera de la instantánea) y §5.1 (`openOrders` siempre actual). El wireframe `09-resumen-dia.md` no lo contradice (el aviso no está dentro de las cifras del cierre), así que no hace falta texto nuevo de UX. I-15 confirmada; C-02, C-04, C-10 y C-18 lo comprueban |
 | T-26 [1.7m] | software-engineer | HU-08/CA-F07, CA-F15 (b), CA-F05 ("nunca en las dos ni en ninguna"); `docs/arquitectura.md` §4.4 ("Cerrojo del cierre") y §9 | El cerrojo garantiza que ningún cobro, anulación o cancelación con hora anterior al cierre se confirme **después** de que el cierre calcule la instantánea, pero la arquitectura no dice con qué **nivel de aislamiento** corre la transacción del cierre; solo fija `REPEATABLE READ` para la lectura de `GET /reports/daily` (§4.4, "Rendimiento"). En PostgreSQL, con `REPEATABLE READ` la foto de la transacción se toma al empezar su **primera sentencia**, que es el propio `SELECT pg_advisory_xact_lock(CASH_CLOSING_LOCK)`, antes de esperar al cerrojo. Un cobro que tomó el cerrojo compartido y leyó la hora antes de que el cierre empezara a esperar, y que confirma mientras el cierre espera, tiene `paid_at < closed_at` pero sería **invisible** para la instantánea, y la sección no lo lista (`paid_at >= closed_at`): desaparecería del día cerrado y la caja no cuadraría. Si el cierre reutiliza la transacción de solo lectura `REPEATABLE READ` de la lectura del día (misma función `computeDailySummary`), el fallo aparece. Con `READ COMMITTED` (cada sentencia toma una foto nueva, después del cerrojo) no ocurre. Afecta también a C-19: con `REPEATABLE READ`, el segundo cierre en paralelo vería "no existe" y el `INSERT` daría violación de PK, que debe salir como `409 DAY_ALREADY_CLOSED`, no `500` | Que §4.4 diga que `POST /reports/daily/:date/closing` corre en `READ COMMITTED` (o que la foto se toma en una sentencia posterior al cerrojo, p. ej. tomándolo antes de abrir la transacción `REPEATABLE READ`), y que la violación de la PK de `cash_closings` se traduce a `409 DAY_ALREADY_CLOSED`. Testing lo prueba con C-09 (b) (transacción en vuelo, determinista) y C-19 | media (pérdida silenciosa de un cobro en el cierre de caja; sin consecuencia mientras no haya código, pero debe estar escrito antes de la Etapa 2 de HU-08). **Cerrado (1.7p).** Verificado en `docs/arquitectura.md` §4.4 (1.7o): (1) las cuatro transacciones del cerrojo corren en `READ COMMITTED` y el cerrojo es su primera sentencia, así que cada lectura posterior ve lo confirmado por quien lo tenía; el caso del cobro confirmado mientras el cierre espera queda en la instantánea; (2) en el cierre, `clock.now()` va después del cerrojo y de comprobar la fila; en los escritores, después del cerrojo y antes del `FOR UPDATE`: el reparto `<` / `>=` es exacto en los dos sentidos; (3) coherencia entre sentencias de `computeDailySummary` en `READ COMMITTED`: correcta, porque con el cerrojo exclusivo no se confirma ningún cobro, anulación ni cancelación, las líneas solo cambian en pedidos `open` (que no entran en las cifras) y nombre y precio son instantánea en `order_lines`; (4) dos cierres: paso 3 → `409`, `ON CONFLICT DO NOTHING` como segunda barrera y `23505` en `cash_closings_pkey` → `409`, nunca `500` (§9, §16); (5) `GET /reports/daily` en `REPEATABLE READ` de solo lectura es correcto porque no usa la hora como corte. Riesgo aceptado por el SE y no cubierto por tests: reloj del sistema que retrocede durante un cierre (el `FakeClock` de C-09 es monótono). Pruebas: C-09 (b), (b-iso), (b-RR) y C-19 (§5.2.3). Queda un resto de robustez en T-27 |
 | T-27 [1.7p] | software-engineer (decisión); infrastructure si se elige la comprobación de entorno | HU-08/CA-F07, CA-F15 (b); `docs/arquitectura.md` §4.4 ("el helper de transacción no lo cambia") | El `READ COMMITTED` del que depende el reparto exacto es el **valor por defecto** de PostgreSQL, no algo que la aplicación fije. Un `default_transaction_isolation = 'repeatable read'` en `postgresql.conf`, en la base o en el rol (p. ej. al ajustar la BD de PROD o al migrar de imagen) reabriría T-26 sin cambiar código ni hacer fallar ningún test que corra con la configuración por defecto: el cobro confirmado mientras el cierre espera desaparecería del día cerrado | Preferida: que el helper abra estas cuatro transacciones con `BEGIN ISOLATION LEVEL READ COMMITTED` explícito (una línea, sin coste). Alternativa: comprobación al arrancar `app` (o en `readyz`/smoke) de `SHOW default_transaction_isolation` = `read committed`, con `config.invalid` si no. Testing lo prueba con C-09 (b-RR), cuyo resultado esperado depende de la opción elegida | baja (requiere un cambio de configuración de la BD; consecuencia, pérdida silenciosa de un cobro en el cierre) |
+
+### 14.5 Hallazgos nuevos (tarea 2.1, HU-01)
+
+| ID | Responsable | Criterio / archivo | Problema | Propuesta | Severidad |
+|---|---|---|---|---|---|
+| T-28 | infrastructure (cybersecurity revisa el rol nuevo) | §9.2; `compose.test.yaml` (`runner-integration`); `deploy/db/initdb/10-roles.sh` | (a) `runner-integration` solo recibe `app_owner` (límite de 2 conexiones): no alcanza para la app en proceso (`buildApp`) y los constructores de datos, y la app debe probarse con su rol real `app_rw`. (b) La BD por fichero de §9.2 (`CREATE DATABASE … TEMPLATE app_template`) exige un rol con `CREATEDB` y una plantilla migrada que no existen; sin ellos no se puede probar RS-09 (encargado inicial: necesita una BD sin encargados) | (a) Añadir a `runner-integration` `DATABASE_APP_USER=app_rw`, `DATABASE_APP_PASSWORD_FILE` y el secreto `db_app_password`. (b) Solo en TESTING: rol `test_admin` con `CREATEDB` (secreto propio), BD `app_template` migrada por `migrate` y `DATABASE_ADMIN_USER`, `DATABASE_ADMIN_PASSWORD_FILE`, `DATABASE_TEMPLATE` en el ejecutor (`tests/README.md` §6). Mientras tanto los ficheros de integración van en serie sobre `cafeteria` con datos únicos | media (bloquea la ejecución de la suite de integración de HU-01) |
+| T-29 | infrastructure, cybersecurity | §8.1, §9.3; `compose.test.yaml` (`runner-e2e`, `runner-perf`) | `runner-e2e` solo está en la red `edge`: no puede fabricar el pasado en la BD (§8.1: bloqueos, caducidad de 12 h) ni sembrar usuarios antes de HU-07 (no hay `POST /staff`), y k6 no tiene usuarios con PIN conocido | Solo en TESTING: `runner-e2e` también en `backend`, con `DATABASE_*`, `db_app_password` y `pin_pepper` de la ejecución (aleatorio, nunca fuera de TESTING). Cybersecurity aprueba que el ejecutor reciba el *pepper* de prueba | media (bloquea los E2E de HU-01) |
+| T-30 | ux-designer (product-owner si cambia el texto del criterio) | HU-01/CA-F12 (c); `docs/ux/wireframes/01-login.md`, "Cambio obligatorio del PIN", fila `423 LOCKED` | El wireframe muestra "Demasiados intentos fallidos. Podrás volver a intentarlo en 5 min." al reintroducir el PIN actual con la cuenta en bloqueo temporal; CA-F12 (c) (y I-01, I-12, design system §5.10b) pide "Cuenta bloqueada. Espera X min" para toda acción de la sesión que pide el propio PIN. El E2E sigue la historia | Usar "Cuenta bloqueada. Espera X min" también en esa pantalla, o que el PO diga que el cambio obligatorio del PIN queda fuera de CA-F12 (c) | baja |
+| T-31 | ux-designer, software-engineer | HU-01/CA-F04 ("por URL"), CA-F03 | No están definidas las rutas de la SPA ni el estado "acceso denegado" de una ruta sin permiso. Además, para CA-F03/CA-F04 en E2E, HU-01 necesita que existan (aunque vacías) las rutas de Menú, Personal y Resumen con su guarda | Fijar rutas (propuesta en `tests/README.md` §5: `/pedidos`, `/cola`, `/menu`, `/personal`, `/resumen`) y el texto "Acceso denegado". El Orquestador confirma que el Developer crea esas pantallas vacías en HU-01 | baja |
+| T-32 | software-engineer | `docs/arquitectura.md` §5, §7, §12 | Detalles de contrato que los tests necesitan y la arquitectura no fija: dónde va `retryAfterSeconds`, forma del `400` (código e `issues`), códigos y orden de las reglas de PIN, dependencias de `buildApp` (`publicOrigin`, `trustedProxies`, `logDestination`, `onRoute`, métricas), cómo declara cada ruta su permiso, *exports* de los paquetes y API de los comandos `create-initial-manager`/`unlock-user` | Adoptar la propuesta de `tests/README.md` §1–§3 en la arquitectura o proponer otra; Testing ajusta solo los ficheros de adaptación de `tests/support/` | baja |
+| T-33 | product-owner | HU-01/CA-F13 | Sigue diciendo "A confirmar por Cybersecurity", pero `docs/seguridad.md` §6.4 (1.4c) confirmó los dos puntos | Quitar la marca y redactar el criterio para todo bloqueo indefinido; los tests ya aplican esa lectura | baja |
+| T-34 | cybersecurity (infrastructure) | §7.1 (CA de la ejecución), §7.2; `tests/playwright.config.ts` | Chromium confía solo en el certificado del proxy verificado contra la CA de la ejecución (fijación SPKI en `global-setup.ts`), pero WebKit no tiene opción equivalente: sin `ignoreHTTPSErrors` no conecta. Sigue pendiente también la decisión de `chromiumSandbox` (§7.2) | Decidir si se admite `ignoreHTTPSErrors` solo en el proyecto WebKit de TESTING (red interna efímera) o se instala la CA en la imagen de Playwright en tiempo de construcción | baja (el proyecto `tablet-h-webkit` fallará hasta que se decida) |
+| T-35 | infrastructure (orquestador para `.gitignore`) | `docs/infraestructura.md` §7.1; `compose.dev.yaml`; `deploy/dev/levantar.sh`; `.gitignore` | `tests/` es paquete del workspace (`@mi-app/tests`): `deps` necesita `./tests/node_modules` en `rw` y `comprobar_enlaces` de `levantar.sh` debería incluirlo (la de `tests/run.sh` ya lo hace). `tests/results/` no está en `.gitignore`: los informes de cada ejecución entrarían en `git add -A` | Añadir `./tests/node_modules` a la lista de permitidos de `deps` y a `comprobar_enlaces`; añadir `tests/results/*` (salvo `.gitkeep`) a `.gitignore` | baja |
+| T-36 | software-engineer, infrastructure | HU-01/CA-N06; RS-13 ("configuración > 12 h → el servidor no arranca") | No hay nombre de variable para la caducidad absoluta configurable a la baja (no está en `docs/infraestructura.md` §6): no se puede escribir el unitario de `config.ts` de RS-13 | Fijar la variable (p. ej. `SESSION_MAX_HOURS`, 1–12, por defecto 12) en §4.1/§7 y en §6 de infraestructura | baja |
+| T-37 | software-engineer (product-owner si se acepta la tolerancia) | HU-01/CA-F09; `docs/arquitectura.md` §7 (`last_activity_at` como mucho cada 30 s) | La inactividad se mide desde `last_activity_at`, que puede ir hasta 30 s por detrás de la última interacción real: una sesión podría cerrarse tras 14 min 30 s sin interacción, antes de los 15 min del criterio. Los tests espacian las peticiones > 30 s y no lo detectan | Actualizar `last_activity_at` si han pasado > 30 s **y** guardar la hora real de la petición (no la del último guardado), o que el PO acepte una tolerancia de −30 s en CA-F09 | baja |
 
 Además, §4.5 recoge las **interpretaciones** vigentes: I-01..I-10 confirmadas
 o corregidas por el PO (1.1f), I-11, I-12 pendientes de T-19 y T-20, e

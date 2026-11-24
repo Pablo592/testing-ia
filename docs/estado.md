@@ -11,7 +11,9 @@ Una historia a la vez, en el orden de `docs/historias/README.md`: HU-01, HU-05, 
 | # | Agente | Tarea | Estado |
 |---|---|---|---|
 | 2.0 | product-owner | Supuesto nuevo en el README: los "Cobros tras el cierre" no separan efectivo (decisión H-1.7g-01) | Hecho (supuesto 25 en el README, nota en HU-08; sin cambios de criterios) |
-| 2.1 | testing | HU-01: tests de la historia (y `tests/run.sh` con los requisitos de `docs/infraestructura.md` §7.1) | En curso |
+| 2.1 | testing | HU-01: tests de la historia (y `tests/run.sh` con los requisitos de `docs/infraestructura.md` §7.1) | Hecho (tests de HU-01 en `tests/`: 4 unitarios, 10 de integración, matriz de autorización, 3 e2e, a11y, visual, k6 y TX-CONT-01; `tests/run.sh` con requisitos 1–5; contrato para el developer en `tests/README.md`; suite de trazabilidad en verde (23/23 criterios); integración y e2e bloqueados por T-28/T-29; `tests/results/` ignorado en git) |
+| 2.1b | infrastructure | T-28 (credenciales `app_rw`, rol `CREATEDB` y BD plantilla para integración), T-29 (BD y *pepper* para el ejecutor e2e/k6), T-35 (`tests/node_modules` en `deps`) y T-34 (CA en WebKit, con cybersecurity) en `compose.test.yaml` | En cola |
+| 2.1c | software-engineer | T-32 (contrato de `buildApp`, formato de errores, códigos de reglas de PIN, comandos), T-36 (variable de caducidad de sesión), T-37 (tolerancia de inactividad), T-31 (rutas web, con UX) | En cola |
 | 2.2 | developer | HU-01: estructura inicial del monorepo e implementación de la historia | En cola |
 | 2.3 | cybersecurity / ux-designer | HU-01: revisión de la entrega | En cola |
 
@@ -192,6 +194,16 @@ Orquestador lo aplica así (el humano puede corregir cualquier punto):
 | 2026-11-24 | testing | product-owner, ux-designer | **T-25 (baja)** Confirmar que el aviso "Hay N pedidos sin cobrar" (CA-F03) de un día cerrado se calcula al consultar y no es una cifra del cierre guardado (I-15) | Resuelto y verificado (Testing 1.7m). Cerrado |
 | 2026-11-24 | testing | software-engineer | **T-26 (media)** `docs/arquitectura.md` §4.4 no fija el aislamiento de la transacción de `POST /reports/daily/:date/closing`. Con `REPEATABLE READ` la foto se toma en el `pg_advisory_xact_lock` antes de esperar al cerrojo: un cobro que confirma mientras el cierre espera quedaría fuera de la instantánea y de la sección. **Propuesta:** cierre en `READ COMMITTED` (o cerrojo antes de abrir la foto) y violación de la PK de `cash_closings` → `409 DAY_ALREADY_CLOSED`. Lo prueban C-09 (b) y C-19 | Resuelto (SE 1.7o) y verificado (Testing 1.7p). Cerrado |
 | 2026-11-24 | testing | software-engineer (infrastructure si se elige la comprobación de entorno) | **T-27 (baja)** §4.4 confía en que `READ COMMITTED` sea el valor por defecto; si `default_transaction_isolation` cambia en la configuración, la BD o el rol, T-26 reaparece sin aviso. **Propuesta preferida:** `BEGIN ISOLATION LEVEL READ COMMITTED` explícito en las cuatro transacciones del cerrojo; alternativa: comprobarlo al arrancar o en el smoke. C-09 (b-RR) depende de la opción | Decidido por el humano (2026-11-24): se resuelve en la Etapa 2 (SE antes de HU-08) |
+| 2026-11-24 | testing | infrastructure (cybersecurity revisa) | **T-28 (media)** El ejecutor de integración no tiene credenciales de `app_rw`; faltan un rol con `CREATEDB` y una BD plantilla migrada (RS-09). Bloquea la integración de HU-01 | Abierto |
+| 2026-11-24 | testing | infrastructure, cybersecurity | **T-29 (media)** El ejecutor e2e no llega a la BD ni tiene el *pepper*: no puede sembrar usuarios ni fabricar bloqueos. Bloquea e2e y k6 de HU-01 | Abierto |
+| 2026-11-24 | testing | ux-designer (product-owner si cambia el criterio) | **T-30 (baja)** Texto del 423 en "Cambio obligatorio del PIN" distinto de HU-01/CA-F12 (c) | Abierto |
+| 2026-11-24 | testing | ux-designer, software-engineer | **T-31 (baja)** Faltan rutas de la web y estado "Acceso denegado"; confirmar pantallas vacías de Menú, Personal y Resumen en HU-01 | Abierto |
+| 2026-11-24 | testing | software-engineer | **T-32 (baja)** Fijar en la arquitectura el contrato de `buildApp`, formato de errores, códigos de reglas de PIN y comandos (hoy en `tests/README.md`) | Abierto |
+| 2026-11-24 | testing | product-owner | **T-33 (baja)** HU-01/CA-F13 dice "A confirmar por Cybersecurity" pero ya está confirmado (`docs/seguridad.md` §6.4) | Abierto |
+| 2026-11-24 | testing | cybersecurity (infrastructure) | **T-34 (baja)** WebKit no confía en la CA de la ejecución sin ignorar errores de certificado; pendiente la decisión del *sandbox* de Chromium | Abierto |
+| 2026-11-24 | testing | infrastructure (orquestador para `.gitignore`) | **T-35 (baja)** `deps` necesita escribir en `tests/node_modules`; `tests/results/` no estaba en `.gitignore` (parte del orquestador hecha en 2.1) | Abierto |
+| 2026-11-24 | testing | software-engineer, infrastructure | **T-36 (baja)** No hay variable para la caducidad de 12 h configurable a la baja (RS-13) | Abierto |
+| 2026-11-24 | testing | software-engineer (product-owner si acepta tolerancia) | **T-37 (baja)** La inactividad puede cerrar la sesión hasta 30 s antes de los 15 min (actividad guardada cada 30 s) | Abierto |
 
 ## Ciclos de retroceso (máximo 3 por funcionalidad)
 | Funcionalidad | Ciclos | Motivo del último |
