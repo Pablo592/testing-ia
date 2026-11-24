@@ -30,6 +30,10 @@ fi
 
 # 2. Secretos (solo crea los que falten).
 sh deploy/dev/generar-secretos.sh
+# Puntos de montaje: .secrets/ (tapado por un tmpfs) y la lista de permitidos
+# en escritura de web/deps (SEC-023, docs/infraestructura.md §7.1).
+mkdir -p -m 0700 .secrets
+mkdir -p apps packages node_modules
 
 # 3. Imagen de herramientas (formato docker para conservar el HEALTHCHECK).
 if ! podman image exists "$IMAGE"; then

@@ -50,20 +50,19 @@ x-hardening: &hardening
 x-workspace-tmpfs: &workspace-tmpfs
   - /tmp:rw,nosuid,nodev,noexec,size=256m
   - /workspace/.secrets:ro,nosuid,nodev,noexec,size=4k,mode=0000,notmpcopyup
-# 2) En los servicios con el árbol en escritura (web, deps), todo lo que se
-#    ejecuta o se lee como instrucciones en el HOST queda en solo lectura:
-#    hooks y config de git, hooks y agentes de Claude, scripts de deploy/,
-#    los compose, .gitignore (evita que entren secretos en un commit),
-#    CLAUDE.md, docs/ y tools/. Todos son ficheros versionados (existen siempre).
-x-ro-git: &ro-git ./.git:/workspace/.git:ro
-x-ro-claude: &ro-claude ./.claude:/workspace/.claude:ro
-x-ro-claude-md: &ro-claude-md ./CLAUDE.md:/workspace/CLAUDE.md:ro
-x-ro-deploy: &ro-deploy ./deploy:/workspace/deploy:ro
-x-ro-docs: &ro-docs ./docs:/workspace/docs:ro
-x-ro-tools: &ro-tools ./tools:/workspace/tools:ro
-x-ro-gitignore: &ro-gitignore ./.gitignore:/workspace/.gitignore:ro
-x-ro-compose-dev: &ro-compose-dev ./compose.dev.yaml:/workspace/compose.dev.yaml:ro
-x-ro-compose-test: &ro-compose-test ./compose.test.yaml:/workspace/compose.test.yaml:ro
+# 2) SEC-018 + SEC-023: regla "nada que se ejecute en el HOST es escribible desde
+#    un contenedor". web y deps montan el proyecto en SOLO LECTURA y solo
+#    vuelven a montar en escritura una LISTA DE PERMITIDOS: lo que pnpm install
+#    y Vite necesitan escribir. Todo lo demás (raíz, .git, .claude, CLAUDE.md,
+#    deploy/, docs/, tools/, tests/ con tests/run.sh, compose, .gitignore,
+#    tsconfig/eslint de la raíz y cualquier fichero nuevo como .envrc o
+#    .vscode/) queda en ro por defecto. Si falta un origen, podman-compose crea
+#    el directorio vacío en el host (levantar.sh los crea antes). Nunca añadir
+#    aquí tests/ entero, la raíz ni una ruta con scripts que se ejecuten en el
+#    host (docs/infraestructura.md §7.1).
+x-rw-apps: &rw-apps ./apps:/workspace/apps:rw
+x-rw-packages: &rw-packages ./packages:/workspace/packages:rw
+x-rw-node-modules: &rw-node-modules ./node_modules:/workspace/node_modules:rw
 
 x-node-image: &node-image
   image: localhost/mi-app-dev-tools:node26.13.1-pnpm12.21.0
@@ -202,18 +201,13 @@ services:
       API_PROXY_TARGET: http://api:3000
       HEALTHCHECK_URL: http://127.0.0.1:5173/
     volumes:
-      # Lectura/escritura: Vite escribe su caché en node_modules/.vite y
-      # ficheros temporales junto a vite.config (docs/infraestructura.md §7).
-      - ./:/workspace:rw
-      - *ro-git
-      - *ro-claude
-      - *ro-claude-md
-      - *ro-deploy
-      - *ro-docs
-      - *ro-tools
-      - *ro-gitignore
-      - *ro-compose-dev
-      - *ro-compose-test
+      # Proyecto en ro; en rw solo la lista de permitidos: Vite escribe su caché
+      # en apps/web/node_modules/.vite y ficheros temporales junto a
+      # apps/web/vite.config (docs/infraestructura.md §7, §7.1).
+      - ./:/workspace:ro
+      - *rw-apps
+      - *rw-packages
+      - *rw-node-modules
     networks: [frontend]
     ports:
       - "127.0.0.1:5173:5173"
@@ -245,16 +239,12 @@ services:
     environment:
       CI: "true"
     volumes:
-      - ./:/workspace:rw
-      - *ro-git
-      - *ro-claude
-      - *ro-claude-md
-      - *ro-deploy
-      - *ro-docs
-      - *ro-tools
-      - *ro-gitignore
-      - *ro-compose-dev
-      - *ro-compose-test
+      # Proyecto en ro; pnpm escribe node_modules/ en la raíz y en cada paquete
+      # del workspace (apps/*, packages/*). --frozen-lockfile no toca el lockfile.
+      - ./:/workspace:ro
+      - *rw-apps
+      - *rw-packages
+      - *rw-node-modules
       - pnpm-store:/pnpm-store
     networks: [deps]
     healthcheck:

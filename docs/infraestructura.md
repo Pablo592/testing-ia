@@ -163,6 +163,16 @@ si no existe → `deps` → `up -d db` → espera a `db` *healthy* → `migrate`
 `podman-compose` muestra `WARNING: unused networks: deps` cuando no se usa el
 perfil `setup`: es normal (la red solo la usa `deps`).
 
+**No es inocuo** (visto el 2026-11-24): `The cgroupv2 manager is set to systemd
+but there is no systemd user session available` seguido de
+`runc create failed: ... rootless needs no limits + no cgrouppath` al
+arrancar cualquier servicio. Causa: la terminal hereda un
+`DBUS_SESSION_BUS_ADDRESS` que apunta al bus de **otro** usuario (p. ej.
+`/run/user/1001/bus` tras un cambio de usuario en el escritorio), Podman no
+puede usar systemd, cae a `cgroupfs` y no puede aplicar los límites de
+memoria/CPU. Arreglo, sin root: `export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus`
+(o abrir una sesión nueva del usuario) y repetir. No se quitan los límites.
+
 ### 4.3 Por qué los efímeros van en un perfil y no en `depends_on`
 `podman-compose` traduce `depends_on` a `podman --requires`, y Podman **vuelve
 a arrancar** los contenedores requeridos que estén parados cada vez que arranca
@@ -300,28 +310,25 @@ No da ningún privilegio: el usuario del contenedor ya es el del host.
    imagen final (`deploy/app/Containerfile`, distroless), la misma de `db`
    (idéntico digest) y la de Caddy. La regla "mismas imágenes en todos los
    entornos" se cumple para `db` en DEV y para todas desde TESTING.
-2. **Código montado en lectura/escritura en `web` y `deps`.** No es la raíz del
-   contenedor (que sigue en solo lectura) sino el árbol del proyecto: `deps`
-   escribe `node_modules/` y Vite escribe su caché (`node_modules/.vite`) y
-   ficheros temporales junto a `vite.config`. `api`, `migrate` e
-   `init-manager` lo montan en solo lectura. Si el Developer mueve la caché de
-   Vite a `/tmp` (`cacheDir`), `web` podría pasar a `ro`.
-   **Límites de la excepción (SEC-018):** en `web` y `deps`, todo lo que se
-   ejecuta o se lee como instrucciones **en el host** se vuelve a montar en
-   `ro` encima del árbol: `.git` (hooks, `config` con `core.hooksPath` o
-   `core.fsmonitor`), `.claude` (hooks y agentes), `CLAUDE.md`, `deploy/`
-   (scripts que se ejecutan en el host), `docs/`, `tools/`, `.gitignore` (para
-   que no se pueda dejar de ignorar `.secrets/`) y los `compose.*.yaml`. Así
-   el código de terceros que ejecuta `deps` (scripts de instalación permitidos)
-   o `web` (plugins de Vite) no puede salir del contenedor hacia la cuenta del
-   usuario al hacer `git commit` o abrir una sesión del agente. Todos son
-   ficheros versionados, así que siempre existen (`podman-compose` crearía un
-   directorio vacío si faltara un origen). Al añadir `compose.demo.yaml`, se
-   añade a la lista. Riesgo residual aceptado: el código fuente (`apps/`,
-   `packages/`, `tests/`) sigue siendo escribible por `web`/`deps`; un cambio
-   así no se ejecuta solo en el host y se ve en `git status`/`git diff` antes
-   de cada commit. Además, los 5 servicios que montan el proyecto llevan
-   `.secrets/` tapado (§5).
+2. **Partes del árbol del proyecto en escritura en `web` y `deps`** (SEC-018,
+   SEC-023). La raíz del contenedor sigue en solo lectura y **el proyecto
+   también** (`./:/workspace:ro`); encima solo se vuelve a montar en `rw` una
+   lista de permitidos: `apps/`, `packages/` y `node_modules/`. `deps` escribe
+   ahí `node_modules/` (raíz y cada paquete del workspace) y Vite escribe su
+   caché (`apps/web/node_modules/.vite`) y ficheros temporales junto a
+   `apps/web/vite.config`. `api`, `migrate` e `init-manager` montan el
+   proyecto entero en `ro`. Si el Developer mueve la caché de Vite a `/tmp`
+   (`cacheDir`) y los temporales dejan de escribirse junto a `vite.config`,
+   `web` podría quedarse solo con `node_modules/` o pasar a `ro`.
+   Con esto todo lo que se ejecuta o se lee como instrucciones **en el host**
+   queda en `ro` por defecto: `.git` (hooks, `core.hooksPath`,
+   `core.fsmonitor`), `.claude`, `CLAUDE.md`, `deploy/`, `docs/`, `tools/`,
+   `tests/` (con `tests/run.sh`), `.gitignore`, los `compose.*.yaml`, la
+   configuración de la raíz (`package.json`, `tsconfig*.json`,
+   `eslint.config.*`) y **cualquier fichero nuevo de la raíz** (`.envrc` de
+   direnv, `.vscode/tasks.json`…), sin tener que acordarse de añadirlo a una
+   lista. La regla y sus límites están en §7.1. Los 5 servicios que montan el
+   proyecto llevan además `.secrets/` tapado (§5).
 3. **`deps` tiene salida a internet** (registro npm) en su red `deps`; es el
    único servicio con ella y no tiene secretos.
 
@@ -329,6 +336,55 @@ En la construcción de la imagen, `npm install -g pnpm` se ejecuta como root
 **solo en tiempo de construcción** (rootless, sin `sudo`); la ejecución es
 siempre UID 1000. npm avisa de que omite los *scripts* de instalación de pnpm:
 es inocuo (`pnpm --version` funciona).
+
+### 7.1 Regla: nada que se ejecute en el host es escribible desde un contenedor (SEC-023)
+
+Ningún fichero que se ejecute (o que una herramienta del host lea como
+instrucciones) en la cuenta del usuario puede quedar escribible desde un
+contenedor. El código de terceros que ejecutan `deps` (scripts de instalación)
+y `web` (plugins de Vite) no debe poder salir del contenedor modificando algo
+que luego corre en el host antes de que nadie mire `git diff`.
+
+Cómo se aplica:
+- **DEV, `web` y `deps`:** proyecto en `ro` + lista de permitidos en `rw`
+  (`x-rw-apps`, `x-rw-packages`, `x-rw-node-modules` en `compose.dev.yaml`).
+  Es una lista de permitidos, no de prohibidos: lo que no está en ella queda
+  en `ro`. Si falta un origen, `podman-compose` crea el directorio vacío en el
+  host; `deploy/dev/levantar.sh` los crea antes con `mkdir -p`.
+- **DEV, `api`, `migrate`, `init-manager`:** proyecto entero en `ro`.
+- **TESTING:** proyecto en `ro`; solo `tests/results` (o `TEST_RESULTS_DIR`)
+  y `tests/screenshots` en `rw` (§9).
+- **Nunca** se añade a la lista de permitidos la raíz, `tests/` entero, ni una
+  ruta que contenga scripts que se ejecuten en el host. Si `tests/` pasa a ser
+  un paquete del workspace pnpm, se añade solo `./tests/node_modules` en `rw`.
+  Al añadir `compose.demo.yaml` u otro fichero de entrada, va fuera de la lista.
+- Toda ruta en `rw` es **solo datos o código que corre dentro de un
+  contenedor**: el host no ejecuta nada de `apps/`, `packages/`,
+  `node_modules/`, `tests/results` ni `tests/screenshots` (ni `node`/`pnpm`
+  del host sobre el árbol, ni extensiones del IDE que ejecuten
+  `vite.config`/`vitest.config` en el host). Riesgo residual aceptado: el
+  código de `apps/` y `packages/` sigue siendo modificable por `web`/`deps`;
+  solo se ejecuta dentro de contenedores y se revisa en `git diff`.
+
+**Script de pruebas del host (lo crean Testing o Developer en la Etapa 2).**
+Ubicación: `tests/run.sh` (la de `docs/testing.md` §4.1 y §7.3), que ya no es
+escribible desde ningún contenedor: `tests/` está fuera de la lista de
+permitidos de DEV y en TESTING solo `tests/results` y `tests/screenshots` son
+`rw`. También valdría `tools/run-tests.sh`. Requisitos obligatorios del script:
+1. Antes de cualquier `up`/`run`: `mkdir -p -m 0700 .secrets` (desde la raíz
+   del repositorio). Sin ese directorio el tmpfs que lo tapa no tiene punto de
+   montaje dentro de un montaje `ro` y el contenedor no arranca (p. ej. en CI).
+2. No ejecutar, `source`ar ni leer como configuración nada de `tests/results`,
+   `tests/screenshots` ni de la lista de permitidos de DEV.
+3. Vivir fuera de cualquier ruta en `rw` de un contenedor. Ningún servicio
+   monta `tests/run.sh` en escritura.
+4. El resto de §9 (orden de arranque, secretos por ejecución en
+   `$XDG_RUNTIME_DIR`, `podman-compose` siempre).
+
+Cómo verificarlo (RS-45 ampliado): `podman-compose -f compose.dev.yaml
+--profile setup run --rm --no-deps --entrypoint sh <web|deps> -c 'touch
+/workspace/tests/run.sh'` → `Read-only file system`; el mismo `touch` en
+`/workspace/apps/x` → correcto. Resultado de la prueba real en §15.
 
 ## 8. Imágenes y digests
 
@@ -619,6 +675,65 @@ No añade superficie en la red del local ni otra contraseña expuesta. La
 alternativa (detrás de Caddy con autenticación) queda descartada salvo que el
 humano lo pida. Prometheus, Loki y Alertmanager no se publican.
 
+### 11.3 DEMO: duración y retención de Loki (T-22)
+
+**Duración prevista de DEMO (Etapa 4):** desde el despliegue hasta que el
+humano aprueba la puerta de la Etapa 4; **entre 3 y 5 días laborables**
+(despliegue y smoke, 3–5 pruebas de usabilidad, ajustes, documentación en
+`docs/especificacion/`). **No se garantiza** que dure 7 días + 2 h, y no se
+alarga a propósito para esperar a la retención de 7 días.
+
+**Retención de Loki desplegada en DEMO (opción b de T-22, la de menor carga):**
+`limits_config.retention_period: 24h` (el mínimo de Loki, igual al periodo del
+índice), sin `retention_stream`, sin `max_query_lookback` y con el mismo
+`compactor` que PROD (`retention_enabled: true`, `retention_delete_delay: 2h`,
+`compaction_interval` por defecto, 10 min). Es solo configuración: la imagen
+de Loki es la misma (mismo digest) que en PROD. Prometheus en DEMO sigue con
+7 días (no afecta a T-22).
+
+Por qué esta opción: con 168 h, la opción (a) exige mantener DEMO más de 7
+días con logs; con 24 h basta el tiempo que DEMO dura de todas formas, no hay
+que fabricar logs antiguos (`reject_old_samples_max_age` no interviene) y la
+comprobación (`TX-MON-01`) usa la misma evidencia que la opción (a) (métrica
+del compactor + *chunks* borrados + consulta de control), así que la prueba es
+la fuerte, no la de "consulta vacía".
+
+Calendario mínimo dentro de DEMO:
+- **T0:** despliegue de DEMO con la pila de monitorización y tráfico real
+  desde el principio (smoke de Testing). Testing anota T0 y el recuento
+  inicial de *chunks* del volumen de Loki.
+- **No antes de T0 + 30 h:** `TX-MON-01`. 30 h = 24 h de retención + hasta
+  2 h de edad máxima de un *chunk* (`max_chunk_age` por defecto: un *chunk*
+  vence cuando vence su **última** línea) + 2 h de `retention_delete_delay` +
+  ciclos de compactación y margen. Por eso la puerta de la Etapa 4 no se pide
+  antes de T0 + 30 h; con la duración prevista (3–5 días) no añade espera.
+- Recuento de *chunks*, sin root: `podman unshare find "$(podman volume inspect <volumen de loki> --format '{{.Mountpoint}}')/chunks" -type f | wc -l`
+  (o el tamaño con `du -s`), antes y después de la ejecución del compactor.
+
+Coste aceptado: en DEMO los logs solo se guardan 24 h. Las pruebas de
+usabilidad se analizan con las métricas de UX (Prometheus, 7 días) y las
+notas de las sesiones; si UX necesita líneas de log de una sesión, se exportan
+desde Grafana/Loki **el mismo día** (sin datos personales, `docs/logging.md`
+§4). PROD mantiene 30/90 días y allí solo se comprueba la configuración
+desplegada en el smoke (`docs/testing.md` §5.10).
+
+**Qué debe hacer Monitoring en `docs/logging.md` §6.6** (para cerrar T-22):
+1. Tabla y viñeta de DEMO: Loki **24 h** (`retention_period: 24h`, sin
+   `retention_stream`, mismo `compactor` que PROD, sin `max_query_lookback`);
+   Prometheus 7 días sin cambios.
+2. Sustituir "Testing comprueba en DEMO que el compactor borra (consulta de un
+   intervalo ya vencido sin resultados)" por: comprobación `TX-MON-01`
+   (`docs/testing.md` §5.10) con métrica de última ejecución correcta de la
+   retención del compactor, *chunks* del intervalo vencido eliminados del
+   volumen y consulta de control con datos, **no antes de T0 + 30 h**
+   (este apartado).
+3. Añadir que en PROD no se espera al vencimiento: solo se comprueba la
+   configuración desplegada (720 h + `retention_stream` 2160 h para
+   `category="security"`).
+
+Testing ajusta `TX-MON-01` a 24 h ("intervalo vencido" = más de 24 h + 2 h
+atrás, y "no antes de T0 + 30 h" en lugar de "DEMO más de 7 días + 2 h").
+
 ## 12. Red, TLS e IP de origen (SEC-002, SEC-003, ADR-007)
 
 Cybersecurity ya decidió el fondo (`docs/seguridad.md` §6.2); aquí está cómo
@@ -690,7 +805,7 @@ topologías:
   `podman run --rm -v <proyecto>_caddy-data:/data:ro <imagen caddy por digest> cat /data/caddy/pki/authorities/local/root.crt > ca-cafeteria.crt`
   y se instala **solo** en los dispositivos del local. Nombre del servidor
   fijo (DNS del router o IP fija). El volumen `/data` (clave de la CA) entra en
-  las copias cifradas (§13). Procedimiento detallado: Etapa 4.
+  las copias cifradas (§13). Instalación en los dispositivos: §12.6.
 - Pendiente de revisión de Cybersecurity: la redirección usa el `Host` que
   envía el cliente; solo afecta a ese cliente, pero se puede limitar a los
   nombres de `SITE_ADDRESS` si se prefiere.
@@ -732,6 +847,89 @@ modificar") se mantiene.
 - En todos los casos Caddy no confía en `X-Forwarded-For` entrante (sin
   `trusted_proxies`) y la app (`trustProxy`) solo confía en la IP de `proxy`
   en la red interna (Developer, Etapa 2).
+
+### 12.6 Manual de instalación: CA interna en los dispositivos
+
+Sin la CA instalada el navegador muestra un aviso de certificado y, aunque se
+acepte, no hay contexto seguro fiable: fallan las cookies `Secure`, el Wake
+Lock y el sonido de la cola (HU-03/CA-N05). Se hace una vez por dispositivo y
+entorno: **la CA de DEMO y la de PROD son distintas** (§12).
+
+1. **Exportar** la CA raíz en el servidor (§12.2) y anotar su huella:
+   `openssl x509 -in ca-cafeteria.crt -noout -subject -fingerprint -sha256`.
+   El fichero es público (solo el certificado); la clave privada no sale del
+   volumen `/data` de Caddy.
+2. **Llevarla al dispositivo** por cable USB, AirDrop o una carpeta compartida
+   de la red del personal. No por correo ni mensajería, ni desde una URL de la
+   propia app.
+3. **Instalarla y confiar en ella** (en la pantalla que muestra la huella,
+   comprobar que coincide con la del paso 1):
+   - **Android 11 o superior (Chrome):** Ajustes → Seguridad y privacidad →
+     Más ajustes de seguridad → Cifrado y credenciales → Instalar un
+     certificado → **Certificado de CA** → "Instalar de todas formas" → elegir
+     `ca-cafeteria.crt`. Exige que el dispositivo tenga bloqueo de pantalla.
+     Los nombres de los menús cambian algo según el fabricante. Usar Chrome:
+     Firefox para Android no usa las CA del sistema por defecto.
+   - **iPad (Safari):** abrir el fichero → "Perfil descargado" → Ajustes →
+     General → VPN y gestión de dispositivos → instalar el perfil. Después,
+     **paso que suele olvidarse:** Ajustes → General → Información → Ajustes
+     de confianza de certificados → activar la confianza total para la CA.
+   - **PC de barra con Windows (Chrome/Edge):** doble clic en el `.crt` →
+     Instalar certificado → **Usuario actual** → "Colocar todos los
+     certificados en el siguiente almacén" → Entidades de certificación raíz
+     de confianza. No hace falta administrador.
+   - **PC de barra con Linux (Chromium/Chrome), sin root:**
+     `certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "CA cafeteria" -i ca-cafeteria.crt`
+     (paquete `libnss3-tools`) con el usuario que abre el navegador.
+4. **Comprobar:** abrir `https://<nombre del servidor>` (DEMO:
+   `https://<nombre>:8443`) sin ningún aviso y con el candado normal.
+5. **Al pasar a PROD** se instala la CA de PROD y se **borra la de DEMO** de
+   cada dispositivo (en los mismos menús: "Credenciales de usuario" en
+   Android, eliminar el perfil en iPad, `certmgr.msc` en Windows,
+   `certutil -D -n "CA cafeteria"` en Linux). Si se pierde el volumen `/data`
+   de Caddy y no se restaura de la copia (§13), Caddy crea otra CA y hay que
+   repetir este apartado en todos los dispositivos.
+
+La CA solo se instala en dispositivos del local: un dispositivo que confía en
+ella aceptaría cualquier nombre que firme esa CA; por eso su clave privada
+está solo en `/data` y en las copias cifradas.
+
+### 12.7 Manual de instalación: pantalla de barra en modo kiosco
+
+Objetivo (HU-03/CA-N05): la cola (P-05) a pantalla completa, sin barra del
+navegador, y la pantalla siempre encendida. La app ya pide el Wake Lock al
+abrir la cola y avisa "La pantalla puede apagarse" si no lo consigue; el
+sistema operativo se configura además para no apagar la pantalla, porque el
+navegador suelta el Wake Lock si la pestaña deja de estar visible.
+
+Requisitos previos: CA instalada (§12.6) y usuario del sistema **sin
+privilegios de administrador** dedicado a la pantalla.
+
+- **PC con Windows o Linux (Chrome/Chromium/Edge):** lanzar el navegador con
+  `--kiosk` y un perfil propio:
+  `chrome --kiosk --user-data-dir=<carpeta del perfil de barra> https://<nombre del servidor>/`
+  (en Linux, `chromium --kiosk ...`; en Edge, `msedge --kiosk https://... --edge-kiosk-type=fullscreen`).
+  Arranque automático: acceso directo con ese comando en `shell:startup`
+  (Windows) o un `.desktop` en `~/.config/autostart/` (Linux). Energía:
+  pantalla y suspensión en "Nunca". Para salir del kiosco: `Alt+F4`. No
+  añadir opciones que desactiven protecciones del navegador
+  (`--disable-web-security`, `--ignore-certificate-errors`, etc.).
+- **Tablet Android:** Chrome a pantalla completa con "Añadir a pantalla de
+  inicio" si la app publica un manifiesto con `display: fullscreen` o
+  `standalone` (decisión del Developer/UX; si no lo hay, queda la barra de
+  direcciones). Bloquear la tablet en esa app con **Fijar aplicación**
+  (Ajustes → Seguridad → Fijar aplicación). Con el cargador siempre puesto:
+  Opciones de desarrollador → **Pantalla activa** (no se apaga mientras
+  carga), o Ajustes → Pantalla → Tiempo de espera al máximo.
+- **iPad:** "Añadir a pantalla de inicio" desde Safari y **Acceso guiado**
+  (Ajustes → Accesibilidad → Acceso guiado) para fijar la app; Ajustes →
+  Pantalla y brillo → Bloqueo automático → Nunca.
+
+Después de cada arranque o recarga: iniciar sesión con la cuenta de barra
+(suele contar como gesto y activa el sonido) o tocar **"Activar sonido"** si
+aparece (HU-03/CA-F14). La sesión caduca a las 12 h (HU-01/CA-N06): hay que
+volver a entrar al empezar cada turno. Comprobación en el dispositivo real
+(CA-N05): la cola abierta ≥ 30 min sin tocarla y la pantalla sigue encendida.
 
 ## 13. Copias de seguridad (SEC-011)
 
@@ -784,6 +982,41 @@ El escaneo de imágenes (Trivy/Grype) se integra con la imagen final de la app
 
 ## 15. Qué se validó realmente y qué no
 
+Validado en esta máquina el **2026-11-24 (tarea 1.7c, SEC-023 / RS-45
+ampliado)**, sin `sudo` y sin coste, con `podman-compose` 1.5.0 y Podman 5.7.0
+rootless (`rootless: true`, cgroups `v2`):
+- `podman-compose -f compose.dev.yaml config` (sin perfil y con
+  `--profile setup`): correcto. Volúmenes resultantes de `web` y `deps`:
+  `./:/workspace:ro` + `./apps`, `./packages`, `./node_modules` en `rw`
+  (`deps` además `pnpm-store`); `api` solo `./:/workspace:ro`.
+- `podman-compose -f compose.dev.yaml --profile setup run --rm --no-deps
+  --entrypoint sh <web|deps> ...`, proceso con UID 1000, con los
+  directorios de la lista creados antes con `mkdir -p` (como `levantar.sh`):
+  - `touch /workspace/tests/run.sh` (fichero inexistente) → `Read-only file
+    system` en `web` y en `deps`. Con un `tests/run.sh` temporal existente en
+    el host, `echo ... >> /workspace/tests/run.sh` → `Read-only file system`
+    en los dos y el fichero del host quedó intacto (luego se borró).
+  - `touch` en `CLAUDE.md`, `.envrc` (fichero nuevo de la raíz),
+    `deploy/dev/levantar.sh`, `.git/hooks/pre-commit`, `compose.dev.yaml` y
+    `tests/results/x` → `Read-only file system` en los dos.
+  - `touch /workspace/apps/x`, `/workspace/packages/x` y
+    `/workspace/node_modules/x` → correcto en los dos (borrados después).
+  - `/workspace/.secrets` → `Permission denied` (sigue tapado).
+  - `/proc/mounts`: `/workspace ro`, `/workspace/.secrets ro`,
+    `/workspace/{apps,packages,node_modules} rw`.
+- Incidencia del entorno, no del compose: la primera ejecución falló con
+  `runc create failed ... rootless needs no limits` porque la terminal
+  heredaba `DBUS_SESSION_BUS_ADDRESS` del bus de otro usuario (§4.2). Con
+  `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus` funcionó sin tocar
+  límites ni usar root. Al borrar cada contenedor Podman registró
+  `rootless netns: kill network process: permission denied` (mismo origen,
+  sin contenedores huérfanos: `podman ps -a` solo muestra `mi-app-dev_db_1`).
+- Después de la prueba se borraron `apps/`, `packages/` y `node_modules/`
+  (vacíos; los vuelve a crear `levantar.sh`).
+- No probado aún: `pnpm install` real y Vite real escribiendo solo dentro de
+  la lista (no hay código de la app); si Vite o pnpm necesitan escribir en
+  otra ruta, fallará con `Read-only file system` y se decide entonces (§7.1).
+
 Validado en esta máquina el **2026-11-23 (tarea 1.5b)**, sin `sudo` y sin coste:
 - **SEC-018**, con los compose reales y `podman-compose ... run --rm --no-deps`
   sobre `api`, `web`, `deps`, `migrate`, `init-manager` (DEV) y `runner-unit`
@@ -835,6 +1068,10 @@ No validado:
   con nftables por `skuid`, `RestrictAddressFamilies` en unidad de usuario y
   `NoNewPrivileges` con `podman` rootless: solo diseño, se prueba en DEMO.
 - SEC-019 (WireGuard por dispositivo): solo diseño.
+- Manual de dispositivos (§12.6 CA, §12.7 kiosco): redactado, no probado en
+  tablets ni en la pantalla de barra reales; se recorre en la Etapa 4 con los
+  dispositivos del local y se corrigen los nombres de menú que cambien.
+- Retención de Loki de 24 h en DEMO (§11.3): solo diseño hasta la Etapa 4.
 - SEC-018 con el código real (Vite escribiendo su caché, `pnpm install`
   real) y con las imágenes reales de Playwright/k6/ZAP.
 - Escaneo de vulnerabilidades de imágenes.
