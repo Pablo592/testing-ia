@@ -26,8 +26,8 @@ historias las propone el Product Owner sin entrevista al cliente real).
 | 1.5b | infrastructure | SEC-018, SEC-019, SEC-020, SEC-010 (uid en PROD) y M-06 B (unificar §10/§11.1, condiciones de Cybersecurity §6.3) | En curso |
 | 1.6c | monitoring | M-07 (correo, horario 07:00–21:00, retención 30/90 días, aviso a empleados), M-06 B y SEC-017 (redactar `confirmPin` / claves `/pin/i`) en `docs/logging.md` | Hecho (Alertmanager por correo 07:00–21:00 con alertas [24h] de seguridad y disco; `Watchdog` diario; Loki 30/90 días con compactor, Prometheus 30 días/5 GB; aviso a empleados §4.6; opción B en todos los entornos; redacción de toda clave con `pin`; `must_change_pin` → `provisional_credential`) |
 | 1.4c | cybersecurity | Verificar SEC-016..SEC-022 tras 1.3c, 1.5b y 1.6c + T-14 (su parte), T-18 y los puntos de HU-01/CA-F13 | En cola |
-| 1.6d | testing | Cubrir las rondas 1.1f, 1.3c y 1.6c en `docs/testing.md` (incluido `422 TABLE_OUT_OF_RANGE`) | En cola |
-| 1.6e | monitoring | Restos de la 1.3c en `docs/logging.md` (`settings.changed`, `__Host-sid`) | En cola |
+| 1.6d | testing | Cubrir las rondas 1.1f, 1.3c y 1.6c en `docs/testing.md` (incluido `422 TABLE_OUT_OF_RANGE`) | En curso |
+| 1.6e | monitoring | Restos de la 1.3c en `docs/logging.md` (`settings.changed`, `__Host-sid`) | En curso |
 | 1.1f | product-owner | T-14..T-17 e interpretaciones I-01..I-10 de Testing | Hecho (HU-01/CA-F12 bloqueo temporal y CA-F13 bloqueo indefinido; T-15, T-16 (solo valor mínimo) y T-17 (lista cerrada) aceptados; I-01..I-10 confirmadas salvo I-06, corregida) |
 | 1.2b | ux-designer | Actualizar wireframes con los cambios del PO (ronda 1.1c) + SEC-007 y mensajes de bloqueo | Hecho (reconfirmación de PIN en cobro y Personal, desbloqueo, estados de bloqueo en login, "Activar sonido"/Wake Lock y 409 en la cola, "AÑADIDO hh:mm"; P-12 Ajustes condicionada a HU-09) |
 
