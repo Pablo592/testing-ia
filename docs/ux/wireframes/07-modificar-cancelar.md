@@ -1,6 +1,6 @@
 # P-08 Detalle de pedido: modificar y cancelar (HU-06, Should)
 
-Actualizado en la tarea 1.2b: autorización del encargado según el supuesto 22, estado "Servido" tratado como "Listo", y estados de error y bloqueo preparados para la política de Cybersecurity.
+Actualizado en la tarea 1.2b: autorización del encargado según el supuesto 22, estado "Servido" tratado como "Listo", y mensajes de error y bloqueo según la política de Cybersecurity (`docs/seguridad.md` §6.1 y §6.3; componente en design system §5.10b).
 
 ```
 +-----------------------------------------------------------------------------------+
@@ -32,7 +32,7 @@ Sin cambios pendientes, el primario es "Cobrar 7,40 €". Con cambios sin enviar
 | Listo | Sin PIN (vuelve a Pendiente) | **Autorización** ("puede estar ya preparada") | **Autorización** |
 | Servido | Sin PIN (vuelve a Pendiente) | **Autorización** ("puede estar ya servida") | **Autorización** |
 
-- Si la sesión es de un **encargado**, no se pide autorización: la acción se aplica (con su diálogo de confirmación si lo tiene) y queda registrado ese encargado como quien autoriza (supuesto 22).
+- Si la sesión es de un **encargado**, no se pide autorización ni reconfirmación para estas acciones de HU-06: la acción se aplica (con su diálogo de confirmación si lo tiene) y queda registrado ese encargado como quien autoriza (supuesto 22; Cybersecurity lo confirma en `seguridad.md` §6.3). La reconfirmación de SEC-007 solo afecta a anular cobros (P-07) y a Personal (P-10).
 - **Una autorización = una acción** (supuesto 22). Decisión de diseño: en "Quitar o reducir", la acción es el **envío** de los cambios ("Enviar cambios a barra"), no cada toque en "−". Así, quitar 2 líneas en el mismo envío pide el PIN una vez. El aviso de que la línea puede estar preparada aparece en el momento de pulsar "−" (criterio de HU-06), y el diálogo de autorización enumera todas las líneas que se quitan.
 - Con cobro "Cobrado": sin "−", "Añadir" ni "Cancelar". Texto: "Pedido cobrado: para modificarlo o cancelarlo, el encargado tiene que anular el cobro" + "Ver ticket" (HU-06 UX).
 
@@ -65,8 +65,8 @@ Sin cambios pendientes, el primario es "Cobrar 7,40 €". Con cambios sin enviar
 | Encargado que autoriza                                 |
 | ( ) Marta          ( ) Jorge                           |  <- opciones de 56 px; 1 toque
 |                                                        |
-| PIN de Marta                                           |
-|        ● ● ○ ○                                         |  <- teclado de §5.3 (72 px),
+| PIN de Marta (6 dígitos)                               |
+|        ● ● ○ ○ ○ ○                                     |  <- teclado de §5.3 (72 px),
 |   [1] [2] [3]                                          |     deshabilitado hasta elegir
 |   [4] [5] [6]                                          |     encargado
 |   [7] [8] [9]                                          |
@@ -85,16 +85,18 @@ La fila "Encargado que autoriza" se sustituye por el texto fijo **"Encargado: Ma
 Un único diálogo, de arriba abajo: título "¿Cancelar el pedido 42?", número, mesa e importe, el motivo (radios), el aviso "⚠ El pedido está en preparación" y la sección de autorización (A o B). Botón final: "Autorizar y cancelar pedido" (peligro), deshabilitado hasta tener motivo, encargado y PIN. En 1024x768 el diálogo se desplaza por dentro, y el botón final y "Volver" quedan fijos en su pie (no los tapa nada, WCAG 2.4.11).
 
 ### Estados del diálogo
+Los mensajes exactos de cada respuesta del servidor están en el design system §5.10b (variante "Autorización"). Resumen:
+
 | Estado | Qué se ve |
 |---|---|
 | Comprobando | "Comprobando…" en el botón, deshabilitado; teclado deshabilitado |
-| PIN incorrecto | Bajo el PIN, en `danger`: "⚠ PIN de encargado incorrecto". El PIN se vacía y el foco vuelve al teclado. El cambio pendiente no se pierde |
-| **Bloqueo** (preparado para la política de Cybersecurity) | Bloque de Aviso con icono de candado y el texto que dé el servidor, con cuenta atrás opcional. Ejemplo: "🔒 Demasiados intentos para Marta. Podrás volver a intentarlo en 4:59". Teclado deshabilitado para ese encargado; si hay otros, siguen elegibles (si la política bloquea el dispositivo, todos se deshabilitan). "Volver" sigue activo y el cambio pendiente se conserva |
-| Encargado desactivado | "⚠ Marta ya no está activa como encargada. Elige otro encargado." y desaparece de la lista |
+| PIN incorrecto (o encargado bloqueado, desactivado o con PIN provisional: mismo error genérico, RS-04) | Bajo el PIN, en `danger`: "⚠ PIN de encargado incorrecto". El PIN se vacía y el foco vuelve al teclado. Desde el 2.º fallo seguido, ayuda: "Si estás seguro del PIN, inicia sesión con tu usuario para comprobar si tu cuenta está bloqueada." El cambio pendiente no se pierde |
+| Demasiados intentos en esta sesión (`429`, 5 en 10 min) | "🔒 Demasiados intentos de autorización desde esta sesión. Espera 9:12." Teclado deshabilitado para todos; "Volver" activo; el cambio pendiente se conserva |
+| Demasiados intentos en este dispositivo (`429`, 10 en 10 min) | "🔒 Demasiados intentos desde este dispositivo. Espera 9 min." |
 | Ningún encargado activo | No debería ocurrir (HU-07 exige al menos uno). Si ocurre: "No hay ningún encargado activo para autorizar" y solo "Volver" |
-| Sin conexión / error del servidor | "No se ha podido comprobar el PIN. Reintenta." + "Reintentar"; el cambio pendiente se conserva |
+| Sin conexión / error del servidor | "No se ha podido comprobar el PIN. No se ha hecho ningún cambio. · Reintentar"; el cambio pendiente se conserva |
 | Pedido cambiado (409) mientras se autoriza | Se cierra el diálogo y se muestra el aviso de conflicto (abajo); la autorización no se usa |
-| Correcto | El diálogo se cierra, se aplica la acción y toast "Cambios enviados a barra · autorizado por Marta" o "Pedido 42 cancelado · autorizado por Marta" |
+| Correcto | El diálogo se cierra, se aplica la acción y aparece el toast "Cambios enviados a barra · autorizado por Marta" o "Pedido 42 cancelado · autorizado por Marta"; el PIN se borra del cliente (RS-29b) |
 
 ## Estados de la pantalla
 | Estado | Qué se ve |
@@ -117,6 +119,7 @@ Un único diálogo, de arriba abajo: título "¿Cancelar el pedido 42?", número
 | HU-06 | Sesión de encargado: sin autorización adicional | Tabla "Cuándo se pide autorización" [1.2b] |
 | HU-06 | PIN incorrecto: mensaje junto al campo, PIN vaciado, cambio conservado | Estados del diálogo [1.2b] |
 | HU-06 | Una autorización por acción | La autorización se consume en el envío o la cancelación [1.2b] |
-| HU-06 | Intentos y bloqueo (Cybersecurity) | Estado "Bloqueo" con texto del servidor y cuenta atrás [1.2b] |
+| HU-06 | Intentos y bloqueo (`seguridad.md` §6.1, §6.3) | Error genérico `403` (también si el encargado está bloqueado), `429` por sesión y por dispositivo [1.2b] |
+| HU-06 | PIN de encargado de 6 dígitos | Etiqueta "(6 dígitos)" y 6 indicadores [1.2b] |
 | HU-06 | Pedido cobrado: indica que hace falta anular el cobro | Estado "Pedido cobrado" |
 | HU-04 | Cobro desde el pedido | Primario "Cobrar" |

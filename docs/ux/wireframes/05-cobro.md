@@ -107,10 +107,17 @@ Igual, con el título "Cobrar mesa 7 · 2 pedidos", el detalle agrupado por pedi
 | Motivo (obligatorio, mínimo 5 caracteres)        |
 | [ cobrado en la mesa equivocada        ] 31/100  |
 |                                                  |
-| [Volver]                     [ ANULAR COBRO ]    |  <- peligro; deshabilitado
-+--------------------------------------------------+     hasta 5 caracteres
+| Confirma con tu PIN (SEC-007)                    |  <- reconfirmación aunque la
+| PIN de Marta (6 dígitos)   ● ● ● ○ ○ ○           |     sesión sea de encargado
+| [teclado numérico de 72 px]                      |
+| (zona de mensaje)                                |
+|                                                  |
+| [Volver]           [ CONFIRMAR Y ANULAR COBRO ]  |  <- peligro; deshabilitado
++--------------------------------------------------+     hasta 5 caracteres y 6 dígitos
 ```
-Con menos de 5 caracteres y al intentar confirmar (Enter): "⚠ El motivo debe tener al menos 5 caracteres" bajo el campo. Tras anular: toast "Cobro anulado: 2 pedidos vuelven a sin cobrar"; la fila de "Cobrados hoy" y el ticket muestran "⊘ ANULADO" con el importe tachado y el motivo, y los pedidos reaparecen en "Pedidos activos" con "Cobrar". Un cobro ya anulado no muestra "Anular cobro".
+Con menos de 5 caracteres y al intentar confirmar (Enter): "⚠ El motivo debe tener al menos 5 caracteres" bajo el campo.
+
+**Reconfirmación del PIN [1.2b] (SEC-007, `docs/seguridad.md` §6.3):** anular un cobro exige el PIN del encargado que actúa, aunque la sesión ya sea suya, con la variante "Reconfirmación" del design system §5.10b (nombre fijo, sin selector). Va en el mismo diálogo, debajo del motivo, para no añadir un segundo diálogo. Un PIN incorrecto no anula nada, cuenta para el bloqueo del encargado y conserva el motivo escrito. Mensajes de error y bloqueo (PIN incorrecto, bloqueo de 5/15/60 min, bloqueo indefinido, demasiados intentos desde este dispositivo, sin conexión): tabla de §5.10b. En 1024x768 el diálogo se desplaza por dentro y el pie con los botones queda fijo. Tras anular: toast "Cobro anulado: 2 pedidos vuelven a sin cobrar"; la fila de "Cobrados hoy" y el ticket muestran "⊘ ANULADO" con el importe tachado y el motivo, y los pedidos reaparecen en "Pedidos activos" con "Cobrar". Un cobro ya anulado no muestra "Anular cobro".
 
 ## Criterios cubiertos
 | Historia | Criterio UX | Cómo |
@@ -123,4 +130,5 @@ Con menos de 5 caracteres y al intentar confirmar (Enter): "⚠ El motivo debe t
 | HU-04 | Importe insuficiente | Mensaje con lo que falta |
 | HU-04 | Ver ticket / anular con motivo | P-07 y "Cobrados hoy" |
 | HU-04 | Antes de anular: pedidos que vuelven a "Abierto" e importe | Diálogo de anulación [1.2b] |
+| HU-04 / SEC-007 | El encargado introduce su PIN al anular | Reconfirmación en el diálogo [1.2b] |
 | HU-04 | Cobrado sin servir sigue en "Pedidos" con COBRADO | Estado "Éxito" [1.2b] |

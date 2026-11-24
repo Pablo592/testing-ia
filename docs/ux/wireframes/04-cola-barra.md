@@ -70,6 +70,42 @@ Ancho de tarjeta: (1920 - 4x16) / 3 = 618 px; con padding, 586 px útiles, unos 
 
 **Límite (ya recogido en HU-03):** la rejilla muestra 6 pedidos sin desplazar **si cada pedido tiene hasta 5 líneas** (o 4 líneas + 1 nota), con la pantalla conectada. Un pedido con más líneas ocupa 2 filas de alto (la tarjeta crece y nunca oculta productos ni notas, como pide HU-03), y entonces se ven 5. Con el banner "Sin conexión" caben 4 líneas por tarjeta, y HU-03 solo exige los 6 pedidos con la pantalla conectada.
 
+## Pedido que vuelve a la cola por añadir productos [1.2b] (HU-06, supuesto 17, `docs/arquitectura.md` §4.2)
+
+Caso: un pedido "Listo" o "Servido" al que sala añade productos vuelve a PENDIENTE. Para barra es trabajo nuevo, pero ya ha preparado parte del pedido. La tarjeta tiene que dejar claro **qué hay que preparar ahora** y **qué ya se entregó**, para que no se prepare dos veces.
+
+```
++---------------------------------+
+|＋ AÑADIDO A PEDIDO SERVIDO · 10:47|  <- franja de modificador (40 px), estilo Modificado
+|#40   MESA 7     Enviado 10:12   |     con otro icono (plus-circle); "LISTO" si no se había servido
+|[○ PENDIENTE]   ⏱ 1 min (añadido)|  <- la espera dice desde cuándo cuenta
+|                                 |
+|1  Cruasán            AÑADIDO    |  <- solo las líneas nuevas, a 38 px
+|1  Zumo naranja       AÑADIDO    |
+|                                 |
+|✓✓ Ya entregado: 2 Café con leche,|  <- 1 línea de contexto a 24 px, text-secondary,
+|   1 Tostada tomate              |     sin acciones (se parte en 2 líneas si no cabe)
+|+-------------------------------+|
+||          ▶ EMPEZAR            ||
+|+-------------------------------+|
++---------------------------------+
+```
+
+- **Franja** "＋ AÑADIDO A PEDIDO SERVIDO · 10:47" (o "…A PEDIDO LISTO…"): texto + icono `plus-circle` + colores de Modificado (9,23:1) + franja superior. No es "MODIFICADO" (no estaba en la cola) y **no pide "Entendido"**: el botón es directamente "Empezar". Si además está retrasado, las dos franjas se unen en una: "⚠ RETRASADO · 12 min · ＋ AÑADIDO 10:47" con el borde discontinuo de retrasado.
+- **Cabecera:** número y mesa/cliente de siempre, con "Enviado 10:12" (hora original). La hora del añadido está en la franja.
+- **Líneas:** a tamaño completo (38 px) solo las líneas del ciclo actual, todas con la etiqueta "AÑADIDO". Lo preparado antes no se muestra como línea normal, porque una línea a 38 px sin etiqueta parece trabajo pendiente. Va resumido en una línea de contexto "✓✓ Ya entregado: …" (o "✓ Ya preparado: …" si estaba Listo) a 24 px en `text-secondary` (7,58:1). Las líneas eliminadas en ciclos anteriores no se muestran (como indica la arquitectura).
+- **Llegada:** igual que un pedido nuevo: sonido, borde resaltado 2 s y anuncio `aria-live` "Pedido 40, mesa 7: productos añadidos".
+- **Espera:** el texto de los minutos dice desde cuándo cuentan, para que valga para las dos opciones de orden que está decidiendo el PO:
+
+| Opción del PO | Posición en la cola | Texto de espera | RETRASADO desde |
+|---|---|---|---|
+| A (propuesta del Software Engineer): hora de entrada en la cola (`queued_at`) | Al final, como un pedido nuevo | "⏱ 1 min (añadido)" | La hora del añadido |
+| B: hora de envío original | En su posición original por hora de envío | "⏱ 35 min (desde el envío)" | La hora de envío (saldrá RETRASADO casi siempre) |
+
+La tarjeta es la misma con las dos opciones; solo cambian la posición y la referencia de la espera, que se muestra siempre en texto. Si el PO elige B, recomiendo que el umbral de retraso cuente desde el añadido aunque el orden sea el de envío: si no, la franja RETRASADO pierde valor como señal.
+- **Presupuesto de alto:** la línea de contexto ocupa 32 px (como una nota), así que caben 4 líneas añadidas + 1 de contexto en la tarjeta estándar. Con más, la tarjeta crece (nunca se ocultan líneas, HU-03).
+- **Añadir a un pedido que sigue en la cola** (Pendiente / En preparación) no es este caso: la tarjeta no se mueve, lleva "✎ MODIFICADO" con "Entendido" y las líneas nuevas con "AÑADIDO" junto a las anteriores, que siguen siendo trabajo pendiente.
+
 ## Acciones por estado (1 toque, 72 px de alto)
 
 | Estado de la tarjeta | Botón | Resultado |
@@ -114,4 +150,5 @@ Pensada para 1920x1080. A 1440 px: 3 columnas con el mismo tamaño de texto (se 
 | HU-03 (no func.) | "Sin conexión" en <= 5 s | Banner |
 | HU-03 (no func.) | Barra no ve importes | No hay importes en la tarjeta |
 | HU-06 | AÑADIDO / ELIMINADO en texto | Etiquetas + tachado |
+| HU-03 / HU-06 | Pedido Listo o Servido que vuelve a la cola con líneas "AÑADIDO" | Tarjeta "＋ AÑADIDO A PEDIDO …" con solo las líneas nuevas a tamaño completo [1.2b] |
 | HU-01 | Nombre y rol visibles | "Javi · Barra" |

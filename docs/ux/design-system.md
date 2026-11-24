@@ -49,6 +49,7 @@ Un solo tema claro en el MVP (también en barra; un tema oscuro queda fuera del 
 | **Servido** (solo sala) [1.2b] | `#166534` | `#ffffff` (sin relleno) | `#16a34a`, 2 px | ✓✓ (doble check) | SERVIDO | **insignia de contorno, sin relleno** (el resto de insignias están rellenas) |
 | **Retrasado** (se suma al estado) | `#7f1d1d` | `#fee2e2` | `#dc2626` | ⚠ (triángulo) | RETRASADO · 12 min | 6 px **discontinuo** + franja superior |
 | Modificado | `#4c1d95` | `#ede9fe` | `#7c3aed` | ✎ | MODIFICADO | franja superior |
+| Añadido a pedido Listo/Servido (vuelve a la cola) [1.2b] | `#4c1d95` | `#ede9fe` | `#7c3aed` | ＋ (`plus-circle`) | ＋ AÑADIDO A PEDIDO SERVIDO · hh:mm | franja superior; sin "Entendido" |
 | Cancelado | `#0f172a` | `#cbd5e1` | `#0f172a` | ✕ | CANCELADO | contenido tachado + franja |
 | Cobrado (solo sala) | `#134e4a` | `#ccfbf1` | — | € | COBRADO | — |
 | Anulado (cobro; solo "Cobrados hoy" y ticket) [1.2b] | `#0f172a` | `#cbd5e1` | — | ⊘ | ANULADO | importe tachado + línea "Motivo: …" |
@@ -272,17 +273,16 @@ Estructura fija:
 
 Tras cualquier respuesta, el PIN se vacía de la pantalla y de la memoria del cliente (RS-29b). El cambio pendiente **nunca** se pierde por un error: solo se descarta con "Volver".
 
-**Mensajes de error y bloqueo** (política de `docs/seguridad.md` §6.1: bloqueo progresivo 5/15/60 min y después indefinido, límite por sesión y por dispositivo). Los tiempos los da el servidor (`retryAfterSeconds` o `Retry-After`); la cuenta atrás se muestra como "m:ss" por debajo de 10 min y como "N min" por encima, y el lector de pantalla la anuncia al aparecer y cada minuto, no cada segundo.
+**Mensajes de error y bloqueo** (política de `docs/seguridad.md` §6.1: bloqueo progresivo 5/15/60 min y después indefinido, límite por sesión y por dispositivo; códigos de `docs/arquitectura.md` §5). En la autorización (HU-06) el servidor **no** distingue un encargado bloqueado de un PIN incorrecto (`403` genérico, RS-04), así que la interfaz tampoco puede hacerlo. Los tiempos los da el servidor (`retryAfterSeconds` o `Retry-After`); la cuenta atrás se muestra como "m:ss" por debajo de 10 min y como "N min" por encima, y el lector de pantalla la anuncia al aparecer y cada minuto, no cada segundo.
 
 | Respuesta del servidor | Variante | Mensaje (junto al PIN) | Teclado y botones |
 |---|---|---|---|
 | `403 MANAGER_APPROVAL_INVALID` (PIN incorrecto; también si el encargado está bloqueado, desactivado o con PIN provisional: error genérico idéntico, RS-04) | Autorización | "⚠ PIN de encargado incorrecto" (texto de HU-06). Desde el 2.º fallo seguido en el diálogo se añade la ayuda: "Si estás seguro del PIN, inicia sesión con tu usuario para comprobar si tu cuenta está bloqueada." | Activo; PIN vaciado; foco en el primer dígito |
-| `423 MANAGER_LOCKED {retryAfterSeconds}` (solo si el contrato de la arquitectura lo mantiene; ver discrepancia en `docs/estado.md`) | Autorización | "🔒 Marta no puede autorizar ahora: demasiados intentos. Podrás intentarlo en 4:59. Puedes elegir otro encargado." | Deshabilitado para ese encargado; los demás siguen elegibles |
 | `429` por sesión (5 aprobaciones fallidas en 10 min) | Autorización | "🔒 Demasiados intentos de autorización desde esta sesión. Espera 9:12." | Deshabilitado para todos los encargados; "Volver" activo |
 | `429` por dispositivo (10 fallos en 10 min) | Las dos | "🔒 Demasiados intentos desde este dispositivo. Espera 9 min." (mismo texto que el login, HU-01) | Deshabilitado; "Volver" activo |
-| `401`/`403` PIN incorrecto | Reconfirmación | "⚠ PIN incorrecto. No se ha hecho ningún cambio." + "Cuenta para el bloqueo de tu usuario." | Activo; PIN vaciado |
+| `403 PIN_CONFIRMATION_INVALID` | Reconfirmación | "⚠ PIN incorrecto. No se ha hecho ningún cambio." + "Cuenta para el bloqueo de tu usuario." | Activo; PIN vaciado |
 | `423` bloqueo temporal (5, 15 o 60 min) del encargado de la sesión | Reconfirmación | "🔒 Demasiados intentos fallidos. Podrás confirmar de nuevo en 4:59. No se ha hecho ningún cambio." | Deshabilitado; "Volver" activo |
-| `423 ACCOUNT_LOCKED_MANUAL` del encargado de la sesión | Reconfirmación | "🔒 Tu cuenta ha quedado bloqueada. Pide a otro encargado que la desbloquee en Personal." (qué pasa con la sesión abierta lo decide Cybersecurity, ver `docs/estado.md`) | Deshabilitado; "Volver" activo |
+| `423` indefinido (`ACCOUNT_LOCKED_MANUAL`) del encargado de la sesión | Reconfirmación | "🔒 Tu cuenta ha quedado bloqueada. Pide a otro encargado que la desbloquee en Personal." (qué pasa después con la sesión abierta lo decide Cybersecurity, ver `docs/estado.md`) | Deshabilitado; "Volver" activo |
 | Sin conexión / `5xx` | Las dos | "No se ha podido comprobar el PIN. No se ha hecho ningún cambio. · Reintentar" (no cuenta como intento) | Activo |
 | `409` el pedido o el cobro ha cambiado | Las dos | Se cierra el diálogo y se muestra el aviso de conflicto de la pantalla; la aprobación no se usa | — |
 | Correcto | Las dos | Se cierra el diálogo y se aplica la acción; toast con el resultado y, en autorización, "· autorizado por Marta" | — |
