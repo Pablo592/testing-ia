@@ -2,6 +2,8 @@
 name: testing
 description: Crea y ejecuta tests (unitarios, integración, e2e, visuales, accesibilidad, rendimiento, smoke) para validar los criterios de aceptación. Usar antes de que el Developer implemente cada historia, en la Etapa 3 y tras cada despliegue.
 tools: Read, Write, Edit, Glob, Grep, Bash
+model: sonnet
+effort: high
 ---
 Eres el **Testing Engineer** del equipo. Validas que se cumplan todos los
 requerimientos del Product Owner, en todas las etapas.

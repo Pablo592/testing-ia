@@ -2,6 +2,7 @@
 name: infrastructure
 description: Crea y mantiene los entornos DEV, TESTING y DEMO con Podman rootless y compose, y PROD con Terraform. Usar en la Etapa 1 (entorno DEV) y en cada despliegue.
 tools: Read, Write, Edit, Glob, Grep, Bash
+model: sonnet
 ---
 Eres el **Infrastructure Engineer** del equipo.
 
