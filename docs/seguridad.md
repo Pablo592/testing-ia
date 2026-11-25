@@ -33,6 +33,13 @@
 > la 2.1f, con prueba propia en el scratchpad (Fastify 5.12.8, `pg` 8 y
 > PostgreSQL 19 efímero en Podman rootless) (§6.6). SEC-029 y SEC-030 pasan
 > a corregido (diseño). Hallazgos nuevos SEC-031 y SEC-032 (baja).
+> Revisión 2.1m, 2026-11-24 (Etapa 2, HU-01): CVE-2026-107494 y
+> CVE-2026-124709 de `libssl3t64` en la base distroless (excepción fechada
+> EXC-01), imagen final `deploy/app/` y contrato §8.1, etapa Debian trixie y
+> SEC-028 (2.1h), con prueba propia (Trivy 0.76.2 rootless sobre `podman
+> save`, `readelf`/`nm` de la raíz exportada, Node de la imagen endurecido,
+> red `/29` de prueba) (§6.7). SEC-028 pasa a corregido. Hallazgos nuevos
+> SEC-033 (baja, con EXC-01), SEC-034 (media), SEC-035..SEC-037 (baja).
 > Entradas: `docs/historias/` (README + HU-01..HU-09, IDs estables `CA-`),
 > `docs/arquitectura.md`, `docs/decisiones/ADR-001..008`, `docs/ux/`,
 > `docs/infraestructura.md`, `compose.dev.yaml`, `compose.test.yaml`,
@@ -67,7 +74,7 @@
 3. Actores de amenaza
 4. Superficies de ataque y fronteras de confianza
 5. Amenazas (STRIDE)
-6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c; §6.5, revisión 2.1f; §6.6, revisión 2.1k)
+6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c; §6.5, revisión 2.1f; §6.6, revisión 2.1k; §6.7, revisión 2.1m)
 7. Requisitos de seguridad verificables (para Testing)
 8. Revisión de la arquitectura frente a la política de contenedores (§3)
 9. Hallazgos (SEC-xxx)
@@ -1141,6 +1148,135 @@ antes (12 h + temporizador del cliente), aceptado en SEC-030.
 
 **Altos o críticos en esta revisión: ninguno.**
 
+### 6.7 Revisión 2.1m (2026-11-24): CVE de `libssl3t64`, imagen final de la app y SEC-028
+
+Entradas: commit `1568e34` (`deploy/app/Containerfile`, `deploy/app/construir.sh`,
+`deploy/app/containerignore`, `compose.test.yaml` servicio `commands`,
+`docs/infraestructura.md` §8, §8.1, §9.2 y §15) y el cambio de la 2.1h en
+`compose.test.yaml` (SEC-028).
+
+**Pruebas propias (rootless, sin `sudo`, fuera del repositorio).** (1) Raíz
+de la distroless (`nodejs26-debian13@sha256:b462e87a…`) exportada con
+`podman create` + `podman export` al scratchpad: paquetes, `readelf -d` de
+todos los ELF y `nm -D` del binario de Node. (2) `node` de esa imagen con
+`--user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges
+--read-only --network=none`: versiones, `process.config`, `node:quic` con y
+sin `--experimental-quic`, `/proc/self/maps`. (3) Trivy 0.76.2 (mismo digest
+de `docs/infraestructura.md` §8) en contenedor rootless (UID 1000,
+`cap-drop ALL`, raíz `ro`, sin socket) sobre `podman save` de las dos bases;
+prueba del fichero de excepciones con caducidad y `purl`. (4) Red `internal`
+`/29` de prueba con IP fijas en los dos órdenes de arranque. Contenedores,
+red, imagen de Trivy y ficheros de prueba borrados al terminar.
+
+**1. CVE-2026-107494 y CVE-2026-124709 (`libssl3t64` 3.5.9-1~deb13u1): EXCEPCIÓN
+FECHADA (EXC-01), riesgo residual bajo. Ver SEC-033.**
+Trivy confirma lo de Infrastructure: 0 críticas, 2 altas, las dos `affected`
+sin versión corregida, CVSS 3.1 `AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H` (solo
+disponibilidad). CVE-2026-107494: un par QUIC malicioso hace que la pila QUIC
+encole sin límite tramas `RETIRE_CONNECTION_ID` (corrección incompleta de
+CVE-2026-84784) → falta de memoria. CVE-2026-124709: un **servidor** QUIC que
+rechaza flujos del par conserva su estado si el par los reinicia antes →
+memoria sin límite. Las dos exigen un extremo QUIC (UDP) que procese
+paquetes del atacante.
+- **Alcanzabilidad en la imagen: no.** (a) Ningún ejecutable de la imagen
+  enlaza la biblioteca del sistema: `readelf -d` de `/nodejs/bin/node` da solo
+  `libatomic`, `libdl`, `libm`, `libstdc++`, `libgcc_s`, `libpthread`, `libc`
+  y `ld-linux`; los únicos ELF con `NEEDED libssl/libcrypto` son la propia
+  `libssl.so.3` y los *engines* de OpenSSL (`padlock`, `afalg`,
+  `loader_attic`), que nadie carga. `/proc/self/maps` de Node no tiene
+  `libssl` ni `libcrypto`. (b) La app es Fastify sobre **TCP** (HTTP/1.1 en
+  claro hacia Caddy por la red `internal` `proxy-app`; 3000 y 9464 TCP), sin
+  escucha UDP. (c) El Node de la imagen está compilado **sin QUIC**:
+  `process.config.variables.node_use_quic = false`, `process.versions` sin
+  `ngtcp2`/`nghttp3`, y `require('node:quic')` → `ERR_UNKNOWN_BUILTIN_MODULE`
+  incluso con `--experimental-quic`. (d) El HTTP/3 que pueda servir Caddy es
+  `quic-go` (Go), no OpenSSL: estas CVE no le afectan.
+- **Matiz importante que el escáner no ve:** Node lleva su **propio** OpenSSL
+  3.5.9 enlazado estáticamente (`node_shared_openssl: false`), y ese OpenSSL
+  **sí contiene la pila QUIC** (553 símbolos `ossl_quic_*`; exporta
+  `OSSL_QUIC_server_method`, `OSSL_QUIC_client_method`, `SSL_new_listener` y
+  `SSL_set_quic_tls_cbs` para los módulos nativos). Desde JavaScript no es
+  alcanzable (los módulos `tls`/`https`/`http2` usan TLS sobre TCP y no hay
+  `node:quic`); solo lo sería un módulo nativo que llamara a esas funciones.
+  Consecuencias: (1) la corrección de Debian **no** arregla la copia de Node;
+  hay que seguir también las versiones de seguridad de Node; (2) la
+  condición 4 de EXC-01 (ningún módulo nativo usa la API QUIC de OpenSSL) es
+  la que de verdad protege, y se comprueba en cada build.
+- **Por qué no la opción (b).** Esperar bloquearía TESTING y la puerta de la
+  Etapa 2 (necesitan la imagen) sin reducir un riesgo que hoy no es
+  alcanzable. Cambiar de base no lo resuelve: todas las distroless con glibc
+  (`base`, `cc`, `nodejs`) traen `libssl3t64`; `static` no tiene glibc (Node
+  no arranca); Alpine (musl) rompe `argon2` (§8.1 de infraestructura) y trae
+  la misma rama 3.5 de OpenSSL; una base a mano (`scratch` + glibc + Node)
+  pierde las actualizaciones de distroless y añade mantenimiento; y en todos
+  los casos el binario de Node sigue llevando su OpenSSL con la pila QUIC.
+- **Aprobación.** RS-39 permite excepciones "con aprobación escrita de
+  Cybersecurity en §9": queda concedida en SEC-033. **No supone aceptar un
+  riesgo alto** (el riesgo residual es bajo), pero es una excepción a la
+  regla de `docs/reglas-equipo.md` §3.3 ("sin críticas/altas"), así que el
+  Orquestador debe **comunicársela al humano para que la ratifique** en la
+  puerta de la Etapa 2. Hasta la puerta no bloquea el trabajo (2.2).
+
+**2. Imagen final y su contrato (`deploy/app/`, §8.1): CUMPLE §3 con
+condiciones.**
+
+| Regla (§3) | Comprobación | Resultado |
+|---|---|---|
+| 3.2 Multietapa, imagen final mínima | `build` (trixie-slim) → distroless; la final solo recibe `/app` (`package.json`, `node_modules` de producción, `dist`, `public`). Paquetes de la final: `base-files`, `ca-certificates`, `gcc-14-base`, `libatomic1`, `libc6`, `libgcc-s1`, `libgomp1`, `libssl3t64`, `libstdc++6`, `libzstd1`, `media-types`, `netbase`, `tzdata`, `tzdata-legacy`, `zlib1g`; `/bin` y `/usr/bin` vacíos (sin shell ni gestor de paquetes) | Cumple |
+| 3.2 Bases por digest | las dos por digest de índice; `ARG` con valor por defecto (sobrescribible con `--build-arg`, `construir.sh` no lo hace) | Cumple (SEC-037: el script debe seguir sin aceptar `--build-arg`) |
+| 3.2 Sin secretos en imagen ni *build args* | *build args* solo de versión y rutas; contexto de lista de permitidos (`.secrets/`, `.git/`, `docs/`, `deploy/`, `tests/` fuera, comprobado por Infrastructure con señuelos); comprobación de `.env*`/`*.pem`/`*.key` en la salida | Cumple, salvo `.npmrc` (SEC-036, baja) |
+| 3.2 Construcción rootless, sin socket | `construir.sh` rechaza UID 0 y Podman no rootless; sin `sudo` | Cumple |
+| 3.3 `USER` ≥ 1000, `--chown` | `USER 1000:1000` numérico (UID no listado en `/etc/passwd`, sin efecto: `HOME=/tmp`); `COPY --chown=1000:1000` | Cumple (ver nota 1) |
+| 3.3 Puertos > 1024, `HEALTHCHECK` | 3000 y 9464; `HEALTHCHECK` exec sin shell, conservado con `--format docker` | Cumple |
+| 3.3 Escaneo en cada build | no está en `construir.sh` (Infrastructure lo ejecutó a mano) | **No cumple: SEC-034 (media)** |
+| 3.3 Sin críticas/altas | 0 críticas; 2 altas cubiertas por EXC-01 | Cumple con EXC-01 (SEC-033) |
+| 3.4 Ejecución | lo aplica compose (`x-hardening`): UID 1000, `cap_drop ALL`, `no-new-privileges`, raíz `ro`, `/tmp` tmpfs `noexec`, límites; servicio `commands` igual, solo en `backend`, rol `app_rw`, secretos como fichero | Cumple |
+| RS-39 scripts de instalación | pnpm 12 no ejecuta scripts de dependencias salvo `allowBuilds` (`argon2`); `--frozen-lockfile`; `install --offline` | Cumple (equivale al `--ignore-scripts` + lista blanca de §8). Falta `pnpm audit --prod` en el build: dentro de SEC-034 |
+| Cadena de suministro de pnpm | `npm install --global pnpm@12.21.0` como root de construcción, sin integridad fijada | SEC-035 (baja) |
+| Trazabilidad de la etiqueta | `-sucio` no mira todo lo que entra en el contexto | SEC-037 (baja) |
+
+Notas sin hallazgo: (1) `/app` es propiedad del UID 1000 (lo pide §3.3), así
+que el proceso podría reescribir su propio código si alguna vez se ejecuta
+**sin** raíz de solo lectura: `read_only: true` (compose) y `ReadOnly=true`
+(Quadlet, Etapa 5) son obligatorios en todos los entornos y RS-36 lo
+comprueba. (2) Node es PID 1 sin *init*: el punto 8 del contrato
+(`SIGTERM`/`SIGINT`) es necesario; es disponibilidad, no seguridad. (3) El
+contrato con el Developer (§8.1, puntos 1–10) no tiene implicaciones de
+seguridad nuevas; el punto 9 (nada escribe fuera de `/tmp`) es coherente con
+`read_only`.
+
+**3. Etapa de construcción Debian trixie (`node:26.13.1-trixie-slim`):
+APROBADA.** Desde el punto de vista de seguridad es mejor que la `-alpine` de
+`docs/arquitectura.md` §10: misma glibc (2.41) y mismo Node (ABI 147) que la
+final, así que `argon2` nativo se instala y prueba para la libc real. Trivy
+sobre la base de construcción: muchas altas sin corrección (`util-linux`,
+`sqlite`, `systemd`, `ncurses`, `perl-base`, `openssl`) y, en el `npm` 11.20.0
+incluido, `undici` 6.28.0 (CVE-2026-109383, *bypass* de validación de
+certificado con opciones TLS propias en `Agent`, entre otras) y
+`brace-expansion` 5.0.9. **Ninguna llega a la imagen final** (la etapa se
+descarta) y §3.3 aplica a la imagen final; no necesitan excepción. El
+`undici` de `npm` solo lo usa su `node-gyp` (no la descarga de paquetes del
+registro), pero el paso `npm install --global pnpm` depende solo del TLS del
+registro: SEC-035 lo cierra fijando la integridad. Cuando se actualice el
+digest de la base de construcción, Infrastructure repite este escaneo
+informativo.
+
+**4. SEC-028 (2.1h): CORREGIDO.** `compose.test.yaml:261-264` da a `app` la IP
+fija `${TEST_APP_IP:-10.89.240.3}` en `proxy-app`; `proxy` sigue en
+`${TEST_PROXY_IP:-10.89.240.2}` (:290-292) y `TRUSTED_PROXIES` es solo esa IP
+(:68). Prueba propia en una red `internal` `/29`: con `app` en `.3` primero y
+`proxy` en `.2` después, y en el orden inverso, los dos arrancan; un tercer
+contenedor sin IP fija recibe `.4` (nunca `.2`); pedir `.2` ocupada da
+`IPAM error … already allocated` (falla cerrado). Si alguien pone las dos
+variables iguales, un contenedor no arranca (falla cerrado; no amplía la
+confianza). En `proxy-app` solo están `app` y `proxy`. Queda la verificación
+con la imagen real (primera ejecución de `tests/run.sh e2e`) y el mismo
+esquema en `compose.demo.yaml` y Quadlet cuando existan.
+
+**Altos o críticos en esta revisión: ninguno** (las dos CVE altas quedan
+cubiertas por EXC-01, pendiente de ratificación humana en la puerta de la
+Etapa 2).
+
 ---
 
 ## 7. Requisitos de seguridad verificables (para Testing)
@@ -1277,7 +1413,7 @@ aprobar los ficheros de `deploy/` cuando existan.
 | Containerfile de DEV | base por digest, `USER 1000:1000`, root solo en construcción, sin secretos | — | Cumple |
 | `10-roles.sh` | sin contraseñas en el log (SEC-015); roles `NOSUPERUSER…`, límites de conexión, `app_backup` | igual | Cumple; **SEC-020 (media)** por `pg_stat_statements`. [1.4c] Corregido y verificado: `SET pg_stat_statements.track_utility = off` en cada bloque y `pg_stat_statements_reset()` al final |
 | `Caddyfile` | — | `admin off`, 8080/8443, RS-26 completo, `-Server`, sin `log_credentials`, `X-Request-Id` propio, 404 a internos, sin `trusted_proxies` | Cumple |
-| Escaneo Trivy/Grype | imagen de herramientas no desplegable | imagen final aún no existe | Pendiente (Etapa 2, RS-39) |
+| Escaneo Trivy/Grype | imagen de herramientas no desplegable | imagen final aún no existe | Pendiente (Etapa 2, RS-39). [2.1m] Base distroless: 0 críticas, 2 altas con EXC-01 (SEC-033); escaneo dentro del build pendiente (SEC-034) |
 
 **Veredicto (1.4b):** ningún contenedor corre como root, usa `--privileged`,
 monta el socket ni la red del host. No hay motivo de bloqueo por la regla de
@@ -1295,6 +1431,14 @@ contenedores. El escaneo de imágenes (RS-39) sigue pendiente de la Etapa 2.
 `CapEff` 0, `NoNewPrivs` 1, raíz `ro`, `/workspace` `ro`, `.secrets` tapado;
 sin `--privileged`, sockets ni red del host. SEC-023 verificado. Ningún motivo
 de bloqueo por la regla de contenedores. RS-39 sigue pendiente de la Etapa 2.
+
+**Veredicto (2.1m):** imagen final de la app (`deploy/app/Containerfile`,
+multietapa trixie-slim → distroless, `USER 1000:1000`, sin shell) y servicio
+`commands` de `compose.test.yaml` revisados (§6.7): ninguno corre como root,
+usa `--privileged`, monta el socket ni la red del host. Las 2 altas de la base
+quedan con EXC-01 (SEC-033, ratificación humana pendiente); SEC-034 (media)
+pide el escaneo dentro de `construir.sh`. Ningún motivo de bloqueo por la
+regla de contenedores.
 
 ---
 
@@ -1579,7 +1723,7 @@ de bloqueo por la regla de contenedores. RS-39 sigue pendiente de la Etapa 2.
 - Responsable: infrastructure
 - Cómo corregir: dar también IP fija a `app` en `proxy-app` (p. ej. `TEST_APP_IP`, por defecto `10.89.240.3`), o reservar las dinámicas fuera de la de `proxy` (`ip_range` de la red, si `podman-compose` lo pasa); `TRUSTED_PROXIES` sigue siendo solo la IP de `proxy`. Mismo esquema en DEMO/PROD.
 - Cómo verificar: con la imagen de la app, `tests/run.sh e2e` llega a `proxy` *healthy*; `podman inspect` muestra `proxy` con `TEST_PROXY_IP` y `app` con otra; RS-06 (una petición directa a `app:3000` desde `backend` con `X-Forwarded-For` falso no cambia la IP que ve la app).
-- Estado: abierto (baja, no bloquea)
+- Estado: **corregido (infrastructure 2.1h; revisado en la 2.1m, §6.7 punto 4)**. `app` con IP fija `${TEST_APP_IP:-10.89.240.3}` en `proxy-app`, `proxy` en `${TEST_PROXY_IP:-10.89.240.2}` y `TRUSTED_PROXIES` solo esa IP; probado en una red `internal` `/29` en los dos órdenes de arranque (sin conflicto IPAM; una IP ocupada falla cerrado). Pasa a **verificado** con la primera ejecución de `tests/run.sh e2e` con la imagen real (`proxy` *healthy*, `podman inspect` con las dos IP, RS-06) y con el mismo esquema en `compose.demo.yaml`/Quadlet
 
 ## SEC-029: `TRUSTED_PROXIES` admite CIDR sin límites ni validación estricta
 - Severidad: media
@@ -1617,10 +1761,100 @@ de bloqueo por la regla de contenedores. RS-39 sigue pendiente de la Etapa 2.
 - Cómo verificar: E2E con Toxiproxy (o retraso de red de Playwright): con la sesión caducada por inactividad, retrasar 3 s la respuesta de una petición en curso y de la reconexión SSE, hacer login nuevo durante el retraso y comprobar que la cookie nueva sigue presente y la siguiente petición da `200`. Revisión de código: ningún uso de `sendBeacon` ni `keepalive` en `apps/web/`.
 - Estado: abierto (baja, no bloquea)
 
+## SEC-033: CVE-2026-107494 y CVE-2026-124709 (QUIC de OpenSSL) en la base distroless — excepción EXC-01
+- Severidad: baja (riesgo en nuestro contexto; el escáner las clasifica **altas**, CVSS 3.1 7.5 `A:H`)
+- Ubicación: deploy/app/Containerfile:28 (`RUNTIME_IMAGE` = `gcr.io/distroless/nodejs26-debian13@sha256:b462e87a…`), paquete `libssl3t64` 3.5.9-1~deb13u1 (`/usr/lib/x86_64-linux-gnu/libssl.so.3`, `libcrypto.so.3`) y OpenSSL 3.5.9 estático dentro de `/nodejs/bin/node`; docs/infraestructura.md §8.1 (escaneo del 2026-11-24)
+- Descripción: dos denegaciones de servicio por memoria en la pila QUIC de OpenSSL 3.5.9, sin corrección publicada en Debian (`affected`). Incumplen §3.3 ("sin críticas/altas") si no hay excepción. No son alcanzables en nuestra arquitectura (§6.7, punto 1): ningún ejecutable enlaza `libssl.so.3` del sistema, Node no la carga, la app solo habla TCP (Fastify detrás de Caddy, sin UDP), el Node de la imagen está compilado sin QUIC (`node_use_quic: false`, sin `node:quic`) y el HTTP/3 de Caddy es `quic-go`. El escáner no ve que el OpenSSL incluido en Node también tiene la pila QUIC (exporta `OSSL_QUIC_server_method`, `SSL_new_listener`, `SSL_set_quic_tls_cbs`): solo un módulo nativo podría usarla. Impacto máximo si llegara a ser alcanzable: caída del proceso `app` (sin pérdida de confidencialidad ni integridad).
+- Responsable: infrastructure (fichero de excepciones, escaneo y actualización de digests), developer (condiciones 3 y 4), cybersecurity (revisión)
+- Cómo corregir: **excepción EXC-01**, aprobada por Cybersecurity el 2026-11-24 (RS-39), pendiente de **ratificación humana** en la puerta de la Etapa 2 (es una excepción a `docs/reglas-equipo.md` §3.3; no acepta un riesgo alto).
+  - Alcance: **solo** esos dos CVE, **solo** en `pkg:deb/debian/libssl3t64@3.5.9-1~deb13u1?arch=amd64&distro=debian-13.8`. No cubre otros CVE, otros paquetes ni otras versiones o arquitecturas (un `purl` distinto, p. ej. Debian 13.9 o `arm64`, vuelve a fallar y obliga a revisar: es lo que se busca).
+  - Fechas: concedida 2026-11-24; **revisión** 2026-12-08; **caduca** 2026-12-24 (el escáner vuelve a fallar solo). Revisión obligatoria también antes de desplegar en DEMO (Etapa 4) y en PROD (Etapa 5).
+  - **Queda invalidada** (la imagen vuelve a estar bloqueada hasta nueva decisión) si: (1) Debian o distroless publican una versión corregida (Trivy muestra *Fixed Version*): Infrastructure actualiza el digest en ≤ 7 días y retira la entrada; (2) Node publica una versión de seguridad que corrige estas CVE en su OpenSSL: actualizar Node en las dos etapas y en DEV en ≤ 7 días; (3) la app o una dependencia usa QUIC, HTTP/3 o UDP: `node:quic`, `--experimental-quic` (en `command`, `NODE_OPTIONS` o código), `dgram`, o cualquier escucha UDP en el contenedor; (4) algún ELF de la imagen (p. ej. un `.node` en `/app/node_modules`) tiene `NEEDED libssl.so.3`/`libcrypto.so.3` o importa `OSSL_QUIC_*`, `SSL_new_listener*` o `SSL_set_quic_tls_cbs`; (5) cambia la evaluación: pasan a críticas, hay *exploit* público o entran en el catálogo KEV, o el aviso amplía el alcance a TLS sobre TCP; (6) llega la fecha de caducidad sin revisión.
+  - Implementación (Infrastructure): fichero `deploy/app/trivyignore.yaml` (probado con Trivy 0.76.2: con él sale `0` y lista las 2 como *suppressed*; sin él, con `expired_at` pasado o con otro `purl`, sale `1`):
+    ```yaml
+    vulnerabilities:
+      - id: CVE-2026-107494
+        purls: ["pkg:deb/debian/libssl3t64@3.5.9-1~deb13u1?arch=amd64&distro=debian-13.8"]
+        expired_at: 2026-12-24
+        statement: "SEC-033 / EXC-01: QUIC no alcanzable (docs/seguridad.md §6.7)"
+      - id: CVE-2026-124709
+        purls: ["pkg:deb/debian/libssl3t64@3.5.9-1~deb13u1?arch=amd64&distro=debian-13.8"]
+        expired_at: 2026-12-24
+        statement: "SEC-033 / EXC-01: QUIC no alcanzable (docs/seguridad.md §6.7)"
+    ```
+    Se usa con `--ignorefile deploy/app/trivyignore.yaml --show-suppressed --severity HIGH,CRITICAL --exit-code 1` (SEC-034). **Prohibido** `--ignore-unfixed`, ignorar por paquete entero o un `.trivyignore` sin `expired_at`: ocultarían futuras altas sin corrección. Cambiar el fichero requiere una entrada nueva o actualizada de Cybersecurity en este documento.
+  - Comprobaciones de las condiciones 3 y 4 en cada build (las añade Infrastructure a `construir.sh` o a la suite `containers`): `node -p 'process.config.variables.node_use_quic'` en la imagen → `false`; `grep -rE "node:quic|experimental-quic|require\(['\"](node:)?dgram|from ['\"](node:)?dgram" /app/dist` sin resultados; ningún `.node` en `/app` con `NEEDED` de `libssl`/`libcrypto` ni símbolos `OSSL_QUIC_`/`SSL_new_listener`/`SSL_set_quic_tls_cbs` sin definir (`readelf -d`, `nm -D --undefined-only`, ejecutados fuera de la imagen sobre `podman export`, porque la distroless no tiene shell).
+- Cómo verificar: (a) `construir.sh` con el fichero → escaneo `0` y 2 *suppressed* con el `statement`; sin el fichero → falla; (b) las comprobaciones de las condiciones 3 y 4 pasan sobre la imagen real; (c) el 2026-12-08 Cybersecurity revisa Trivy (DB actualizada), los avisos de Debian (`openssl`) y las versiones de seguridad de Node, y deja constancia aquí.
+- Estado: abierto (riesgo aceptado con EXC-01 hasta el 2026-12-24; no bloquea; ratificación humana pendiente)
+
+## SEC-034: El escaneo de la imagen no forma parte del build
+- Severidad: media
+- Ubicación: deploy/app/construir.sh:45-56 (construye e imprime `APP_IMAGE` sin escanear); docs/infraestructura.md §8 ("pendiente de integrar en la imagen final") y §15 (Trivy ejecutado a mano)
+- Descripción: §3.3 y RS-39 exigen Trivy/Grype en **cada** build, sin críticas/altas salvo excepción escrita. Hoy `construir.sh` imprime la referencia por digest que se usa como `APP_IMAGE` en TESTING (y luego en DEMO/PROD) sin escanear: una imagen con una alta o crítica nueva (de la base o de `node_modules`) puede llegar a las suites y a la puerta sin que nadie lo vea, y EXC-01 (SEC-033) no se aplica de forma automática ni caduca sola. Tampoco se ejecuta `pnpm audit --prod` (RS-39).
+- Responsable: infrastructure
+- Cómo corregir: tras `podman build`, en `construir.sh`: (1) `podman save` a un fichero temporal en `$XDG_RUNTIME_DIR` (o el scratch del usuario) y Trivy por digest (el de §8) en contenedor rootless (`--user 1000:1000`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--read-only`, el `.tar` montado `ro`, caché de la DB en un directorio del usuario), **nunca** con el socket de Podman (§8 de este documento); `--severity HIGH,CRITICAL --exit-code 1 --ignorefile deploy/app/trivyignore.yaml --show-suppressed`, con el informe JSON guardado junto a la etiqueta; (2) `pnpm audit --prod --audit-level high` sobre el lockfile (en la etapa de construcción, que ya tiene red en `pnpm deploy`, o en el script); (3) las comprobaciones de las condiciones 3 y 4 de SEC-033; (4) si algo falla, el script sale con código ≠ 0, **no imprime `APP_IMAGE`** y borra la etiqueta (o la marca como `-rechazada`). Documentarlo en §8.1 y en `docs/infraestructura.md` §14.
+- Cómo verificar: `sh deploy/app/construir.sh` con la imagen real → escaneo en la salida, 2 *suppressed* (EXC-01) y `APP_IMAGE`; con `deploy/app/trivyignore.yaml` renombrado → sale ≠ 0 y sin `APP_IMAGE`; `podman ps` durante el escaneo no muestra montajes del socket.
+- Estado: abierto (media, no bloquea; debe estar hecho antes de usar la primera imagen real para la puerta de la Etapa 2)
+
+## SEC-035: pnpm se instala en la etapa de construcción sin integridad fijada
+- Severidad: baja
+- Ubicación: deploy/app/Containerfile:44-47 (`npm install --global … "pnpm@${PNPM_VERSION}"` como root de construcción)
+- Descripción: la versión está fijada, pero no el *hash*: `npm` confía en el `integrity` que le da el propio registro por la misma conexión TLS, y ejecuta los scripts de instalación del paquete como root de la etapa. pnpm es la herramienta que después instala y verifica todas las dependencias, así que una versión manipulada (registro, proxy o *mirror* comprometido) controla la imagen entera (T-20/T-21). El `npm` 11.20.0 de la base trae además `undici` 6.28.0 con CVE de validación de certificado (§6.7, punto 3). Probabilidad baja (npm no permite republicar una versión), de ahí baja. Las dependencias de la app sí están protegidas por las integridades de `pnpm-lock.yaml`.
+- Responsable: infrastructure
+- Cómo corregir: `ARG PNPM_INTEGRITY=sha512-…` (el `dist.integrity` de `pnpm@12.21.0`, obtenido una vez y revisado en el commit) y en el `RUN`: `npm pack "pnpm@${PNPM_VERSION}"`, comprobar el `sha512` del `.tgz` contra `PNPM_INTEGRITY` (falla el build si no coincide) e instalar desde el fichero con `npm install --global --ignore-scripts ./pnpm-*.tgz`. Mismo cambio en la imagen de herramientas de DEV (`deploy/dev/`), que también fija `PNPM_VERSION`. Al actualizar pnpm se actualizan los dos `ARG` juntos.
+- Cómo verificar: build con `--build-arg PNPM_INTEGRITY=sha512-AAAA…` (valor erróneo) → falla en ese paso; con el valor correcto → construye y `pnpm --version` = 12.21.0.
+- Estado: abierto (baja, no bloquea)
+
+## SEC-036: `.npmrc` entra en el contexto de construcción sin comprobar que no lleva credenciales
+- Severidad: baja
+- Ubicación: deploy/app/containerignore:11 (`!.npmrc`); deploy/app/Containerfile:61 (`COPY . .` a la etapa `build`) y :87 (la comprobación de secretos solo mira `dist` y `public`, y no busca `.npmrc`)
+- Descripción: `.npmrc` es el sitio habitual de los *tokens* de registro (`//registry…/:_authToken=…`, `_auth`, `_password`). Si el Developer o alguien de la máquina lo usa para un registro privado o pone ahí un *token*, entra en una capa de la etapa `build` (que queda en el almacén local y en la caché de capas) y se versiona en git. No llega a la imagen final (solo se copian `package.json`, `node_modules`, `dist` y `public`), de ahí baja. `docs/reglas-equipo.md` §1 y §3.2 prohíben secretos en el código y en la construcción.
+- Responsable: infrastructure (Containerfile) y developer (contenido de `.npmrc`)
+- Cómo corregir: (1) el `.npmrc` del repositorio solo lleva ajustes, nunca credenciales; (2) en la etapa `build`, justo después del `COPY`, fallar si algún `.npmrc` del contexto contiene `_authToken`, `_auth`, `_password`, `username` o `certfile`/`keyfile`; (3) ampliar la comprobación final a todo `/out/app` (no solo `dist` y `public`) y añadir `.npmrc` y `.env*` en cualquier nivel; (4) si algún día hace falta un registro privado, el *token* va con `podman build --secret id=npmrc,src=…` y `RUN --mount=type=secret,id=npmrc,target=/home/node/.npmrc`, nunca en el contexto ni en un *build arg*.
+- Cómo verificar: build con un `.npmrc` señuelo que contenga `//registry.npmjs.org/:_authToken=FALSO` → falla con un mensaje que **no** muestra el valor; sin él → construye; `find` sobre `podman export` de la imagen final sin `.npmrc` ni `.env*`.
+- Estado: abierto (baja, no bloquea)
+
+## SEC-037: La etiqueta `-sucio` no cubre todo lo que entra en la imagen
+- Severidad: baja
+- Ubicación: deploy/app/construir.sh:39 (`git status --porcelain -- apps packages package.json pnpm-lock.yaml pnpm-workspace.yaml`)
+- Descripción: el contexto también incluye `.npmrc`, `tsconfig*.json` y `tests/package.json` (containerignore), y ficheros ignorados por git dentro de `apps/`/`packages/` que el containerignore no excluye (git no los lista en `status`). Con cambios ahí, la imagen se etiqueta como el commit limpio y la etiqueta `org.opencontainers.image.revision` no describe su contenido: se pierde la trazabilidad de qué se probó en TESTING y se aprobó para DEMO/PROD (§3.8, T-21). Baja: el digest sigue siendo el identificador real.
+- Responsable: infrastructure
+- Cómo corregir: usar la misma lista que `containerignore` (`apps packages package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc 'tsconfig*.json' tests/package.json`) y añadir `--ignored=matching` para detectar ignorados dentro de esas rutas que no excluye el containerignore (o marcar `-sucio` si `git ls-files --others --ignored --exclude-standard -- apps packages` devuelve algo fuera de `node_modules`/`dist`/`.env*`). Mantener que el script no acepta `--build-arg` (las bases solo cambian editando el digest en el Containerfile).
+- Cómo verificar: con un cambio sin commit en un `tsconfig*.json` de la raíz o en `tests/package.json` → etiqueta `<commit>-sucio`; sin cambios → `<commit>`.
+- Estado: abierto (baja, no bloquea)
+
 
 ---
 
-### Resumen de la revisión 2.1k (Etapa 2, HU-01, 2026-11-24)
+### Resumen de la revisión 2.1m (Etapa 2, HU-01, 2026-11-24)
+- **Altos o críticos abiertos: ninguno.** Las dos CVE altas de `libssl3t64`
+  (CVE-2026-107494, CVE-2026-124709) no son alcanzables y quedan cubiertas
+  por la excepción fechada **EXC-01** (SEC-033, riesgo residual bajo; revisión
+  2026-12-08, caduca 2026-12-24). **Requiere ratificación humana** en la
+  puerta de la Etapa 2 por ser una excepción a `docs/reglas-equipo.md` §3.3
+  (no es la aceptación de un riesgo alto).
+- Dictámenes (§6.7): imagen final (`deploy/app/`) y contrato §8.1 cumplen §3
+  con condiciones; etapa Debian trixie aprobada (sus altas no llegan a la
+  imagen final); servicio `commands` aprobado; **SEC-028 corregido** (2.1h,
+  probado en red `/29`; verificación final con la imagen real).
+- Nuevos: **SEC-033** (baja en contexto; infrastructure + developer:
+  EXC-01 y sus comprobaciones), **SEC-034** (media; infrastructure: escaneo,
+  `pnpm audit` y comprobaciones dentro de `construir.sh`, antes de la primera
+  imagen real de la puerta), **SEC-035** (baja; infrastructure: integridad de
+  pnpm), **SEC-036** (baja; infrastructure + developer: `.npmrc` sin
+  credenciales), **SEC-037** (baja; infrastructure: etiqueta `-sucio`).
+- Abiertos que no bloquean: SEC-003 (media), SEC-025 (baja), SEC-031 (baja),
+  SEC-032 (baja), SEC-033 (baja, con EXC-01), SEC-034 (media), SEC-035,
+  SEC-036, SEC-037 (baja).
+- Corregidos pendientes de verificación con código o en un entorno
+  posterior: SEC-026, SEC-028, SEC-029, SEC-030.
+- Contenedores: ningún contenedor ni la imagen final corre como root, usa
+  `--privileged`, monta el socket ni la red del host. Escaneo (RS-39): base
+  distroless 0 críticas, 2 altas con EXC-01; falta el escaneo de la imagen
+  real dentro del build (SEC-034).
+
+
+### Resumen de la revisión 2.1k (Etapa 2, HU-01, 2026-11-24; histórico, sustituido por el de 2.1m)
 - **Altos o críticos abiertos: ninguno.**
 - Dictámenes (§6.6): **T-40** confirmado (`404 NOT_FOUND` para todos con
   `is404`; RS-18 ampliado) con la corrección de **SEC-031**; **SEC-029**
