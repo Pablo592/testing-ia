@@ -1,0 +1,14 @@
+{
+  "name": "mi-app",
+  "private": true,
+  "type": "module",
+  "description": "Toma de pedidos para cafetería (monorepo pnpm). Todo pnpm/node se ejecuta en contenedores rootless (docs/reglas-equipo.md §3, docs/infraestructura.md §7.1).",
+  "packageManager": "pnpm@12.21.0",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "build": "pnpm --filter @mi-app/api... --filter @mi-app/web... run build",
+    "typecheck": "pnpm --filter ./packages/** --filter ./apps/** run typecheck"
+  }
+}

@@ -1,0 +1,301 @@
+/* Disposición de las pantallas de HU-01 con los tokens de tokens.css. */
+
+/* --- Barra superior (§5.11): 64 px, el título es el único h1 ---------------- */
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-height: var(--space-8);
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+.topbar-title {
+  margin: 0;
+  font-size: var(--text-2xl);
+  line-height: var(--text-2xl-lh);
+  font-weight: 700;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.topbar-brand {
+  font-weight: 700;
+  font-size: var(--text-lg);
+  flex: 1 1 auto;
+}
+.topbar-user {
+  color: var(--color-text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.topbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+}
+.menu {
+  position: relative;
+}
+.menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--space-1));
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-overlay);
+}
+.menu-list a {
+  display: flex;
+  align-items: center;
+  min-height: var(--touch-md);
+  padding: 0 var(--space-2);
+  color: var(--color-text);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+.menu-list a:hover {
+  background: var(--color-surface-muted);
+}
+
+.session-notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2) 0;
+}
+
+main.content {
+  padding: var(--space-4);
+}
+@media (max-width: 767px) {
+  main.content {
+    padding: var(--space-2);
+  }
+}
+.placeholder {
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+/* --- Acceso denegado (§5.13) ----------------------------------------------- */
+.denied {
+  max-width: 560px;
+  margin: var(--space-8) auto 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-2);
+}
+.denied p {
+  margin: 0;
+}
+.denied-lead {
+  font-size: var(--text-lg);
+  line-height: var(--text-lg-lh);
+}
+.denied-help {
+  color: var(--color-text-secondary);
+}
+.denied .btn-primary {
+  min-width: 240px;
+}
+@media (max-width: 767px) {
+  .denied {
+    margin-top: var(--space-4);
+    align-items: stretch;
+    text-align: left;
+  }
+}
+
+/* --- P-01 ----------------------------------------------------------------- */
+.login {
+  padding: var(--space-3) var(--space-4);
+  max-width: 1200px;
+  margin: 0 auto;
+}
+@media (max-width: 767px) {
+  .login {
+    padding: var(--space-2);
+  }
+}
+.login h1 {
+  font-size: var(--text-2xl);
+  line-height: var(--text-2xl-lh);
+  margin: var(--space-2) 0;
+}
+.login-banners {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.user-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  list-style: none;
+}
+@media (max-width: 420px) {
+  .user-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.user-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--space-0-5);
+  width: 100%;
+  min-height: 120px;
+  padding: var(--space-2);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: var(--color-text);
+}
+.user-initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--color-surface-muted);
+  font-weight: 700;
+}
+.user-name {
+  font-size: var(--text-lg);
+  line-height: var(--text-lg-lh);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.user-role {
+  color: var(--color-text-secondary);
+}
+.write-user {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: flex-end;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+}
+.field label {
+  font-weight: 600;
+}
+.text-input {
+  min-height: var(--touch-md);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  font: inherit;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+/* Paso 2 y cambio de PIN: columna centrada de ancho máximo 360 px. */
+.pin-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+.pin-column {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.pin-column > p {
+  margin: 0;
+}
+.pin-back {
+  align-self: flex-start;
+}
+.pin-input {
+  width: 100%;
+  min-height: var(--touch-lg);
+  font-size: var(--text-2xl);
+  letter-spacing: 0.5em;
+  text-align: center;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.pin-help {
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+.message:empty {
+  display: none;
+}
+.message p {
+  margin: 0;
+}
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, var(--key-size));
+  grid-auto-rows: var(--key-size);
+  gap: var(--space-1);
+  justify-content: center;
+}
+.key {
+  font: inherit;
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  padding: 0;
+}
+.key-small {
+  font-size: var(--text-base);
+}
+.key-action {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  border-color: var(--color-primary);
+  font-size: var(--text-base);
+  font-weight: 700;
+}
+.key:disabled {
+  background: var(--color-surface-muted);
+  color: var(--color-text-secondary);
+  border-color: var(--color-border);
+  cursor: not-allowed;
+}
+@media (max-width: 420px) {
+  .keypad {
+    --key-size: 64px;
+    grid-template-columns: repeat(3, 1fr);
+    width: 100%;
+  }
+}
+.change-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+}

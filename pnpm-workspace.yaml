@@ -1,0 +1,17 @@
+# Workspace pnpm (docs/arquitectura.md §3; docs/infraestructura.md §2 y §6).
+packages:
+  - apps/*
+  - packages/*
+  - tests
+
+# pnpm 12 bloquea los scripts de instalación salvo los aprobados aquí
+# (docs/infraestructura.md §6). argon2: elige su binario precompilado
+# (musl en DEV, glibc en la imagen final); esbuild: comprueba su binario.
+allowBuilds:
+  argon2: true
+  esbuild: true
+
+# SEC-026 (docs/infraestructura.md §7.1): sin enlaces de los paquetes del
+# workspace en node_modules/.pnpm/node_modules (el de @mi-app/tests apuntaría a
+# tests/, fuera de la lista de permitidos en escritura).
+hoistWorkspacePackages: false

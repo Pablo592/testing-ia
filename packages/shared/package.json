@@ -1,0 +1,25 @@
+{
+  "name": "@mi-app/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Reglas puras compartidas por servidor y cliente: PIN, permisos, bloqueo, minutos, fecha de negocio y esquemas (docs/arquitectura.md §3.1).",
+  "exports": {
+    "./pin": "./src/pin/index.ts",
+    "./permissions": "./src/permissions.ts",
+    "./lockout": "./src/lockout.ts",
+    "./retry": "./src/retry.ts",
+    "./business-date": "./src/business-date.ts",
+    "./api": "./src/api.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "name": "@mi-app/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "API Fastify + SSE + estáticos de la SPA (docs/arquitectura.md §2, §3).",
+  "exports": {
+    "./app": "./src/app.ts",
+    "./auth/hasher": "./src/modules/auth/hasher.ts",
+    "./commands": "./src/commands/index.ts",
+    "./commands/cli": "./src/commands/cli.ts",
+    "./config": "./src/config.ts"
+  },
+  "scripts": {
+    "dev": "node --watch src/main.ts",
+    "db:migrate": "node src/migrate.ts",
+    "create-initial-manager": "node src/bin/create-initial-manager.ts",
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "argon2": "0.45.2",
+    "fastify": "5.12.8",
+    "kysely": "0.29.9",
+    "pg": "8.23.1",
+    "pino": "10.4.0",
+    "prom-client": "15.1.3",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@mi-app/shared": "workspace:*",
+    "@types/node": "26.6.6",
+    "@types/pg": "8.23.1",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  }
+}
