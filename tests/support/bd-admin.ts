@@ -44,3 +44,13 @@ export async function borrarBd(nombre: string): Promise<void> {
     );
   }
 }
+
+/**
+ * `ALTER DATABASE <clon> SET search_path = <valor>` con test_admin, dueño del
+ * clon (lo creó él). Afecta solo a las conexiones que se abran después. El
+ * valor es un identificador simple (se valida: no se interpola nada más).
+ */
+export async function fijarSearchPathDeBd(nombre: string, valor: string): Promise<void> {
+  if (!/^[a-z_][a-z0-9_]{0,40}$/.test(valor)) throw new Error(`search_path de prueba no válido: ${valor}`);
+  await conAdmin((c) => c.query(`ALTER DATABASE "${nombreSeguro(nombre)}" SET search_path = ${valor}`));
+}

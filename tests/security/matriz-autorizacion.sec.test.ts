@@ -17,9 +17,9 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { enAlcance } from '../support/alcance.ts';
 import { montarApp, type Ctx } from '../support/app.ts';
-import { codigo, esperar401, pedir, sesion } from '../support/http.ts';
+import { codigo, errorSinId, esperar401, esperarSinSetCookie, pedir, sesion, type Peticion, type Resp } from '../support/http.ts';
 import { crearUsuario, type Rol } from '../support/fixtures.ts';
-import { huella } from '../support/bd.ts';
+import { huella, sesionesDe } from '../support/bd.ts';
 import { PERMISOS_ESPERADOS } from '../support/oraculo-permisos.ts';
 
 type Quien = 'anonimo' | Rol | 'provisional';
@@ -36,9 +36,9 @@ interface Fila {
   sse?: boolean;
   query?: string;
   /**
-   * Cuerpo bien formado para las celdas de la tabla. Solo /auth/pin: su
-   * 403 FORBIDDEN sin PIN provisional (permiso session:self, que todos tienen)
-   * no lo da el RBAC; con `{}` podría salir antes el 400 de zod (hallazgo T-39).
+   * Cuerpo bien formado para las celdas de la tabla. Solo /auth/pin, para que
+   * la celda "provisional" llegue al handler; su 403 FORBIDDEN sin PIN
+   * provisional va en el hook de permiso, antes del cuerpo (T-39, caso aparte).
    */
   cuerpo?: unknown;
 }
@@ -175,7 +175,7 @@ for (const f of TABLA) {
       });
 
       const sinPermiso = ([W, K, M] as Rol[]).filter((q) => !f.roles.includes(q));
-      // /auth/pin se excluye: su 403 no es del RBAC (T-39).
+      // /auth/pin tiene su propio caso (T-39, abajo).
       if (f.roles.length > 0 && sinPermiso.length > 0) {
         test(`[HU-01/CA-F04][HU-01/CA-N02] rol sin permiso con cuerpo inválido (no JSON, texto) → 403 FORBIDDEN, no 400/415`, async () => {
           for (const q of sinPermiso) {
@@ -197,17 +197,170 @@ for (const f of TABLA) {
   });
 }
 
-// RS-18 pide 404 para todos; con los hooks onRequest de §5 podría salir antes
-// 401/403 (hallazgo T-40, pendiente del SE y Cybersecurity).
-describe('Rutas que no existen en el MVP (HU-09 fuera)', () => {
-  for (const metodo of ['GET', 'PATCH'] as const) {
-    test(`[HU-01/CA-F04][RS-18] ${metodo} /settings → 404 para todos`, async () => {
-      for (const q of QUIENES) {
-        const r = await pedir(ctx, { metodo, ruta: '/settings', cookie: await cookieDe(q), cuerpo: metodo === 'GET' ? undefined : {} });
-        expect(r.status, q).toBe(404);
+// T-39 (docs/arquitectura.md §5, 2.1i): el 403 FORBIDDEN de POST /auth/pin
+// sin PIN provisional lo da el hook de permiso (`provisionalPinOnly`), antes
+// del analizador de cuerpo y de zod, y sin llamar a verifyPin.
+describe.runIf(enAlcance('HU-01'))('POST /auth/pin sin PIN provisional con cuerpo inválido o ausente (T-39)', () => {
+  test('[HU-01/CA-F12][HU-01/CA-N02][RS-16b] W, K y M: cuerpo ausente, {}, JSON roto, text/plain o con claves de más → 403 FORBIDDEN, sin verificar ningún PIN', async () => {
+    const cuerpos: Pick<Peticion, 'cuerpo' | 'cabeceras'>[] = [
+      {},
+      { cuerpo: {} },
+      { cuerpo: '{"currentPin": ' },
+      { cuerpo: 'currentPin=1', cabeceras: { 'content-type': 'text/plain' } },
+      { cuerpo: { currentPin: 7, newPin: [], otra: true } },
+    ];
+    for (const q of [W, K, M] as Rol[]) {
+      for (const c of cuerpos) {
+        const cookie = await cookieDe(q);
+        const antes = ctx.hasher.verificaciones;
+        const r = await pedir(ctx, { metodo: 'POST', ruta: '/auth/pin', cookie, ...c });
+        expect([r.status, codigo(r)], `${q} ${JSON.stringify(c)}`).toEqual([403, 'FORBIDDEN']);
+        expect(r.body.error.details).toBeUndefined();
+        expect(ctx.hasher.verificaciones, 'sin verifyPin').toBe(antes);
       }
+    }
+  });
+});
+
+// RS-18 (docs/seguridad.md §7, ampliada en la 2.1k; T-40 opción (a), SEC-031):
+// toda ruta o método no declarado bajo /api/ → 404 NOT_FOUND idéntico salvo
+// requestId para todos (sin sesión, cookie válida/revocada/inventada, PIN
+// provisional, W/K/M, sin Origin o con Origin ajeno) y con cualquier cuerpo;
+// sin details, sin Set-Cookie, sin consultar la BD y sin renovar la
+// actividad. Fuera de /api/, un método que no es GET/HEAD → 404, no index.html.
+describe('Rutas que no existen (RS-18, T-40, SEC-031)', () => {
+  let c: Ctx;
+  type Estado = 'anonimo' | Rol | 'provisional' | 'revocada' | 'inventada';
+  const cookies: Partial<Record<Estado, string | undefined>> = {};
+  beforeAll(async () => {
+    c = await montarApp();
+    for (const r of [W, K, M] as Rol[]) {
+      const u = await crearUsuario(c, { rol: r });
+      cookies[r] = await sesion(c, u.nombre, u.pin);
+    }
+    const p = await crearUsuario(c, { rol: W, pinProvisional: true });
+    cookies.provisional = await sesion(c, p.nombre, p.pin);
+    const v = await crearUsuario(c, { rol: K });
+    cookies.revocada = await sesion(c, v.nombre, v.pin);
+    await pedir(c, { metodo: 'POST', ruta: '/auth/logout', cookie: cookies.revocada });
+    cookies.inventada = '__Host-sid=' + 'Z'.repeat(43);
+    cookies.anonimo = undefined;
+  });
+  afterAll(async () => {
+    await c?.cerrar();
+  });
+
+  const ESTADOS: Estado[] = ['anonimo', W, K, M, 'provisional', 'revocada', 'inventada'];
+  const ORIGENES: { nombre: string; p: Partial<Peticion> }[] = [
+    { nombre: 'Origin correcto', p: {} },
+    { nombre: 'sin Origin', p: { sinOrigen: true } },
+    { nombre: 'Origin ajeno', p: { cabeceras: { origin: 'https://evil.test' } } },
+  ];
+  const GRANDE = '{"a":"' + 'x'.repeat(65 * 1024) + '"}';
+  /** Peticiones a rutas o métodos no declarados bajo /api/ (cuerpo incluido). */
+  const INEXISTENTES: { nombre: string; p: Peticion }[] = [
+    { nombre: 'GET /settings', p: { ruta: '/settings' } },
+    { nombre: 'PATCH /settings {}', p: { metodo: 'PATCH', ruta: '/settings', cuerpo: {} } },
+    { nombre: 'PATCH /settings JSON inválido', p: { metodo: 'PATCH', ruta: '/settings', cuerpo: '{bad' } },
+    { nombre: 'PATCH /settings text/plain', p: { metodo: 'PATCH', ruta: '/settings', cuerpo: 'a=1', cabeceras: { 'content-type': 'text/plain' } } },
+    { nombre: 'PATCH /settings 65 KiB', p: { metodo: 'PATCH', ruta: '/settings', cuerpo: GRANDE } },
+    { nombre: 'DELETE /auth/me (método no declarado)', p: { metodo: 'DELETE', ruta: '/auth/me' } },
+    { nombre: 'PUT /session/activity (método no declarado)', p: { metodo: 'PUT', ruta: '/session/activity', cuerpo: '{bad' } },
+    { nombre: 'GET /auth/me/ (barra final)', p: { ruta: '/auth/me/' } },
+    { nombre: 'OPTIONS /auth/me', p: { metodo: 'OPTIONS', ruta: '/auth/me' } },
+    { nombre: 'OPTIONS /settings', p: { metodo: 'OPTIONS', ruta: '/settings' } },
+  ];
+
+  function es404(r: Resp, que: string): void {
+    expect([r.status, codigo(r)], que).toEqual([404, 'NOT_FOUND']);
+    expect('details' in r.body.error, `${que}: sin details`).toBe(false);
+    expect(r.body.error.requestId, que).toBe(r.headers['x-request-id']);
+    esperarSinSetCookie(r);
+  }
+
+  async function conLimite<T>(p: Promise<T>, ms: number, que: string): Promise<T> {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const limite = new Promise<never>((_, mal) => {
+      t = setTimeout(() => mal(new Error(`${que}: sin respuesta en ${ms} ms con sessions/users bloqueadas (¿consulta a la BD?)`)), ms);
+    });
+    try {
+      return await Promise.race([p, limite]);
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  for (const metodo of ['GET', 'PATCH'] as const) {
+    test(`[HU-01/CA-F04][HU-01/CA-N02][RS-18] ${metodo} /settings → 404 NOT_FOUND idéntico para cada estado de sesión y Origin`, async () => {
+      const respuestas: Resp[] = [];
+      for (const q of ESTADOS) {
+        for (const o of ORIGENES) {
+          const r = await pedir(c, { metodo, ruta: '/settings', cookie: cookies[q], cuerpo: metodo === 'GET' ? undefined : {}, ...o.p });
+          es404(r, `${q}, ${o.nombre}`);
+          respuestas.push(r);
+        }
+      }
+      for (const r of respuestas) expect(errorSinId(r)).toEqual(errorSinId(respuestas[0]));
     });
   }
+
+  test('[HU-01/CA-F04][HU-01/CA-N02][RS-18] cuerpo inválido o grande, método no declarado, barra final y OPTIONS → el mismo 404, con y sin sesión', async () => {
+    const respuestas: Resp[] = [];
+    for (const q of ['anonimo', W, 'provisional', 'inventada'] as Estado[]) {
+      for (const x of INEXISTENTES) {
+        const r = await pedir(c, { ...x.p, cookie: cookies[q] });
+        es404(r, `${x.nombre}, ${q}`);
+        respuestas.push(r);
+      }
+    }
+    for (const r of respuestas) expect(errorSinId(r)).toEqual(errorSinId(respuestas[0]));
+  });
+
+  test('[HU-01/CA-F04][RS-18] sin consultar la BD: con sessions y users bloqueadas, los 404 responden; GET /auth/me (control) espera', async () => {
+    const bloqueo = await c.bd.connect();
+    let control: Promise<Resp> | undefined;
+    try {
+      await bloqueo.query('BEGIN');
+      await bloqueo.query('LOCK TABLE sessions, users IN ACCESS EXCLUSIVE MODE');
+      // Control: una ruta declarada con sesión sí consulta y queda esperando.
+      control = pedir(c, { ruta: '/auth/me', cookie: cookies[M] });
+      const pronto = await Promise.race([control.then(() => 'respondió'), new Promise((ok) => setTimeout(() => ok('espera'), 500))]);
+      expect(pronto, 'el bloqueo de prueba no es efectivo').toBe('espera');
+      for (const q of ['anonimo', M, 'inventada'] as Estado[]) {
+        for (const x of INEXISTENTES) {
+          es404(await conLimite(pedir(c, { ...x.p, cookie: cookies[q] }), 3000, `${x.nombre}, ${q}`), `${x.nombre}, ${q}`);
+        }
+      }
+    } finally {
+      await bloqueo.query('ROLLBACK').catch(() => undefined);
+      bloqueo.release();
+    }
+    expect((await control!).status).toBe(200);
+  });
+
+  test('[HU-01/CA-F09][RS-18] un 404 con cookie no renueva la actividad: 14 min, 404, y a los 15 min GET /auth/me → 401 idle', async () => {
+    const u = await crearUsuario(c, { rol: W });
+    const cookie = await sesion(c, u.nombre, u.pin);
+    const [antes] = await sesionesDe(c.bd, u.id);
+    c.reloj.avanzar({ min: 14 });
+    for (const x of INEXISTENTES) es404(await pedir(c, { ...x.p, cookie }), x.nombre);
+    const [despues] = await sesionesDe(c.bd, u.id);
+    expect(despues.last_activity_at.getTime()).toBe(antes.last_activity_at.getTime());
+    c.reloj.avanzar({ min: 1 });
+    esperar401(await pedir(c, { ruta: '/auth/me', cookie }), { reason: 'idle' });
+  });
+
+  test('[HU-01/CA-F04][RS-18] fuera de /api/, POST/PATCH/PUT/DELETE a una ruta de la SPA o inexistente → 404, nunca index.html', async () => {
+    for (const metodo of ['POST', 'PATCH', 'PUT', 'DELETE']) {
+      for (const ruta of ['/pedidos', '/cola', '/', '/no-existe']) {
+        const r = await pedir(c, { metodo, ruta, sinPrefijo: true, cookie: cookies[W], cuerpo: '{bad' });
+        expect(r.status, `${metodo} ${ruta}`).toBe(404);
+        expect(String(r.headers['content-type'] ?? ''), `${metodo} ${ruta}`).not.toMatch(/text\/html/);
+        expect(r.raw, `${metodo} ${ruta}`).not.toMatch(/<html|<!doctype/i);
+        esperarSinSetCookie(r);
+      }
+    }
+  });
 });
 
 describe('Denegación por defecto (RS-17)', () => {

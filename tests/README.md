@@ -73,8 +73,9 @@ tests/
 | `@mi-app/api/app` | `buildApp(deps: AppDeps): Promise<FastifyInstance>` (ver §2) |
 | `@mi-app/api/auth/hasher` | `createPinHasher({ pepper: Buffer \| string }): PinHasher` con `hash(pin): Promise<string>` y `verify(hash, pin): Promise<boolean>` (argon2id + *pepper*) |
 | `@mi-app/api/commands` | `createInitialManager(deps: CommandDeps, input: { name: string; pin: string }): Promise<'created' \| 'skipped'>` (si el PIN no cumple las reglas de encargado rechaza con `InvalidPinError`, cuyo `rule` es el `PinRule` y cuyo mensaje no contiene el PIN; nombre de 1–30 caracteres tras recortar; `'skipped'` si existe cualquier encargado, activo o no) y `unlockUser(deps: Pick<CommandDeps, 'clock' \| 'database' \| 'logDestination'>, name: string): Promise<'unlocked' \| 'not_found'>` (acepta el `CommandDeps` completo; audita `user.unlocked` con actor `system` aunque no estuviera bloqueado). `CommandDeps = { clock, database, pinHasher, logDestination? }`. Los scripts `create-initial-manager` y `unlock-user` de la imagen son envoltorios: salen con `0` (`created`/`skipped`/`unlocked`), `2` (`not_found`) y `1` (error; stderr sin el PIN) |
-| `@mi-app/api/config` | `parseSettings(env: Record<string, string \| undefined>)` pura (variables no secretas de `docs/arquitectura.md` §10.1; lanza con el **nombre** de la variable, nunca su valor) y `loadConfig()`. La forma del objeto devuelto no está fijada (T-38): `tests/support/config.ts` la normaliza a los nombres de `AppDeps` (`host`, `port`, `metricsPort`, `tableCount`, `delayThresholdMinutes` o `installation.*`, `sessionMaxHours`, `publicOrigin`, `trustedProxies: string[]`, `logLevel`) |
-| `@mi-app/web/pin-messages` (propuesta, T-42) | `pinRuleMessage(rule: string): string`: texto de `docs/ux/wireframes/01-login.md` "Reglas de PIN" para cada `PinRule` y "Ese PIN no es válido: elige otro" para una regla desconocida |
+| `@mi-app/api/commands/cli` | `runCommand(name: 'create-initial-manager' \| 'unlock-user', argv, io: { env, stderr, clock?, logDestination? }): Promise<0 \| 1 \| 2>` (nunca lanza; lee la configuración con `loadConfig(io.env)`; T-41) |
+| `@mi-app/api/config` | `parseSettings(env): Settings` pura, `loadConfig(env?): Config` y `ConfigError` (`variable: string`). Forma fijada en `docs/arquitectura.md` §10.1 (2.1i, T-38): `Settings = { host, port, metricsPort, logLevel, publicOrigin, trustedProxies, installation: { tableCount, delayThresholdMinutes }, sessionMaxHours, database: { host, port, database, user } }`; `Config` añade `database.password`, `pinPepper?` e `initialManager?`. `TRUSTED_PROXIES` con las reglas de SEC-029 |
+| `@mi-app/web/pin-messages` (T-42) | `pinRuleMessage(rule: string): string`: texto de `docs/ux/wireframes/01-login.md` "Reglas de PIN" para cada `PinRule` y "Ese PIN no es válido: elige otro" para una regla desconocida |
 
 - `Role = 'waiter' | 'kitchen' | 'manager'`.
 - `PinRule = 'digits_only' | 'length' | 'manager_length' | 'all_same' |
@@ -99,6 +100,7 @@ interface AppDeps {
   trustedProxies: string[];               // IP o CIDR de proxy; solo de ellas se acepta X-Forwarded-For (RS-06)
   installation: { tableCount: number; delayThresholdMinutes: number };
   sessionMaxHours?: number;               // entero 1–12, por defecto 12 (§10.1, T-36)
+  kitchenActivityIntervalMs?: number;     // temporizador del hub para la barra, entero 10–60000, por defecto 60000 (T-43)
   logDestination?: NodeJS.WritableStream; // destino de pino (por defecto stdout), misma configuración de redacción
   logLevel?: string;
   onRoute?: (route: { method: string | string[]; url: string; config?: unknown }) => void; // primer hook onRoute
@@ -109,7 +111,9 @@ interface AppDeps {
   `inject()` con `remoteAddress` y, para SSE, `listen({ port: 0, host: '127.0.0.1' })`).
 - Valida sus dependencias con la misma validación que `parseSettings`: fuera
   de rango (p. ej. `sessionMaxHours` 0, 13 o 1.5) **rechaza** la promesa, antes
-  de abrir el pool.
+  de abrir el pool. `trustedProxies` (reglas de SEC-029, p. ej. `['uniquelocal']`
+  no) y `kitchenActivityIntervalMs` fuera de 10–60000 rechazan con
+  `ConfigError` cuya `variable` es el nombre del campo.
 - Decorador `metricsText(): Promise<string>`: texto Prometheus de un
   `Registry` **propio de la instancia** (dos instancias en el mismo proceso no
   se mezclan ni fallan). Los contadores de `docs/logging.md` §6.3 existen a 0
@@ -124,8 +128,12 @@ interface AppDeps {
 - Hasher: `verifyPin` es la única que llama a `verify`; `hashNewPin(pin, role)`
   valida con `validatePin` **antes** de llamar a `hash` (los tests cuentan las
   llamadas con un hasher espía).
-- Contadores por IP y por sesión, y el temporizador de 60 s del hub SSE, **en
-  memoria de la instancia** (se detienen en `onClose`).
+- Contadores por IP y por sesión, y el temporizador del hub SSE
+  (`kitchenActivityIntervalMs`), **en memoria de la instancia** (se detienen en
+  `onClose`). El hub escribe con la hora del `Clock` y solo en sesiones de
+  barra no revocadas ni caducadas cuyo usuario sigue siendo barra.
+- Todo *pool* creado desde `DatabaseDeps` fija `search_path=public` en la
+  conexión (el test hace `ALTER DATABASE … SET search_path = trampa` en el clon).
 
 ### 3. Formato de errores (`docs/arquitectura.md` §5)
 
@@ -147,7 +155,11 @@ interface AppDeps {
   de una sesión que existió: `details.reason` ∈ `idle`, `absolute`, `revoked`
   y, con `revoked`, `details.revokedReason` ∈ `logout`, `user_disabled`,
   `pin_reset`, `pin_changed`, `account_locked_manual`. Sin cookie o con un
-  token desconocido, sin `details` (`esperar401()` en `tests/support/http.ts`).
+  token desconocido o mal formado, sin `details` y el mismo cuerpo salvo
+  `requestId` (`esperar401()` en `tests/support/http.ts`, que compara
+  `details` con `toEqual`). Si la petición traía `__Host-sid`, el `401` lleva
+  exactamente `Set-Cookie: __Host-sid=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Strict`
+  (también el `204` del logout); sin cookie, ningún `Set-Cookie`.
   El login fallido es `401 INVALID_CREDENTIALS` (§5.1).
 - `403 FORBIDDEN` (RBAC) sin `details`; `403 ORIGIN_NOT_ALLOWED` (`Origin`
   ausente o distinto de `publicOrigin` en `POST/PUT/PATCH/DELETE`); `415
@@ -163,6 +175,15 @@ interface AppDeps {
   al cerrarse el flujo SSE y cada 60 s. Caducidad absoluta:
   `now >= expires_at`, `expires_at = created_at + sessionMaxHours`.
 - `session.revoked` lleva `reason` con los mismos valores que `revokedReason`.
+- `X-Activity: passive` (valor exacto, SEC-030): todas las comprobaciones de
+  sesión, sin escribir `last_activity_at`, en cualquier ruta (también
+  `POST /session/activity`). Otro valor = activa.
+- `404 NOT_FOUND` (RS-18, T-40, SEC-031): toda ruta o método no declarado bajo
+  `/api/` (también barra final y `OPTIONS`, con cualquier cuerpo), igual para
+  todos, sin `details`, sin `Set-Cookie`, sin BD y sin renovar la actividad.
+  Fuera de `/api/`, un método que no es `GET`/`HEAD` → `404`, no `index.html`.
+- `POST /auth/pin` sin PIN provisional → `403 FORBIDDEN` antes del cuerpo
+  (T-39), con cualquier cuerpo o sin él.
 
 ### 4. Base de datos (`docs/arquitectura.md` §4.1)
 
@@ -230,7 +251,8 @@ Reglas de la pila TESTING que afectan a los tests (`docs/infraestructura.md` §6
 | Selectores de P-01 y barra superior, textos de UX, banners, "Acceso denegado" | `tests/support/e2e/pantallas.ts` |
 | Rutas de la SPA | `tests/support/e2e/pantallas.ts` |
 | Textos de las reglas de PIN | `tests/support/textos.ts` |
-| Forma del objeto de `parseSettings` | `tests/support/config.ts` |
+| Ayudas de `@mi-app/api/config` (`ConfigError`) | `tests/support/config.ts` |
+| Servicio y forma de invocar los comandos en la imagen (T-41) | `tests/containers/tx-cmd-01.sh` (`TX_CMD_SERVICE`, `TX_CMD_PREFIJO`) |
 | BD por fichero, clon de la plantilla | `tests/support/bd-fichero.ts`, `tests/support/bd-admin.ts` |
 
 ## Historias en alcance

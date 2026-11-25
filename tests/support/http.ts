@@ -1,6 +1,7 @@
 // Peticiones a la app en proceso (inject) y lectura del formato de errores
 // (docs/arquitectura.md §5; contrato en tests/README.md §3).
 import { createHash } from 'node:crypto';
+import { expect } from 'vitest';
 import { ORIGEN, type Ctx } from './app.ts';
 
 export const API = '/api/v1';
@@ -12,6 +13,8 @@ export interface Resp {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   body: any;
   raw: string;
+  /** La petición llevaba la cookie __Host-sid (decide si un 401 debe borrarla, docs/arquitectura.md §5). */
+  conCookie: boolean;
 }
 
 export interface Peticion {
@@ -23,6 +26,13 @@ export interface Peticion {
   cabeceras?: Record<string, string>;
   /** No enviar Origin (para RS-24). */
   sinOrigen?: boolean;
+  /**
+   * Petición pasiva (SEC-030, docs/arquitectura.md §7): añade
+   * `X-Activity: passive`, como hace el cliente en /auth/me y en los snapshots.
+   */
+  pasiva?: boolean;
+  /** Ruta tal cual, sin el prefijo /api/v1 (rutas de la SPA, RS-18 / SEC-031). */
+  sinPrefijo?: boolean;
 }
 
 export const IP_A = '10.0.0.11';
@@ -42,6 +52,7 @@ export async function pedir(ctx: Ctx, p: Peticion): Promise<Resp> {
   const cabeceras: Record<string, string> = { ...(p.cabeceras ?? {}) };
   if (!p.sinOrigen && metodo !== 'GET' && metodo !== 'HEAD') cabeceras.origin ??= ORIGEN;
   if (p.cookie) cabeceras.cookie = p.cookie;
+  if (p.pasiva) cabeceras['x-activity'] = 'passive';
   let payload: string | undefined;
   if (p.cuerpo !== undefined) {
     payload = typeof p.cuerpo === 'string' ? p.cuerpo : JSON.stringify(p.cuerpo);
@@ -49,7 +60,7 @@ export async function pedir(ctx: Ctx, p: Peticion): Promise<Resp> {
   }
   const r = await ctx.app.inject({
     method: metodo,
-    url: p.ruta.startsWith('/api/') || p.ruta.startsWith('/healthz') || p.ruta.startsWith('/readyz') ? p.ruta : API + p.ruta,
+    url: p.sinPrefijo || p.ruta.startsWith('/api/') || p.ruta.startsWith('/healthz') || p.ruta.startsWith('/readyz') ? p.ruta : API + p.ruta,
     headers: cabeceras,
     payload,
     remoteAddress: p.ip ?? IP_A,
@@ -60,7 +71,7 @@ export async function pedir(ctx: Ctx, p: Peticion): Promise<Resp> {
   } catch {
     body = undefined;
   }
-  return { status: r.statusCode, headers: r.headers, body, raw: r.body };
+  return { status: r.statusCode, headers: r.headers, body, raw: r.body, conCookie: /(?:^|;\s*)__Host-sid=/.test(p.cookie ?? '') };
 }
 
 export function setCookies(r: Resp): string[] {
@@ -132,19 +143,39 @@ export type Motivo401 =
   | { reason: 'revoked'; revokedReason: 'logout' | 'user_disabled' | 'pin_reset' | 'pin_changed' | 'account_locked_manual' };
 
 /**
- * Comprueba un 401 UNAUTHENTICATED y su `details`: con motivo si la cookie es
- * de una sesión que existió; sin `details` si no hay cookie o el token es
- * desconocido (`motivo` = null).
+ * Set-Cookie de borrado de la sesión (docs/arquitectura.md §5, 2.1i): igual,
+ * byte a byte, en todo 401 UNAUTHENTICATED de una petición con cookie y en el
+ * 204 del logout.
+ */
+export const COOKIE_BORRADA = '__Host-sid=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Strict';
+
+/** La respuesta lleva exactamente un Set-Cookie, el de borrado. */
+export function esperarCookieBorrada(r: Resp): void {
+  expect(setCookies(r), 'Set-Cookie de borrado de __Host-sid').toEqual([COOKIE_BORRADA]);
+}
+
+/** La respuesta no lleva ningún Set-Cookie. */
+export function esperarSinSetCookie(r: Resp): void {
+  expect(setCookies(r), 'sin Set-Cookie').toEqual([]);
+}
+
+/**
+ * Comprueba un 401 UNAUTHENTICATED y su `details`, comparado exacto con
+ * toEqual: con motivo si la cookie es de una sesión que existió; sin
+ * `details` si no hay cookie, el token es desconocido o la cookie está mal
+ * formada (`motivo` = null). Además, el Set-Cookie (§5, 2.1i): si la petición
+ * llevaba cookie, exactamente el de borrado; si no, ninguno.
  */
 export function esperar401(r: Resp, motivo: Motivo401 | null): void {
-  if (r.status !== 401 || codigo(r) !== 'UNAUTHENTICATED') {
-    throw new Error(`se esperaba 401 UNAUTHENTICATED, llegó ${r.status} ${codigo(r) ?? ''}: ${r.raw.slice(0, 200)}`);
+  expect([r.status, codigo(r)], `401 UNAUTHENTICATED; llegó: ${r.raw.slice(0, 200)}`).toEqual([401, 'UNAUTHENTICATED']);
+  const error = r.body.error as Record<string, unknown>;
+  if (motivo === null) {
+    expect('details' in error, `401 sin details; llegó ${JSON.stringify(error.details)}`).toBe(false);
+  } else {
+    expect(error.details, 'details del 401').toEqual(motivo);
   }
-  const d = detalles(r);
-  const esperado = motivo === null ? undefined : motivo;
-  if (JSON.stringify(d) !== JSON.stringify(esperado)) {
-    throw new Error(`details del 401: esperado ${JSON.stringify(esperado)}, recibido ${JSON.stringify(d)}`);
-  }
+  if (r.conCookie) esperarCookieBorrada(r);
+  else esperarSinSetCookie(r);
 }
 
 export async function iniciarSesion(

@@ -9,7 +9,10 @@
 #
 # Variables (imágenes SIEMPRE por digest, repo@sha256:...):
 #   APP_IMAGE         imagen de la app (deploy/app/Containerfile) — obligatoria
-#                     para integration, security, e2e, a11y, visual, perf, containers
+#                     para integration, security, e2e, a11y, visual, perf, containers.
+#                     Se obtiene con `sh deploy/app/construir.sh`, que imprime
+#                     APP_IMAGE=localhost/mi-app@sha256:<digest>; después
+#                     `APP_IMAGE=… sh tests/run.sh <suite>`
 #   TESTS_NODE_IMAGE  ejecutor Vitest; por defecto, la imagen de herramientas de
 #                     DEV (localhost/mi-app-dev-tools) resuelta a su digest
 #   PLAYWRIGHT_IMAGE  mcr.microsoft.com/playwright@sha256:... (misma versión que el lockfile)
@@ -162,6 +165,48 @@ generar_secreto() {
 for s in db_superuser_password db_owner_password db_app_password db_backup_password pin_pepper db_test_admin_password; do
   generar_secreto "$s"
 done
+# Encargado inicial de esta ejecución (T-41, humo TX-CMD-01 de la suite
+# containers; docs/infraestructura.md §9.2). PIN de 6 dígitos que cumple las
+# reglas de encargado: copia de pin_ok/random_pin de
+# deploy/dev/generar-secretos.sh (no se ejecuta ni se carga ese fichero).
+# Ficheros 0600 y nunca se imprimen.
+pin_ok() {
+  printf '%s\n' "$1" | awk '
+    BEGIN { split("112233 147258 159753 696969 123321 654456 101010 202020 520520 789456 147369 258369 159357 000000", b, " "); for (i in b) bad[b[i]] = 1 }
+    {
+      p = $0
+      if (length(p) != 6 || p !~ /^[0-9]+$/ || (p in bad)) { exit 1 }
+      for (i = 1; i <= 6; i++) d[i] = substr(p, i, 1) + 0
+      up = 1; dn = 1
+      for (i = 2; i <= 6; i++) {
+        up = (d[i] == d[i-1] + 1) ? up + 1 : 1
+        dn = (d[i] == d[i-1] - 1) ? dn + 1 : 1
+        if (up >= 4 || dn >= 4) exit 1
+      }
+      if (substr(p,1,2) == substr(p,3,2) && substr(p,3,2) == substr(p,5,2)) exit 1
+      if (substr(p,1,3) == substr(p,4,3)) exit 1
+      if (d[1] == d[2] && d[3] == d[4] && d[5] == d[6]) exit 1
+      n = 0; for (i = 1; i <= 6; i++) if (!(d[i] in seen)) { seen[d[i]] = 1; n++ }
+      if (n < 4) exit 1
+      exit 0
+    }'
+}
+random_pin() {
+  while :; do
+    pin=$(od -An -N8 -tu8 /dev/urandom | tr -d ' \n' | tail -c 6)
+    [ "${#pin}" -eq 6 ] || continue
+    if pin_ok "$pin"; then
+      printf '%s' "$pin"
+      return 0
+    fi
+  done
+}
+(
+  umask 077
+  random_pin > "$TEST_SECRETS_DIR/initial_manager_pin"
+  printf 'Encargado-%s' "$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')" > "$TEST_SECRETS_DIR/initial_manager_name"
+  chmod 0600 "$TEST_SECRETS_DIR/initial_manager_pin" "$TEST_SECRETS_DIR/initial_manager_name"
+)
 
 # --- Imágenes ---------------------------------------------------------------
 NO_USADA="localhost/mi-app-imagen-no-usada@sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -203,7 +248,7 @@ export APP_IMAGE TESTS_NODE_IMAGE PLAYWRIGHT_IMAGE K6_IMAGE TOXIPROXY_IMAGE ZAP_
 export TEST_RESULTS_DIR=./tests/results
 
 PC="podman-compose -f compose.test.yaml -p $PROYECTO"
-TODOS_PERFILES="--profile unit --profile integration --profile e2e --profile perf --profile security --profile setup"
+TODOS_PERFILES="--profile unit --profile integration --profile e2e --profile perf --profile security --profile setup --profile commands"
 
 limpiar() {
   rc_limpiar=$?
@@ -318,6 +363,10 @@ case "$SUITE" in
         sh tests/containers/tx-cont-01.sh "$PROYECTO" proxy | tee "$RESULTADOS/tx-cont-01.txt" || RC=1
         # tee oculta el código de salida del script: se vuelve a mirar el resultado.
         grep -q '^\[TX-CONT-01\] PASA' "$RESULTADOS/tx-cont-01.txt" || RC=1
+        # T-41: humo de los comandos con la imagen real (servicio `commands`,
+        # docs/infraestructura.md §9.2), después de migrate (BD sin encargados).
+        sh tests/containers/tx-cmd-01.sh "$PROYECTO" | tee "$RESULTADOS/tx-cmd-01.txt" || RC=1
+        grep -Eq '^\[TX-CMD-01\] (PASA|SKIP)' "$RESULTADOS/tx-cmd-01.txt" || RC=1
         ;;
     esac
     ;;

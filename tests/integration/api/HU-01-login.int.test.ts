@@ -1,6 +1,8 @@
 // HU-01: inicio de sesión, destino por rol, mensajes, desactivado, cierre de
 // sesión, cookie y almacenamiento del PIN. buildApp + FakeClock + BD real.
 // Contrato: tests/README.md. Estrategia: docs/testing.md §5.2, §5.7.
+import { randomBytes } from 'node:crypto';
+import pg from 'pg';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { montarApp, type Ctx } from '../../support/app.ts';
 import {
@@ -8,6 +10,8 @@ import {
   cookieSesion,
   errorSinId,
   esperar401,
+  esperarCookieBorrada,
+  esperarSinSetCookie,
   incidencias,
   iniciarSesion,
   ipUnica,
@@ -170,7 +174,9 @@ describe('Cierre de sesión', () => {
     const u = await crearUsuario(ctx, { rol: 'waiter' });
     const cookie = await sesion(ctx, u.nombre, u.pin);
     const out = await pedir(ctx, { metodo: 'POST', ruta: '/auth/logout', cookie });
-    expect([200, 204]).toContain(out.status);
+    expect(out.status).toBe(204);
+    // El logout también borra la cookie, con el mismo Set-Cookie que el 401 (2.1i).
+    esperarCookieBorrada(out);
     const me = await pedir(ctx, { ruta: '/auth/me', cookie });
     esperar401(me, { reason: 'revoked', revokedReason: 'logout' });
     const [s] = await sesionesDe(ctx.bd, u.id);
@@ -190,6 +196,86 @@ describe('Cierre de sesión', () => {
     esperar401(await pedir(ctx, { ruta: '/auth/me' }), null);
     esperar401(await pedir(ctx, { metodo: 'POST', ruta: '/auth/logout' }), null);
     esperar401(await pedir(ctx, { ruta: '/auth/me', cookie: '__Host-sid=' + 'B'.repeat(43) }), null);
+  });
+});
+
+// docs/arquitectura.md §5 (2.1i, recomendaciones de la 2.1f): todo 401 de una
+// petición con __Host-sid la borra con un Set-Cookie idéntico; sin cookie,
+// ninguno. Sin cookie, con token desconocido o mal formado: mismo cuerpo salvo
+// requestId. esperar401() comprueba el Set-Cookie en cada uso.
+describe('Borrado de la cookie y cuerpo del 401 (2.1i)', () => {
+  const MAL_FORMADAS = ['__Host-sid=', '__Host-sid=corto', '__Host-sid=%%%%', '__Host-sid=' + 'A'.repeat(600), '__Host-sid=' + 'A'.repeat(42) + '!'];
+
+  test('[HU-01/CA-F08] sin cookie: 401 sin details y sin Set-Cookie (tampoco con otra cookie que no es la de sesión)', async () => {
+    const r = await pedir(ctx, { ruta: '/auth/me' });
+    esperar401(r, null);
+    esperarSinSetCookie(r);
+    const otra = await pedir(ctx, { ruta: '/auth/me', cookie: 'preferencia=1' });
+    esperar401(otra, null);
+    esperarSinSetCookie(otra);
+  });
+
+  test('[HU-01/CA-F08] cookie desconocida o mal formada: 401 sin details y Set-Cookie de borrado exacto', async () => {
+    for (const cookie of ['__Host-sid=' + 'A'.repeat(43), ...MAL_FORMADAS]) {
+      const r = await pedir(ctx, { ruta: '/auth/me', cookie });
+      esperar401(r, null);
+      expect(setCookies(r), cookie.slice(0, 30)).toEqual(['__Host-sid=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Strict']);
+    }
+  });
+
+  test('[HU-01/CA-F08] cookie revocada (logout): 401 revoked/logout con el mismo Set-Cookie de borrado', async () => {
+    const u = await crearUsuario(ctx, { rol: 'kitchen' });
+    const cookie = await sesion(ctx, u.nombre, u.pin);
+    await pedir(ctx, { metodo: 'POST', ruta: '/auth/logout', cookie });
+    const r = await pedir(ctx, { ruta: '/auth/me', cookie });
+    esperar401(r, { reason: 'revoked', revokedReason: 'logout' });
+    esperarCookieBorrada(r);
+  });
+
+  test('[HU-01/CA-F08][RS-07] sin cookie, con token desconocido y con cookie mal formada: el mismo cuerpo salvo requestId', async () => {
+    const sin = await pedir(ctx, { ruta: '/auth/me' });
+    const desconocida = await pedir(ctx, { ruta: '/auth/me', cookie: '__Host-sid=' + 'C'.repeat(43) });
+    const cuerpos = [desconocida, ...(await Promise.all(MAL_FORMADAS.map((cookie) => pedir(ctx, { ruta: '/auth/me', cookie }))))];
+    for (const r of cuerpos) expect(errorSinId(r)).toEqual(errorSinId(sin));
+    // requestId propio de cada respuesta, igual a su cabecera X-Request-Id.
+    for (const r of [sin, ...cuerpos]) expect(r.body.error.requestId).toBe(r.headers['x-request-id']);
+    // También en una ruta que modifica (con Origin correcto).
+    const logoutSin = await pedir(ctx, { metodo: 'POST', ruta: '/auth/logout' });
+    const logoutMal = await pedir(ctx, { metodo: 'POST', ruta: '/auth/logout', cookie: MAL_FORMADAS[1] });
+    expect(errorSinId(logoutMal)).toEqual(errorSinId(logoutSin));
+    esperarSinSetCookie(logoutSin);
+    esperarCookieBorrada(logoutMal);
+  });
+});
+
+// docs/seguridad.md §6.6 (2.1k), condición de UnauthenticatedDetails: con
+// cookie, siempre SHA-256 y una consulta por token_hash; nada de trabajo extra
+// antes de responder para el token que existió.
+describe('Tiempo del 401: token revocado frente a inventado', () => {
+  test('[HU-01/CA-F08][RS-07] diferencia de medianas < 5 ms en 100 peticiones a /auth/me', async () => {
+    const u = await crearUsuario(ctx, { rol: 'waiter' });
+    const revocada = await sesion(ctx, u.nombre, u.pin);
+    await pedir(ctx, { metodo: 'POST', ruta: '/auth/logout', cookie: revocada });
+    const mediana = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+    const tRevocada: number[] = [];
+    const tInventada: number[] = [];
+    // Calentamiento (JIT, pool): no se mide.
+    for (let i = 0; i < 10; i++) {
+      await pedir(ctx, { ruta: '/auth/me', cookie: revocada });
+      await pedir(ctx, { ruta: '/auth/me', cookie: '__Host-sid=' + randomBytes(32).toString('base64url') });
+    }
+    for (let i = 0; i < 100; i++) {
+      // Un token inventado distinto cada vez, con la misma forma que uno real.
+      const inventada = '__Host-sid=' + randomBytes(32).toString('base64url');
+      let t = performance.now();
+      const a = await pedir(ctx, { ruta: '/auth/me', cookie: revocada });
+      tRevocada.push(performance.now() - t);
+      t = performance.now();
+      const b = await pedir(ctx, { ruta: '/auth/me', cookie: inventada });
+      tInventada.push(performance.now() - t);
+      expect([a.status, b.status]).toEqual([401, 401]);
+    }
+    expect(Math.abs(mediana(tRevocada) - mediana(tInventada))).toBeLessThan(5);
   });
 });
 
@@ -321,5 +407,30 @@ describe('Peticiones del login fuera de contrato', () => {
     expect([400, 401]).toContain(r.status);
     expect(r.raw).not.toContain(centinela);
     expect(ctx.logs.texto()).not.toContain(centinela);
+  });
+});
+
+// docs/arquitectura.md §2.1 (2.1i, recomendación de la 2.1f; docs/seguridad.md
+// §6.6): todo pool creado desde DatabaseDeps fija search_path=public en la
+// conexión, que prevalece sobre ALTER DATABASE … SET search_path.
+describe('search_path fijado en el pool de la app', () => {
+  test('[HU-01/CA-F01][HU-01/CA-F05] con ALTER DATABASE … SET search_path = trampa en el clon, el login y /auth/me siguen funcionando', async () => {
+    await ctx.cerrar();
+    ctx = await montarApp({ bdAislada: true, searchPathDeBd: 'trampa' });
+    // Comprobación de la prueba: una conexión sin la opción hereda la trampa.
+    const sinOpcion = new pg.Client({ ...ctx.configBd });
+    await sinOpcion.connect();
+    try {
+      expect((await sinOpcion.query<{ search_path: string }>('SHOW search_path')).rows[0].search_path).toBe('trampa');
+    } finally {
+      await sinOpcion.end();
+    }
+    const u = await crearUsuario(ctx, { rol: 'waiter' });
+    const { res, cookie } = await iniciarSesion(ctx, u.nombre, u.pin);
+    expect(res.status).toBe(200);
+    expect((await pedir(ctx, { ruta: '/auth/me', cookie })).status).toBe(200);
+    // Un fallo también se registra (escritura en users con la ruta fijada).
+    expect((await iniciarSesion(ctx, u.nombre, pinIncorrecto(u.pin))).res.status).toBe(401);
+    expect((await usuario(ctx.bd, u.id)).failed_attempts).toBe(1);
   });
 });

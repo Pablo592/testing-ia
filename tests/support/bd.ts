@@ -112,3 +112,22 @@ export async function huella(bd: pg.Pool): Promise<string> {
   }
   return partes.join(';');
 }
+
+/**
+ * Cambios hechos directamente en BD, sin pasar por la app (el hub no se
+ * entera y el flujo SSE sigue abierto). Sirven para probar las condiciones de
+ * la sentencia de escritura del hub (docs/arquitectura.md §7, 2.1i): no debe
+ * escribir en una sesión revocada o caducada ni en un usuario que ya no es
+ * barra, aunque su flujo siga en la lista del hub.
+ */
+export async function fabricarRevocada(bd: pg.Pool, sessionId: string, en: Date): Promise<void> {
+  await bd.query(`UPDATE sessions SET revoked_at = $2 WHERE id = $1`, [sessionId, en]);
+}
+
+export async function fabricarCaducidad(bd: pg.Pool, sessionId: string, expiraEn: Date): Promise<void> {
+  await bd.query(`UPDATE sessions SET expires_at = $2 WHERE id = $1`, [sessionId, expiraEn]);
+}
+
+export async function fabricarRol(bd: pg.Pool, userId: string, rol: string): Promise<void> {
+  await bd.query(`UPDATE users SET role = $2 WHERE id = $1`, [userId, rol]);
+}

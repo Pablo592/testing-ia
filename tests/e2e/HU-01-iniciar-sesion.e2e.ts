@@ -405,3 +405,77 @@ test.describe('Cierre automático', () => {
     await expect(new PantallaLogin(page).banner(TEXTOS.caducidadBanner)).toBeVisible();
   });
 });
+
+// SEC-032 (docs/seguridad.md, 2.1k): al primer 401 la app cierra el
+// EventSource y sus reconexiones, para los temporizadores y no envía nada por
+// sendBeacon ni fetch({ keepalive }), para que ninguna respuesta tardía de la
+// sesión vieja borre la cookie de un login nuevo (docs/arquitectura.md §5).
+test.describe('Primer 401: no queda ningún canal de la sesión vieja (SEC-032)', () => {
+  test('[HU-01/CA-F09][HU-01/CA-F08] tras el 401 idle: EventSource cerrado, sin sendBeacon ni keepalive y sin peticiones con sesión mientras se ve P-01', { tag: ['@HU-01', '@CA-F09'] }, async ({ page }) => {
+    await page.addInitScript(() => {
+      const w = window as unknown as Record<string, unknown>;
+      const fuentes: EventSource[] = [];
+      w.__fuentes = fuentes;
+      w.__beacons = 0;
+      w.__keepalive = 0;
+      const Original = window.EventSource;
+      window.EventSource = class extends Original {
+        constructor(url: string | URL, init?: EventSourceInit) {
+          super(url, init);
+          fuentes.push(this);
+        }
+      } as typeof EventSource;
+      const beacon = navigator.sendBeacon?.bind(navigator);
+      navigator.sendBeacon = (url: string | URL, datos?: BodyInit | null) => {
+        w.__beacons = (w.__beacons as number) + 1;
+        return beacon ? beacon(url, datos) : false;
+      };
+      const original = window.fetch.bind(window);
+      window.fetch = (entrada: RequestInfo | URL, opciones?: RequestInit) => {
+        if (opciones?.keepalive || (entrada instanceof Request && entrada.keepalive)) w.__keepalive = (w.__keepalive as number) + 1;
+        return original(entrada, opciones);
+      };
+    });
+    const u = await sembrarUsuario({ rol: 'waiter' });
+    await entrarComo(page, u);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __fuentes: EventSource[] }).__fuentes.length), { message: 'la layout abre /events' }).toBeGreaterThan(0);
+
+    // La sesión caduca en el servidor; la siguiente acción del usuario recibe el primer 401.
+    await fabricarInactividad(u.id, 16);
+    const primer401 = page.waitForResponse((r) => r.url().includes('/api/v1/') && r.status() === 401);
+    await new BarraSuperior(page).cerrarSesion().click();
+    await primer401;
+    await expect(page.getByRole('heading', { name: TEXTOS.quienEres })).toBeVisible();
+
+    // Desde aquí, ninguna petición con sesión (sí las públicas de P-01).
+    const conSesion: string[] = [];
+    page.on('request', (r) => {
+      const ruta = new URL(r.url()).pathname;
+      if (ruta.startsWith('/api/') && ruta !== '/api/v1/auth/login-options' && ruta !== '/api/v1/auth/login') conSesion.push(`${r.method()} ${ruta}`);
+    });
+    // Más que el vigilante de 5 s del SSE y que el latido de actividad.
+    await page.waitForTimeout(8000);
+    expect(conSesion).toEqual([]);
+    const estado = await page.evaluate(() => {
+      const w = window as unknown as { __fuentes: EventSource[]; __beacons: number; __keepalive: number };
+      return { abiertas: w.__fuentes.filter((f) => f.readyState !== EventSource.CLOSED).length, beacons: w.__beacons, keepalive: w.__keepalive };
+    });
+    expect(estado).toEqual({ abiertas: 0, beacons: 0, keepalive: 0 });
+  });
+});
+
+// RS-18 / SEC-031 por la pila real (Caddy + app): la SPA solo responde a GET.
+test.describe('Rutas de la SPA y métodos que no son GET (RS-18, SEC-031)', () => {
+  test('[HU-01/CA-F04] GET /pedidos → index.html; POST/PATCH /pedidos y /api/v1/settings → 404 sin index.html ni Set-Cookie', { tag: ['@HU-01', '@CA-F04'] }, async ({ request, baseURL }) => {
+    const spa = await request.get(RUTAS.pedidos);
+    expect(spa.status()).toBe(200);
+    expect(spa.headers()['content-type']).toMatch(/text\/html/);
+    const origin = new URL(baseURL!).origin;
+    for (const [metodo, ruta] of [['POST', RUTAS.pedidos], ['PATCH', RUTAS.cola], ['POST', '/no-existe'], ['PATCH', '/api/v1/settings']] as const) {
+      const r = await request.fetch(ruta, { method: metodo, headers: { origin, 'content-type': 'application/json' }, data: '{bad' });
+      expect(r.status(), `${metodo} ${ruta}`).toBe(404);
+      expect(r.headers()['content-type'] ?? '', `${metodo} ${ruta}`).not.toMatch(/text\/html/);
+      expect(r.headers()['set-cookie'], `${metodo} ${ruta}`).toBeUndefined();
+    }
+  });
+});

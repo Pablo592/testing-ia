@@ -7,13 +7,20 @@
 // now >= last_activity_at + 15 min, sin tolerancia; last_activity_at se
 // escribe en cada petición que cuenta. Caducidad absoluta: now >= expires_at,
 // expires_at = created_at + SESSION_MAX_HOURS (por defecto 12).
+// Peticiones pasivas (SEC-030, 2.1i): `X-Activity: passive` (valor exacto)
+// pasa por todas las comprobaciones pero no escribe last_activity_at; en
+// cualquier ruta, también POST /session/activity.
+// Escrituras del hub (2.1i, T-43): al cerrarse el flujo y con el temporizador
+// de kitchenActivityIntervalMs, solo para sesiones de barra no revocadas ni
+// caducadas, con la hora del Clock.
 import { buildApp } from '@mi-app/api/app';
+import { ConfigError } from '@mi-app/api/config';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { depsApp, montarApp, type Ctx } from '../../support/app.ts';
 import { enAlcance } from '../../support/alcance.ts';
-import { esperar401, pedir, sesion } from '../../support/http.ts';
-import { crearUsuario, type Rol } from '../../support/fixtures.ts';
-import { sesionesDe } from '../../support/bd.ts';
+import { esperar401, IP_B, iniciarSesion, pedir, sesion } from '../../support/http.ts';
+import { crearUsuario, pinIncorrecto, type Rol } from '../../support/fixtures.ts';
+import { fabricarBloqueo, fabricarCaducidad, fabricarRevocada, fabricarRol, sesionesDe } from '../../support/bd.ts';
 import { abrirSse, type ClienteSse } from '../../support/sse.ts';
 
 let ctx: Ctx;
@@ -29,11 +36,16 @@ afterEach(async () => {
   await ctx?.cerrar();
 });
 
-async function entrar(rol: Rol): Promise<{ id: string; cookie: string }> {
+async function entrar(rol: Rol): Promise<{ id: string; cookie: string; nombre: string; pin: string }> {
   const u = await crearUsuario(ctx, { rol });
-  return { id: u.id, cookie: await sesion(ctx, u.nombre, u.pin) };
+  return { id: u.id, cookie: await sesion(ctx, u.nombre, u.pin), nombre: u.nombre, pin: u.pin };
 }
 const me = (cookie: string) => pedir(ctx, { ruta: '/auth/me', cookie });
+const mePasiva = (cookie: string) => pedir(ctx, { ruta: '/auth/me', cookie, pasiva: true });
+const dormir = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
+async function actividadDe(userId: string): Promise<number> {
+  return (await sesionesDe(ctx.bd, userId))[0].last_activity_at.getTime();
+}
 
 async function conCola(cookie: string): Promise<ClienteSse> {
   base ??= await ctx.escuchar();
@@ -86,7 +98,7 @@ describe('Cierre por inactividad de 15 min', () => {
     const { cookie } = await entrar('waiter');
     ctx.reloj.avanzar({ min: 10 });
     const r = await pedir(ctx, { metodo: 'POST', ruta: '/session/activity', cookie });
-    expect([200, 204]).toContain(r.status);
+    expect(r.status).toBe(204);
     ctx.reloj.avanzar({ min: 10 }); // 20 min desde el login, 10 desde la actividad
     expect((await me(cookie)).status).toBe(200);
   });
@@ -134,7 +146,8 @@ describe('Cierre por inactividad de 15 min', () => {
     esperar401(await me(cookie), { reason: 'idle' });
   });
 
-  // La escritura periódica cada 60 s (reinicio brusco de app) no se prueba aquí: T-43.
+  // La escritura periódica del hub (reinicio brusco de app) está en
+  // "Escrituras del hub" (T-43); el reinicio real, en la Etapa 3.
   test('[HU-01/CA-F09][RS-12] barra 30 min sin tocar nada con la cola abierta: tras un corte breve se reconecta y sigue dentro', async () => {
     const { cookie } = await entrar('kitchen');
     const sse = await conCola(cookie);
@@ -145,6 +158,138 @@ describe('Cierre por inactividad de 15 min', () => {
     const otra = await conCola(cookie); // reconexión: 200 y hello
     expect(otra.status).toBe(200);
     expect((await me(cookie)).status).toBe(200);
+  });
+});
+
+describe('Peticiones pasivas: X-Activity: passive (SEC-030)', () => {
+  test('[HU-01/CA-F09][RS-12] GET /auth/me pasivo a los 14 min → 200 sin renovar; a los 15 min de la última activa → 401 idle', async () => {
+    const { id, cookie } = await entrar('waiter');
+    const t0 = await actividadDe(id);
+    ctx.reloj.avanzar({ min: 14 });
+    const r = await mePasiva(cookie);
+    expect(r.status).toBe(200);
+    expect(await actividadDe(id), 'la pasiva no escribe last_activity_at').toBe(t0);
+    ctx.reloj.avanzar({ min: 1 });
+    // También la pasiva pasa por la comprobación de inactividad.
+    esperar401(await mePasiva(cookie), { reason: 'idle' });
+    esperar401(await me(cookie), { reason: 'idle' });
+  });
+
+  test('[HU-01/CA-F09][RS-12] control: la misma petición sin la cabecera renueva la sesión', async () => {
+    const { id, cookie } = await entrar('waiter');
+    ctx.reloj.avanzar({ min: 14 });
+    expect((await me(cookie)).status).toBe(200);
+    expect(await actividadDe(id)).toBe(ctx.reloj.now().getTime());
+    ctx.reloj.avanzar({ min: 1 });
+    expect((await me(cookie)).status).toBe(200);
+  });
+
+  test.each([['other'], ['Passive'], ['PASSIVE'], ['active'], ['passive, x'], ['passive;x']])(
+    '[HU-01/CA-F09][RS-12] X-Activity: %s no es el valor exacto → cuenta como actividad, sin error',
+    async (valor) => {
+      const { id, cookie } = await entrar('waiter');
+      ctx.reloj.avanzar({ min: 14 });
+      const r = await pedir(ctx, { ruta: '/auth/me', cookie, cabeceras: { 'x-activity': valor } });
+      expect(r.status).toBe(200);
+      expect(await actividadDe(id)).toBe(ctx.reloj.now().getTime());
+      ctx.reloj.avanzar({ min: 1 });
+      expect((await me(cookie)).status).toBe(200);
+    },
+  );
+
+  test('[HU-01/CA-F09][RS-12] POST /session/activity con X-Activity: passive no renueva (regla uniforme, sin lista de rutas)', async () => {
+    const { id, cookie } = await entrar('waiter');
+    const t0 = await actividadDe(id);
+    ctx.reloj.avanzar({ min: 10 });
+    const r = await pedir(ctx, { metodo: 'POST', ruta: '/session/activity', cookie, pasiva: true });
+    expect(r.status).toBe(204);
+    expect(await actividadDe(id)).toBe(t0);
+    ctx.reloj.avanzar({ min: 5 }); // 15 min desde el login, la última activa
+    esperar401(await me(cookie), { reason: 'idle' });
+  });
+});
+
+describe('Escrituras del hub para la barra (T-43, kitchenActivityIntervalMs corto)', () => {
+  const INTERVALO_MS = 20;
+  /** Varias vueltas del temporizador (tiempo real; el reloj de la app no avanza solo). */
+  const VARIAS_VUELTAS_MS = 15 * INTERVALO_MS;
+  beforeEach(async () => {
+    await ctx.cerrar();
+    ctx = await montarApp({ kitchenActivityIntervalMs: INTERVALO_MS });
+  });
+
+  test('[HU-01/CA-F09][RS-12] con la cola abierta, el temporizador escribe la hora del Clock (no la de la BD) en la sesión de barra', async () => {
+    const { id, cookie } = await entrar('kitchen');
+    await conCola(cookie);
+    ctx.reloj.avanzar({ min: 5 });
+    const t1 = ctx.reloj.now().getTime();
+    await expect.poll(() => actividadDe(id), { timeout: 2000, interval: 10 }).toBe(t1);
+    ctx.reloj.avanzar({ min: 3 });
+    const t2 = ctx.reloj.now().getTime();
+    await expect.poll(() => actividadDe(id), { timeout: 2000, interval: 10 }).toBe(t2);
+  });
+
+  test('[HU-01/CA-F09][RS-12] no escribe en una sesión de barra revocada aunque su flujo siga abierto', async () => {
+    const { id, cookie } = await entrar('kitchen');
+    await conCola(cookie);
+    const [s] = await sesionesDe(ctx.bd, id);
+    await dormir(VARIAS_VUELTAS_MS);
+    const antes = await actividadDe(id);
+    await fabricarRevocada(ctx.bd, s.id, ctx.reloj.now());
+    ctx.reloj.avanzar({ min: 5 });
+    await dormir(VARIAS_VUELTAS_MS);
+    expect(await actividadDe(id)).toBe(antes);
+  });
+
+  test('[HU-01/CA-F09][RS-12][HU-01/CA-N06] no escribe en una sesión de barra caducada (expires_at <= ahora)', async () => {
+    const { id, cookie } = await entrar('kitchen');
+    await conCola(cookie);
+    const [s] = await sesionesDe(ctx.bd, id);
+    await dormir(VARIAS_VUELTAS_MS);
+    const antes = await actividadDe(id);
+    await fabricarCaducidad(ctx.bd, s.id, new Date(ctx.reloj.now().getTime() + 60_000));
+    ctx.reloj.avanzar({ min: 2 });
+    await dormir(VARIAS_VUELTAS_MS);
+    expect(await actividadDe(id)).toBe(antes);
+  });
+
+  test('[HU-01/CA-F09][RS-12] no escribe en la sesión de un encargado con la cola abierta', async () => {
+    const { id, cookie } = await entrar('manager');
+    await conCola(cookie);
+    const antes = await actividadDe(id);
+    ctx.reloj.avanzar({ min: 5 });
+    await dormir(VARIAS_VUELTAS_MS);
+    expect(await actividadDe(id)).toBe(antes);
+  });
+
+  test('[HU-01/CA-F09][RS-12] no escribe en una sesión de barra cuyo usuario ya no es barra (users.role)', async () => {
+    const { id, cookie } = await entrar('kitchen');
+    await conCola(cookie);
+    await dormir(VARIAS_VUELTAS_MS);
+    const antes = await actividadDe(id);
+    await fabricarRol(ctx.bd, id, 'waiter');
+    ctx.reloj.avanzar({ min: 5 });
+    await dormir(VARIAS_VUELTAS_MS);
+    expect(await actividadDe(id)).toBe(antes);
+  });
+});
+
+describe('Cierre de un flujo de barra revocado (2.1i)', () => {
+  // Intervalo por defecto (60 s): el temporizador no llega a dispararse y
+  // cualquier escritura vendría del cierre del flujo.
+  test('[HU-01/CA-F09][HU-01/CA-F13] al revocarse la sesión (bloqueo indefinido) y cerrarse el flujo, el hub no escribe last_activity_at', async () => {
+    const { id, cookie, nombre, pin } = await entrar('kitchen');
+    const sse = await conCola(cookie);
+    const t0 = await actividadDe(id);
+    await fabricarBloqueo(ctx.bd, id, { fallos: 19 });
+    ctx.reloj.avanzar({ min: 5 });
+    // El 20.º fallo, desde otro dispositivo, revoca todas las sesiones y cierra el flujo.
+    expect((await iniciarSesion(ctx, nombre, pinIncorrecto(pin), IP_B)).res.status).toBe(401);
+    await sse.esperar('session.revoked', 2000);
+    await sse.esperarCierre(2000);
+    await dormir(300);
+    expect(await actividadDe(id)).toBe(t0);
+    esperar401(await me(cookie), { reason: 'revoked', revokedReason: 'account_locked_manual' });
   });
 });
 
@@ -229,4 +374,31 @@ describe('SESSION_MAX_HOURS en buildApp (AppDeps.sessionMaxHours)', () => {
       expect(error, `sessionMaxHours = ${horas} debería impedir el arranque`).toBeInstanceOf(Error);
     },
   );
+});
+
+describe('kitchenActivityIntervalMs en buildApp (T-43)', () => {
+  async function intentar(extra: Record<string, unknown>): Promise<unknown> {
+    let app: { close(): Promise<void> } | undefined;
+    let error: unknown;
+    try {
+      app = (await buildApp(depsApp(extra) as never)) as unknown as { close(): Promise<void> };
+    } catch (e) {
+      error = e;
+    }
+    await app?.close();
+    return error;
+  }
+
+  test.each([[0], [9], [60_001], [10.5], [-1]])(
+    '[HU-01/CA-F09] buildApp rechaza kitchenActivityIntervalMs = %s con ConfigError("kitchenActivityIntervalMs")',
+    async (ms) => {
+      const e = await intentar({ kitchenActivityIntervalMs: ms });
+      expect(e).toBeInstanceOf(ConfigError);
+      expect((e as ConfigError).variable).toBe('kitchenActivityIntervalMs');
+    },
+  );
+
+  test.each([[10], [60_000]])('[HU-01/CA-F09] buildApp acepta kitchenActivityIntervalMs = %s (límites del rango)', async (ms) => {
+    expect(await intentar({ kitchenActivityIntervalMs: ms })).toBeUndefined();
+  });
 });

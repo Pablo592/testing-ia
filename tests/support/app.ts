@@ -9,7 +9,7 @@ import { createPinHasher } from '@mi-app/api/auth/hasher';
 import { FakeClock } from './reloj.ts';
 import { CapturaLogs } from './logs.ts';
 import { bdApp, type ConfigBd, variable } from './entorno.ts';
-import { borrarBd, crearBdDesdePlantilla, nombreBdPrueba } from './bd-admin.ts';
+import { borrarBd, crearBdDesdePlantilla, fijarSearchPathDeBd, nombreBdPrueba } from './bd-admin.ts';
 
 export const ORIGEN = 'https://cafe.test';
 /** IP del proxy de confianza en las pruebas en proceso (trustedProxies). */
@@ -106,6 +106,18 @@ export interface OpcionesApp {
   /** AppDeps.sessionMaxHours (docs/arquitectura.md §2.1, §10.1). Sin valor: el por defecto (12). */
   sessionMaxHours?: number;
   /**
+   * AppDeps.kitchenActivityIntervalMs (docs/arquitectura.md §2.1, §7, T-43):
+   * periodo del temporizador del hub para la barra. Sin valor: el por
+   * defecto (60 000 ms), que en un test nunca llega a dispararse.
+   */
+  kitchenActivityIntervalMs?: number;
+  /**
+   * Solo con `bdAislada`: antes de crear la app, test_admin (dueño del clon)
+   * ejecuta `ALTER DATABASE … SET search_path = <valor>` (defensa de
+   * docs/arquitectura.md §2.1, 2.1i: el pool fija search_path=public).
+   */
+  searchPathDeBd?: string;
+  /**
    * Se llama con la instancia antes de `ready()`. Solo para RS-17: añadir una
    * ruta sin declaración y comprobar la denegación por defecto. Nada de esto
    * existe en la imagen.
@@ -139,6 +151,16 @@ export async function montarApp(op: OpcionesApp = {}): Promise<Ctx> {
     nombreBdAislada = nombreBdPrueba('a');
     await crearBdDesdePlantilla(nombreBdAislada);
     configBd = bdApp(nombreBdAislada);
+    if (op.searchPathDeBd !== undefined) {
+      try {
+        await fijarSearchPathDeBd(nombreBdAislada, op.searchPathDeBd);
+      } catch (e) {
+        await borrarBd(nombreBdAislada).catch(() => undefined);
+        throw e;
+      }
+    }
+  } else if (op.searchPathDeBd !== undefined) {
+    throw new Error('searchPathDeBd solo se admite con bdAislada (no se toca la BD del fichero)');
   }
 
   let app: AppFastify | undefined;
@@ -160,6 +182,7 @@ export async function montarApp(op: OpcionesApp = {}): Promise<Ctx> {
       trustedProxies: [IP_PROXY],
       installation: { tableCount: 20, delayThresholdMinutes: 10 },
       ...(op.sessionMaxHours === undefined ? {} : { sessionMaxHours: op.sessionMaxHours }),
+      ...(op.kitchenActivityIntervalMs === undefined ? {} : { kitchenActivityIntervalMs: op.kitchenActivityIntervalMs }),
       logDestination: logs.stream,
       logLevel: 'info',
       onRoute: (r: RutaRegistrada) => {
@@ -168,7 +191,9 @@ export async function montarApp(op: OpcionesApp = {}): Promise<Ctx> {
     })) as unknown as AppFastify;
     op.antesDeReady?.(app);
     await app.ready();
-    bd = new pg.Pool({ ...configBd, max: 2 });
+    // Los constructores de datos fijan también search_path=public en la
+    // conexión: así no dependen de un ALTER DATABASE … SET (searchPathDeBd).
+    bd = new pg.Pool({ ...configBd, max: 2, options: '-c search_path=public' });
   } catch (e) {
     await cerrar().catch(() => undefined);
     throw e;
