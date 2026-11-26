@@ -1,0 +1,558 @@
+{
+ "axe": {
+  "P01-paso1-m375": [],
+  "P01-paso2-m375": [],
+  "P01-paso1-t1280": [],
+  "P01-escribir": [],
+  "P01-paso2-t1280": [],
+  "P01-error": [],
+  "P01-temporal": [],
+  "P01-indefinido": [],
+  "P01-dispositivo": [],
+  "P01-desactivado": [],
+  "P01-red": [],
+  "P01-banner": [],
+  "P01-vacio": [],
+  "S-waiter-pedidos-m375": [],
+  "S-kitchen-cola-m375": [],
+  "S-manager-pedidos-m375": [],
+  "S-manager-menu-m375": [
+   {
+    "id": "target-size",
+    "impact": "serious",
+    "nodes": [
+     ".topbar-actions > button"
+    ],
+    "help": "All touch targets must be 24px large, or leave sufficient space"
+   }
+  ],
+  "S-denegado-waiter-m375": [],
+  "S-denegado-kitchen-m375": [],
+  "S-waiter-pedidos-t1280": [],
+  "S-kitchen-cola-t1280": [],
+  "S-manager-pedidos-t1280": [],
+  "S-manager-menu-t1280": [],
+  "S-denegado-waiter-t1280": [],
+  "S-denegado-kitchen-t1280": [],
+  "C-paso1-manager-m375": [],
+  "C-paso1-waiter-m375": [],
+  "C-paso1-manager-t1280": [],
+  "C-paso2-manager": [],
+  "C-paso1-waiter-t1280": [],
+  "C-paso2-waiter": [],
+  "C-p423": [],
+  "A-idle-aviso": [],
+  "A-caducidad-aviso": []
+ },
+ "notes": [
+  {
+   "k": "foco tras elegir usuario m375",
+   "v": "h1#saludo[Hola, Lucía (Camarero)]"
+  },
+  {
+   "k": "foco tras error credenciales m375",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras temporal m375",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras indefinido m375",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras dispositivo m375",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras desactivado m375",
+   "v": "input#pin[]"
+  },
+  {
+   "k": "foco tras red m375",
+   "v": "input#pin[]"
+  },
+  {
+   "k": "foco tras elegir usuario t768",
+   "v": "h1#saludo[Hola, Lucía (Camarero)]"
+  },
+  {
+   "k": "foco tras error credenciales t768",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras temporal t768",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras indefinido t768",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras dispositivo t768",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras desactivado t768",
+   "v": "input#pin[]"
+  },
+  {
+   "k": "foco tras red t768",
+   "v": "input#pin[]"
+  },
+  {
+   "k": "foco tras elegir usuario t1280",
+   "v": "h1#saludo[Hola, Lucía (Camarero)]"
+  },
+  {
+   "k": "foco tras error credenciales t1280",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras temporal t1280",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras indefinido t1280",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras dispositivo t1280",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras desactivado t1280",
+   "v": "input#pin[]"
+  },
+  {
+   "k": "foco tras red t1280",
+   "v": "input#pin[]"
+  },
+  {
+   "k": "foco tras elegir usuario w1440",
+   "v": "h1#saludo[Hola, Lucía (Camarero)]"
+  },
+  {
+   "k": "foco tras error credenciales w1440",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras temporal w1440",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras indefinido w1440",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras dispositivo w1440",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras desactivado w1440",
+   "v": "input#pin[]"
+  },
+  {
+   "k": "foco tras red w1440",
+   "v": "input#pin[]"
+  },
+  {
+   "k": "foco al cargar /pedidos waiter m375",
+   "v": "h1[Pedidos]"
+  },
+  {
+   "k": "foco al cargar /cola kitchen m375",
+   "v": "h1[Cola]"
+  },
+  {
+   "k": "foco al cargar /pedidos manager m375",
+   "v": "h1[Pedidos]"
+  },
+  {
+   "k": "foco tras navegar a Resumen m375",
+   "v": "h1[Resumen del día]"
+  },
+  {
+   "k": "foco en acceso denegado waiter m375",
+   "v": "h1[Acceso denegado]"
+  },
+  {
+   "k": "foco en acceso denegado kitchen m375",
+   "v": "h1[Acceso denegado]"
+  },
+  {
+   "k": "foco al cargar /pedidos waiter t768",
+   "v": "h1[Pedidos]"
+  },
+  {
+   "k": "foco al cargar /cola kitchen t768",
+   "v": "h1[Cola]"
+  },
+  {
+   "k": "foco al cargar /pedidos manager t768",
+   "v": "h1[Pedidos]"
+  },
+  {
+   "k": "foco tras navegar a Resumen t768",
+   "v": "h1[Resumen del día]"
+  },
+  {
+   "k": "foco en acceso denegado waiter t768",
+   "v": "h1[Acceso denegado]"
+  },
+  {
+   "k": "foco en acceso denegado kitchen t768",
+   "v": "h1[Acceso denegado]"
+  },
+  {
+   "k": "foco al cargar /pedidos waiter t1280",
+   "v": "h1[Pedidos]"
+  },
+  {
+   "k": "foco al cargar /cola kitchen t1280",
+   "v": "h1[Cola]"
+  },
+  {
+   "k": "foco al cargar /pedidos manager t1280",
+   "v": "h1[Pedidos]"
+  },
+  {
+   "k": "foco tras navegar a Resumen t1280",
+   "v": "h1[Resumen del día]"
+  },
+  {
+   "k": "foco en acceso denegado waiter t1280",
+   "v": "h1[Acceso denegado]"
+  },
+  {
+   "k": "foco en acceso denegado kitchen t1280",
+   "v": "h1[Acceso denegado]"
+  },
+  {
+   "k": "foco al cargar /pedidos waiter w1440",
+   "v": "h1[Pedidos]"
+  },
+  {
+   "k": "foco al cargar /cola kitchen w1440",
+   "v": "h1[Cola]"
+  },
+  {
+   "k": "foco al cargar /pedidos manager w1440",
+   "v": "h1[Pedidos]"
+  },
+  {
+   "k": "foco tras navegar a Resumen w1440",
+   "v": "h1[Resumen del día]"
+  },
+  {
+   "k": "foco en acceso denegado waiter w1440",
+   "v": "h1[Acceso denegado]"
+  },
+  {
+   "k": "foco en acceso denegado kitchen w1440",
+   "v": "h1[Acceso denegado]"
+  },
+  {
+   "k": "foco cambio pin manager m375",
+   "v": "h1[Cambia tu PIN]"
+  },
+  {
+   "k": "foco tras paso1→2 manager m375",
+   "v": "button[Siguiente]"
+  },
+  {
+   "k": "foco cambio pin waiter m375",
+   "v": "h1[Cambia tu PIN]"
+  },
+  {
+   "k": "foco tras paso1→2 waiter m375",
+   "v": "button[Siguiente]"
+  },
+  {
+   "k": "foco tras p403 m375",
+   "v": "input#pin-cambio[]"
+  },
+  {
+   "k": "foco tras p423 m375",
+   "v": "body[Cambia tu PINMarta · Encargado]"
+  },
+  {
+   "k": "foco tras p429 m375",
+   "v": "body[Cambia tu PINMarta · Encargado]"
+  },
+  {
+   "k": "foco tras p503 m375",
+   "v": "input#pin-cambio[]"
+  },
+  {
+   "k": "foco cambio pin manager t768",
+   "v": "h1[Cambia tu PIN]"
+  },
+  {
+   "k": "foco tras paso1→2 manager t768",
+   "v": "button[Siguiente]"
+  },
+  {
+   "k": "foco cambio pin manager t1280",
+   "v": "h1[Cambia tu PIN]"
+  },
+  {
+   "k": "foco tras paso1→2 manager t1280",
+   "v": "button[Siguiente]"
+  },
+  {
+   "k": "foco cambio pin waiter t1280",
+   "v": "h1[Cambia tu PIN]"
+  },
+  {
+   "k": "foco tras paso1→2 waiter t1280",
+   "v": "button[Siguiente]"
+  },
+  {
+   "k": "foco tras p403 t1280",
+   "v": "input#pin-cambio[]"
+  },
+  {
+   "k": "foco tras p423 t1280",
+   "v": "body[Cambia tu PINMarta · Encargado]"
+  },
+  {
+   "k": "foco tras p429 t1280",
+   "v": "body[Cambia tu PINMarta · Encargado]"
+  },
+  {
+   "k": "foco tras p503 t1280",
+   "v": "input#pin-cambio[]"
+  },
+  {
+   "k": "foco cambio pin manager w1440",
+   "v": "h1[Cambia tu PIN]"
+  },
+  {
+   "k": "foco tras paso1→2 manager w1440",
+   "v": "button[Siguiente]"
+  },
+  {
+   "k": "foco tras Seguir conectado t1280",
+   "v": "body[PedidosLucía · Camarero⎋ Cerra]"
+  },
+  {
+   "k": "foco tras cierre por inactividad t1280",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "foco tras Seguir conectado m375",
+   "v": "body[PedidosLucía · Camarero⎋ Cerra]"
+  },
+  {
+   "k": "foco tras cierre por inactividad m375",
+   "v": "body[Café · Toma de pedidosSin sesi]"
+  },
+  {
+   "k": "tab paso 1",
+   "v": [
+    "button[AMAna MaríaEncargado]",
+    "button[JAJaviBarra]",
+    "button[LULucíaCamarero]",
+    "button[MAMartaEncargado]",
+    "button[PEPedroCamarero]",
+    "button[Escribir mi usuario]",
+    "body[Café · Toma de pedidosSin sesi]",
+    "button[AMAna MaríaEncargado]",
+    "button[JAJaviBarra]"
+   ]
+  },
+  {
+   "k": "tab paso 2",
+   "v": [
+    "h1#saludo[Hola, Lucía (Camarero)]",
+    "input#pin[]",
+    "button[1]",
+    "button[2]",
+    "button[3]",
+    "button[4]",
+    "button[5]"
+   ]
+  },
+  {
+   "k": "valor tras teclear 12a3",
+   "v": "123"
+  },
+  {
+   "k": "foco tecla estilo",
+   "v": {
+    "outline": "3px solid rgb(37, 99, 235)",
+    "offset": "2px"
+   }
+  },
+  {
+   "k": "medidas paso 2 m375",
+   "v": {
+    "small": [],
+    "keys": [
+     "1:109x64",
+     "2:109x64",
+     "3:109x64",
+     "4:109x64",
+     "5:109x64",
+     "6:109x64",
+     "7:109x64",
+     "8:109x64",
+     "9:109x64",
+     "⌫ Borrar:109x64",
+     "0:109x64",
+     "Entrar:109x64"
+    ],
+    "scrollW": 375,
+    "clientW": 375,
+    "scrollH": 812,
+    "clientH": 812
+   }
+  },
+  {
+   "k": "medidas cambio pin m375",
+   "v": {
+    "scrollW": 375,
+    "clientW": 375,
+    "scrollH": 812,
+    "clientH": 812,
+    "kp": 613,
+    "action": [
+     613
+    ]
+   }
+  },
+  {
+   "k": "medidas paso 2 t768",
+   "v": {
+    "small": [],
+    "keys": [
+     "1:72x72",
+     "2:72x72",
+     "3:72x72",
+     "4:72x72",
+     "5:72x72",
+     "6:72x72",
+     "7:72x72",
+     "8:72x72",
+     "9:72x72",
+     "⌫ Borrar:72x72",
+     "0:72x72",
+     "Entrar:72x72"
+    ],
+    "scrollW": 768,
+    "clientW": 768,
+    "scrollH": 1024,
+    "clientH": 1024
+   }
+  },
+  {
+   "k": "medidas cambio pin t768",
+   "v": {
+    "scrollW": 768,
+    "clientW": 768,
+    "scrollH": 1024,
+    "clientH": 1024,
+    "kp": 621,
+    "action": [
+     621
+    ]
+   }
+  },
+  {
+   "k": "medidas paso 2 t1280",
+   "v": {
+    "small": [],
+    "keys": [
+     "1:72x72",
+     "2:72x72",
+     "3:72x72",
+     "4:72x72",
+     "5:72x72",
+     "6:72x72",
+     "7:72x72",
+     "8:72x72",
+     "9:72x72",
+     "⌫ Borrar:72x72",
+     "0:72x72",
+     "Entrar:72x72"
+    ],
+    "scrollW": 1280,
+    "clientW": 1280,
+    "scrollH": 800,
+    "clientH": 800
+   }
+  },
+  {
+   "k": "medidas cambio pin t1280",
+   "v": {
+    "scrollW": 1280,
+    "clientW": 1280,
+    "scrollH": 800,
+    "clientH": 800,
+    "kp": 621,
+    "action": [
+     621
+    ]
+   }
+  },
+  {
+   "k": "medidas paso 2 m320",
+   "v": {
+    "small": [],
+    "keys": [
+     "1:91x64",
+     "2:91x64",
+     "3:91x64",
+     "4:91x64",
+     "5:91x64",
+     "6:91x64",
+     "7:91x64",
+     "8:91x64",
+     "9:91x64",
+     "⌫ Borrar:91x64",
+     "0:91x64",
+     "Entrar:91x64"
+    ],
+    "scrollW": 320,
+    "clientW": 320,
+    "scrollH": 628,
+    "clientH": 568
+   }
+  },
+  {
+   "k": "medidas cambio pin m320",
+   "v": {
+    "scrollW": 320,
+    "clientW": 320,
+    "scrollH": 653,
+    "clientH": 568,
+    "kp": 637,
+    "action": [
+     637
+    ]
+   }
+  },
+  {
+   "k": "perf P-01 (local, sin red)",
+   "v": {
+    "perf": {
+     "dcl": 42,
+     "load": 42,
+     "paint": [
+      "first-paint:32",
+      "first-contentful-paint:52"
+     ]
+    },
+    "reqs": [
+     "200 / ",
+     "200 /assets/index-Cu20pbn7.css ",
+     "200 /assets/index-BGdMX5es.js ",
+     "401 /api/v1/auth/me ",
+     "200 /api/v1/auth/login-options "
+    ]
+   }
+  }
+ ]
+}
