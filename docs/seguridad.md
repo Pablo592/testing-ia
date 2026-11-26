@@ -2245,6 +2245,133 @@ hallazgo crítico ni alto abierto que bloquee la puerta de la Etapa 2 para
 HU-01.** Sí queda la condición de procedimiento del punto 4 (imágenes desde
 el commit final y con el árbol limpio).
 
+### 6.13 Revisión 2.8c (2026-11-26): SEC-047 y T-48 (commits `fe5c5d5` y `77063fc`)
+
+Alcance: el diff de `fe5c5d5` (`apps/api/src/http/routes/auth.ts`,
+`apps/api/src/modules/auth/verify-pin.ts`, `apps/web/src/session/store.ts`,
+`apps/web/src/realtime/events.ts`, pantallas de login y cambio de PIN,
+`PinField.tsx`, `app.css`) y los ajustes de tests de `77063fc`
+(`HU-01-caducidad-carrera`, `HU-01-errores.pin`, `HU-01-estados-carga`,
+`tests/README.md` §5).
+
+**Pruebas** (Podman rootless; sin modificar código ni tests del repositorio):
+(a) imagen `APP_IMAGE=localhost/mi-app@sha256:f1e3f15e515230bf33fe6ab63bbf43666564cef9bb91473395627b2ae7ce775d`
+(etiqueta `f41f1e054330-sucio`: se construyó con el árbol sucio antes del
+commit `fe5c5d5`); comprobado en `dist/main.js` y en el *bundle*
+`index-Xt4vf9PN.js` que lleva el código de `fe5c5d5` (`resolveKey`,
+`unknown:`, `sessionCheck`, etiquetas por paso, esqueleto); (b) `sh
+tests/run.sh security` e `integration` desde el repositorio; (c) prueba propia
+de integración (12 casos con `montarApp`, BD real de TESTING y *hasher* espía
+con `maxSimultaneas`) ejecutada **desde una copia del repositorio en el
+scratchpad** (sin `.git`, `.secrets`, `.claude` ni `docs/`), con `sh
+tests/run.sh integration integration/api/zz-sec28c`; copia borrada al
+terminar.
+
+**1. SEC-047: VERIFICADO.**
+- Revisión de código: la reserva de IP sigue siendo síncrona y anterior a
+  cualquier `await` (`ipLimiter.tryReserve`, `verify-pin.ts:222`); la clave
+  asíncrona se resuelve después, dentro del `try` (`:260`), así que un error
+  de la consulta (BD caída) pasa por el `finally` y libera la reserva. Las
+  peticiones rechazadas con `429` por IP no llegan a hacer la consulta
+  extra. La clave sale de una sola sentencia parametrizada (`SELECT lower($1),
+  (SELECT id FROM users WHERE lower(name) = lower($1) LIMIT 1)`), con la
+  misma expresión que el índice único: `user:<id>` o `unknown:` + el
+  `lower()` de PostgreSQL. Sin SQL dinámico (RS-35 pasa). `load()` relee la
+  fila en el turno (por `id`); la transacción con el `UPDATE` condicionado,
+  la creación de la sesión y el cambio de PIN dentro de ella y el semáforo
+  de 4 no cambian. `POST /auth/pin` usa `user:<s.userId>`: login y cambio de
+  PIN de la misma cuenta comparten carril.
+- Prueba propia (entre paréntesis, la 2.6 con la clave anterior): **V1** 32
+  logins (las 16 variantes `i`/`İ` dos veces) desde IP distintas → **5**
+  verificaciones (16), simultáneas **1**, `401`×5 y `423`×27, contador 5.
+  **V2** 16 variantes `i`/`İ` + `σ`/`Σ` → **5** verificaciones, simultáneas
+  1. **V3** contador 19, 15 logins erróneos con variantes y un `POST
+  /auth/pin` con el `currentPin` **correcto** lanzado antes → simultáneas 1,
+  el cambio `423 ACCOUNT_LOCKED_MANUAL`, `locked_manual`, contador 20, **el
+  PIN no cambia** y 0 sesiones abiertas. **V4** 8 logins con variantes + 8
+  `POST /auth/pin` erróneos a la vez → simultáneas **1**. **R** tres nombres
+  inexistentes iguales para PostgreSQL (`İ`/`i`/`I`) a la vez → `401` los
+  tres, sin errores.
+- SEC-038 sigue intacto con la consulta extra: **A** 300 logins desde una IP,
+  correcto el último → 5 verificaciones, `401`×5, `423`×5, `429`×290, el
+  correcto `429`, 0 sesiones. **A2** 3000 logins desde una IP (mitad a 20
+  cuentas existentes, mitad a nombres inexistentes) → **10** verificaciones y
+  2990 `429`. **B** 300 desde IP distintas con variantes, contador 19,
+  correcto el último → **1** verificación, `423`×299, el correcto `423`,
+  `locked_manual`, 0 sesiones. **C** 300 `currentPin` desde IP distintas,
+  contador 19 → 1 verificación, todas `423`, el PIN no cambia. **S** 40
+  logins a 40 cuentas desde 40 IP → simultáneas **4** (semáforo).
+- Enumeración: **E1** nombre inexistente, inexistente con `İ` y existente con
+  PIN erróneo → mismo `401 INVALID_CREDENTIALS`, mismo cuerpo salvo
+  `requestId` y mismas cabeceras. **E2** tiempo, secuencial y alternado, N =
+  40 por grupo: existente con PIN erróneo mediana 24,63 ms (p10 23,29, p90
+  26,59) frente a inexistente 23,51 ms (p10 22,53, p90 26,03). La consulta
+  nueva se hace igual en los dos caminos (una de resolución y una de `load()`
+  en ambos) y los dos carriles (`user:` y `unknown:`) se serializan igual,
+  así que SEC-047 no añade ninguna diferencia. La de ~1 ms ya existía: es el
+  `UPDATE` del contador, que solo se hace con una cuenta real. Además, los
+  nombres de los usuarios activos son públicos por diseño (`GET
+  /auth/login-options`, rejilla de P-01). **No hay hallazgo nuevo de
+  enumeración.**
+- Salvedad: **SEC-058 (baja, para HU-07)**. `load()` lee por el `id` resuelto
+  antes del turno y no vuelve a comprobar el nombre. No es explotable hasta
+  que existan el renombrado y el alta de usuarios.
+
+**2. T-48: sin impacto en la seguridad. Se acepta la inferencia del banner.**
+- `bannerFor401` solo elige el **texto**. Cualquier `401 UNAUTHENTICATED`
+  sigue llamando a `end()`, que cierra todos los canales (`abortAll`,
+  `events.stop`) antes de P-01, con el banner que sea. Con `details`, el
+  banner lo sigue decidiendo el servidor. La inferencia usa `expiresAt` del
+  servidor y el desfase fijado al iniciar la sesión: un reloj del cliente
+  manipulado solo cambia su propio banner, no la cookie ni el servidor. En el
+  peor caso, el texto dice "duración máxima" cuando el motivo real era una
+  revocación cuyo `details` se perdió y que coincidió con la caducidad
+  absoluta. Antes, en ese caso no salía ningún banner, así que no se oculta
+  nada que antes se mostrara.
+- Tiempo con una sesión revocada y la UI viva: el límite de un `/auth/me`
+  cada 30 s **solo** aplica a la rama "caducidad absoluta ya pasada" de
+  `sessionCheck`. Cuando la limita, devuelve `undefined` y el flujo se
+  **reabre en el acto**, sin esperar. Con el flujo abierto, `session.revoked`
+  llama a `end()` sin pasar por `sessionCheck` (al instante, como pide
+  `docs/arquitectura.md` §7). Con el flujo caído, el vigilante (5 s) o el
+  reintento (3 s) lo reabren, el `401` lanza `loadMe` y su `401` llama a
+  `end()`. El margen máximo no cambia respecto a la 2.6, y HU-07/CA-F03 (≤ 1
+  min) se cumple. El servidor resuelve la sesión en cada petición, así que una
+  acción del usuario con la sesión revocada recibe `401` y cierra.
+- `loadMe` deduplicado: una sola recarga pasiva a la vez (`X-Activity:
+  passive`, SEC-030 intacto). La repetición por `meRequestedAgain` la acotan
+  los eventos que la piden, y `epoch` impide que una reapertura aplazada de la
+  sesión anterior abra un flujo después de `stop()`/`start()` (SEC-032
+  intacto: `end()` sube `epoch` y `abortAll` aborta el `/auth/me` pendiente).
+- Riesgo residual, sin hallazgo: si un `GET /auth/me` se queda colgado (el
+  `fetch` no tiene tiempo límite), el flujo espera a que termine. La UI sigue
+  mostrando lo que ya tenía, sin datos nuevos. Cualquier acción del usuario es
+  una petición REST que el servidor rechaza, y el temporizador de inactividad
+  de 15 min del cliente sigue contando. No expone más que un corte de red.
+- Tests de la 2.8d: los dos casos de `HU-01-caducidad-carrera` simulan el
+  `401` sin `details` ni `Set-Cookie` y cubren las dos ramas.
+  `HU-01-errores.pin` CA-F12 (c) exige además que **ningún** campo de PIN
+  conserve valor (refuerza RS-29b). Correcto.
+
+**3. Resto del diff: sin regresiones ni vulnerabilidades nuevas.** Las
+etiquetas por paso, el esqueleto (`aria-hidden`, sin datos) y el `h1` con
+elipsis son texto y CSS. No hay sumideros nuevos (RS-25 en
+`estatico.sec.test.ts` pasa), ni dependencias nuevas, ni cambios en
+`deploy/`. **CSP sin relajar:** `deploy/proxy/Caddyfile:27` no cambia desde
+`7cc2f97`, sin `unsafe-*` en `deploy/` ni en `apps/`. El esqueleto usa clases
+de `app.css` (sin estilos en línea) y el degradado es CSS, permitido por
+`style-src 'self'`.
+
+**4. Resultados** (imagen de (a)): `security` **PASA**, 73 pasan y 241
+omitidos (2 ficheros); `integration` **PASA**, 282 pasan y 244 omitidos (16
+ficheros), incluidos los 4 de SEC-047; prueba propia **12/12**. La imagen
+`-sucio` vale para esta revisión, pero **no para la puerta** (condición de
+§6.12 punto 4: construir desde el commit final con el árbol limpio, en la
+2.11).
+
+**Altos o críticos en esta revisión:** ninguno nuevo. **SEC-047 VERIFICADO.**
+Nuevo SEC-058 (baja, HU-07).
+
 ## 7. Requisitos de seguridad verificables (para Testing)
 
 Formato: requisito → cómo se verifica. Tipos: **U** unitario, **I**
@@ -2259,7 +2386,7 @@ contra TESTING/DEMO), **S** estático (SAST/lint/CI), **C** contenedores/host.
 | RS-03 | Bloqueo progresivo 5/10/15/20 de §6.1.3; el contador no se reinicia al expirar el bloqueo; durante el bloqueo no se verifica el PIN | I con reloj inyectable: 25 intentos fallidos → tiempos 5, 15, 60 min y `423 ACCOUNT_LOCKED_MANUAL`; luego PIN correcto sigue rechazado |
 | RS-04 | `managerApproval` fallido suma al contador del encargado; cuenta bloqueada/desactivada/PIN provisional no aprueba; error genérico idéntico en todos los casos | I |
 | RS-05 | 10 fallos/10 min desde una IP, sumando login, `managerApproval`, `confirmPin` y `currentPin` → `429` 10 min en todas las rutas de PIN (y en `GET /auth/login-options`) antes de verificar el hash; 5 aprobaciones fallidas/10 min por sesión → `429` | I (medir que no se llama al hasher) |
-| RS-05b | [2.3, SEC-038] Los límites de RS-03, RS-05 y RS-16b se cumplen **también con peticiones simultáneas**: una IP nunca tiene más verificaciones en curso que los fallos que le quedan hasta el límite; una cuenta nunca supera el umbral del bloqueo siguiente por verificaciones simultáneas; un acierto con la cuenta ya bloqueada (`locked_until > now` o `locked_manual`) en el momento de anotarlo no crea sesión ni cambia el PIN | I: 50 logins simultáneos desde una IP con PIN erróneo → como mucho 10 llamadas al hasher y el resto `429`; 50 simultáneos a una cuenta desde IP distintas → como mucho 5 llamadas al hasher antes del `423`; ráfaga con el PIN correcto al final sobre una cuenta que llega a `locked_manual` → ese intento `423`, 0 sesiones abiertas; lo mismo con `currentPin` (el PIN no cambia); [2.6, SEC-047] 16 logins simultáneos a una cuenta con las variantes del nombre que PostgreSQL considera iguales (`i`/`İ` en un nombre con 4 `i`) desde IP distintas → como mucho 5 llamadas al hasher |
+| RS-05b | [2.3, SEC-038] Los límites de RS-03, RS-05 y RS-16b se cumplen **también con peticiones simultáneas**: una IP nunca tiene más verificaciones en curso que los fallos que le quedan hasta el límite; una cuenta nunca supera el umbral del bloqueo siguiente por verificaciones simultáneas; un acierto con la cuenta ya bloqueada (`locked_until > now` o `locked_manual`) en el momento de anotarlo no crea sesión ni cambia el PIN | I: 50 logins simultáneos desde una IP con PIN erróneo → como mucho 10 llamadas al hasher y el resto `429`; 50 simultáneos a una cuenta desde IP distintas → como mucho 5 llamadas al hasher antes del `423`; ráfaga con el PIN correcto al final sobre una cuenta que llega a `locked_manual` → ese intento `423`, 0 sesiones abiertas; lo mismo con `currentPin` (el PIN no cambia); [2.6, SEC-047] 16 logins simultáneos a una cuenta con las variantes del nombre que PostgreSQL considera iguales (`i`/`İ` en un nombre con 4 `i`) desde IP distintas → como mucho 5 llamadas al hasher; [2.8c] un login y un `POST /auth/pin` simultáneos de la misma cuenta nunca verifican a la vez; [2.8c, SEC-058, en HU-07] un login en cola cuyo nombre se renombra o se da de alta durante la espera no verifica contra otra cuenta ni fuera del carril de esa cuenta |
 | RS-06 | La IP del cliente que usa la app es la que añade Caddy; `X-Forwarded-For` enviado por el cliente se ignora; en TESTING/DEMO/PROD dos dispositivos distintos se ven con IP distinta | D (enviar XFF variable: el límite salta igual) + C (log con dos IP reales) |
 | RS-07 | Usuario inexistente: mismo código, cuerpo y tiempo que PIN erróneo (diferencia de medianas < 50 ms en 100 intentos) | I |
 | RS-08 | argon2id con `m ≥ 19456 KiB, t ≥ 2, p = 1`; *pepper* leído de fichero de secreto; máx. 4 verificaciones simultáneas | U (prefijo del hash) + I (carga: 50 logins simultáneos no superan el límite de memoria del contenedor) |
@@ -2885,7 +3012,7 @@ SEC-049), que Trivy no ve en `alpine3.23` (SEC-051).
 - Responsable: developer; testing (caso nuevo de RS-05b)
 - Cómo corregir: que la clave del cerrojo salga de la misma normalización que la búsqueda. Preferible: resolver el `id` antes del cerrojo con la misma condición (`SELECT id FROM users WHERE lower(name) = lower($1)`) y usar `user:<id>` como clave, y `user:<s.userId>` en `POST /auth/pin` (así login y cambio de PIN de la misma cuenta comparten carril); para un nombre que no existe, `unknown:` + el `lower()` calculado por PostgreSQL. `load()` sigue releyendo la fila en el turno. Alternativa: calcular la clave con `SELECT lower($1)` en PostgreSQL. No basta con `toLocaleLowerCase()` ni con normalizar a NFC en JS.
 - Cómo verificar: integración (RS-05b ampliado): usuario con 4 `i` en el nombre, 16 logins simultáneos con las variantes `i`/`İ` desde IP distintas → ≤ 5 verificaciones y contador ≤ 5; un login y un `POST /auth/pin` simultáneos de la misma cuenta nunca verifican a la vez (espía del *hasher*).
-- Estado: abierto (baja, no bloquea; corregir en el siguiente ciclo de HU-01 o, como tarde, antes de empezar HU-06)
+- Estado: **verificado (2.8c)**. Clave `user:<id>` resuelta con `lower(name) = lower($1)` de PostgreSQL (o `unknown:` + `lower()` de PostgreSQL) después de la reserva síncrona de IP; `POST /auth/pin` con `user:<s.userId>`. RS-05b ampliado (4 tests de `HU-01-concurrencia-nombres`) en verde y prueba propia de §6.13: 32 logins con las 16 variantes `i`/`İ` → 5 verificaciones, nunca 2 a la vez, contador 5; 16 variantes `i`/`İ` + `σ`/`Σ` → 5; login y `POST /auth/pin` simultáneos → nunca 2 verificaciones a la vez. SEC-038 intacto (A, A2, B, C y semáforo). Salvedad para HU-07: SEC-058 (baja).
 
 ## SEC-048: La imagen de la app tiene una vulnerabilidad alta con corrección en `libzstd1` (CVE-2026-124851)
 - Severidad: alta (por `docs/reglas-equipo.md` §3.3 y RS-39: alta con versión corregida, no admite excepción; riesgo real bajo)
@@ -2981,9 +3108,46 @@ SEC-049), que Trivy no ve en `alpine3.23` (SEC-051).
 - Cómo verificar: con un `latestMinor` simulado mayor que el instalado, el build rechaza; con el real, pasa.
 - Estado: abierto (baja)
 
+## SEC-058: En el login, `load()` lee la cuenta por el `id` resuelto antes del turno y no vuelve a comprobar el nombre
+- Severidad: baja
+- Ubicación: apps/api/src/http/routes/auth.ts:93-108 (`resolveKey` y `resolvedId`), :114-119 (`load()` con `where('id', '=', resolvedId)` o, si no se resolvió, por `lower(name)`)
+- Descripción: con SEC-047, el login resuelve el `id` con `lower(name) = lower($1)` **antes** de esperar su turno en el cerrojo, y después `load()` relee la fila **solo por `id`**. Entre la resolución y el turno (el intento puede esperar detrás de otras verificaciones del mismo carril y del semáforo de 4) el nombre puede cambiar. Hoy no es explotable: ninguna ruta cambia `users.name` ni da de alta usuarios por la API. Con HU-07 (`PATCH /staff/:id` cambia el nombre **sin** `confirmPin`; `POST /staff` crea usuarios, `docs/arquitectura.md` §5.1) aparecen dos casos: (a) un login con el nombre antiguo que ya resolvió el `id` antes del renombrado sigue verificando contra esa cuenta: con el PIN correcto entra con un nombre que ya no es suyo, y si el nombre antiguo se reutiliza en la ventana para otra cuenta, el intento cuenta en la cuenta antigua; (b) un nombre resuelto como `unknown:<lower>` porque aún no existía y que se da de alta durante la espera: `load()` (por nombre) encuentra la cuenta nueva, pero el intento va en el carril `unknown:` y no en `user:<id>`, así que puede verificar a la vez que otro intento de esa cuenta (vuelve, acotada a la ventana del alta, la carrera de SEC-038; la condición del `UPDATE` sigue impidiendo entrar en una cuenta bloqueada). Ventana de milisegundos a pocos segundos y solo coincidiendo con una acción del encargado.
+- Responsable: developer (al implementar HU-07); testing (caso de RS-05b en HU-07)
+- Cómo corregir: en el `load()` del login, leer por `id` **y** `lower(name) = lower($1)`; si no coincide, tratarlo como usuario inexistente (hash ficticio y `401`). Si `resolvedId` es `null` y `load()` encuentra una fila, tratarla también como inexistente en ese intento (o volver a resolver y ponerse en la cola del carril `user:<id>`). No basta con que `PATCH /staff/:id` y `POST /staff` usen el mismo carril: el nombre lo cambian ellos, no un intento de PIN.
+- Cómo verificar: integración en HU-07, con un *hasher* que retiene la verificación en curso: (a) un login con el nombre `A` en cola detrás de otra verificación de la misma cuenta; durante la espera, `PATCH` renombra `A`→`B`; el login con `A` y el PIN correcto → `401` y 0 sesiones nuevas; (b) un login con `C` (inexistente) en cola; durante la espera, `POST /staff` crea `C`; ese intento → `401` sin verificar contra la cuenta nueva, y con otro login de `C` a la vez, `maxSimultaneas` = 1.
+- Estado: abierto (baja, no bloquea; corregir con HU-07, antes de cerrar esa historia)
+
 ---
 
-### Resumen de la revisión 2.10d (Etapa 2, HU-01, 2026-11-26)
+### Resumen de la revisión 2.8c (Etapa 2, HU-01, 2026-11-26)
+- **SEC-047 (baja): VERIFICADO** (§6.13). Carril `user:<id>` resuelto con el
+  `lower()` de PostgreSQL tras la reserva síncrona de IP; `POST /auth/pin` en
+  el mismo carril. 16 o 32 variantes `i`/`İ` y `σ`/`Σ` → 5 verificaciones,
+  nunca 2 a la vez. Login y cambio de PIN simultáneos → nunca 2 a la vez, y el
+  PIN no cambia si la cuenta se bloquea antes. SEC-038 intacto: A 5, A2 10, B
+  1, C 1 verificaciones, 0 sesiones, y semáforo de 4. Sin enumeración nueva
+  (mismo cuerpo y cabeceras; la diferencia de tiempo ~1 ms ya existía y no es
+  de SEC-047).
+- **T-48: sin impacto en la seguridad.** La inferencia del banner `absolute`
+  solo cambia el texto; `end()` cierra la sesión del cliente con cualquier
+  `401`. El límite de 30 s no retrasa la reapertura del flujo ni el cierre de
+  una sesión revocada (al instante por `session.revoked`; 5 s + 3 s con el
+  flujo caído). SEC-030 y SEC-032 intactos.
+- **CSP sin relajar**; sin regresiones en el resto del diff.
+- **Nuevo:** **SEC-058 (baja)**, para HU-07. `load()` lee por el `id`
+  resuelto antes del turno y no recomprueba el nombre (renombrado o alta
+  durante la espera).
+- Tests: `security` PASA (73), `integration` PASA (282) con la imagen
+  `sha256:f1e3f15e…` (`-sucio`, no vale para la puerta); prueba propia 12/12.
+- **Altos o críticos abiertos que bloqueen la puerta de la Etapa 2 para HU-01:
+  ninguno.** Riesgo aceptado: SEC-050 (EXC-03) y SEC-033 (EXC-01, baja).
+  Abiertos que no bloquean: SEC-003 (media), SEC-052 y SEC-056 (media,
+  antes de DEMO), SEC-025, SEC-043, SEC-046, SEC-057 y SEC-058 (baja).
+  Siguen en pie la condición de procedimiento (imágenes desde el commit final
+  con el árbol limpio, 2.11) y la ratificación humana de EXC-01 y EXC-03 de
+  la 2.10d.
+
+### Resumen de la revisión 2.10d (Etapa 2, HU-01, 2026-11-26; histórico, sustituido por el de 2.8c)
 - **SEC-055 (alta): VERIFICADO.** db `localhost/mi-app-db@sha256:99b42f80…` y
   proxy `localhost/mi-app-proxy@sha256:db29498f…`: Alpine 3.24.4,
   `zstd-libs` 1.6.0-r1 (db también `zstd` 1.6.0-r1, `libffi` 3.8.1-r0,
