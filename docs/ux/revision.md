@@ -211,3 +211,34 @@ Confirmar con VoiceOver y TalkBack reales que cada paso del cambio de PIN lee su
 
 ### Limitaciones
 API simulada (la contrato real es de testing); solo Chromium; Lighthouse no se ejecutó (sin red, como en la 2.3). Arnés en el scratchpad de la sesión (no en el repositorio).
+
+## 2.13d Verificación UX de H-2.8c-01 (commit 96abf90, regla de `design-system.md` §5.11.1)
+
+**Imagen:** `localhost/mi-app@sha256:9b25a654aa550e353115a0fa2b322ef499f5bdef0599c47c2a26a3af33080ef2` (`5a7fabf26bbe-sucio`). La SPA se extrajo de la imagen (`/app/public`) y se sirvió con un arnés temporal fuera del repositorio (servidor estático + API simulada con sesión ya iniciada, Chromium 1.65.1 en contenedor rootless: usuario 1000, `--cap-drop=ALL`, `no-new-privileges`, `--read-only`, sin red, 2 GB y 2 CPU, contenedor parado y borrado al terminar). 3 roles (Lía/encargado, Ana/camarero, Eva/barra), 320, 375, 768 y 1280 px, todas las pantallas que cada rol puede ver y todas sus "Acceso denegado": **52 combinaciones, 0 fallos.** Capturas en `docs/ux/capturas-2.13d/` (`<rol>-resumen-<ancho>.png`; solo una selección). Axe (wcag2a/aa, 2.1, 2.2 AA, best-practice) en `/resumen`, en las "Acceso denegado" y en las pantallas del encargado, 36 páginas: **0 violaciones.**
+
+### Contrato de §5.11.1, punto por punto
+| Punto | Resultado |
+|---|---|
+| 1. Nombre accesible y `textContent` | `getByRole('heading', { level: 1, name: <completo>, exact: true })` encuentra 1 elemento y el `textContent` es el título completo ("Resumen del día", "Acceso denegado") en las 52 combinaciones. |
+| 2. Texto visible corto, sin elipsis | A 320 y 375 px: "Resumen" (encargado) y "Acceso" (camarero y barra, las 3 pantallas denegadas de cada uno); el `innerText` no contiene "…". Pedidos, Cola, Menú y Personal sin `span` y con su título entero. |
+| 3. Sin recorte | `scrollWidth <= clientWidth` en todas. |
+| 4. Una sola línea | Altura del `h1` = 32 px (1 línea de 24/32) y una sola fila de texto visible. |
+| 5. Barra | **113 px a 320 y 375 px y 65 px a 768 y 1280 px** en todas las pantallas de los 3 roles; sin desplazamiento horizontal del documento. |
+| 6. `sr-only` real | A <= 767 px el `span` tiene `display` distinto de `none`, `visibility: visible` y 1 x 1 px. A >= 768 px pierde el estilo y se ve normal: 77,6 px de ancho en " del día" y 109,8 px en " denegado"; el `innerText` del `h1` es el título completo ("Resumen del día", "Acceso denegado"), con el espacio correcto y sin recorte. |
+| 7. `<title>` | "<título completo> · Café · Toma de pedidos" en las 4 resoluciones. |
+| Foco | El `h1` recibe el foco al abrir cada pantalla (2.4.3). |
+
+Lectura visual de las capturas: a 320 px "Resumen" cabe con holgura junto a "Gestión"; "Acceso" a 375 px deja el icono y el mensaje debajo como contexto; a 768 px "Acceso denegado" cabe en la barra de 65 px con "Eva · Barra" y "Cerrar sesión". Un solo botón principal por pantalla ("Ir a Pedidos" / "Ir a la cola").
+
+### Estado de los hallazgos
+| ID | Estado | Evidencia |
+|---|---|---|
+| **H-2.8c-01** | **Cerrado** | Puntos 1 a 7 verificados en la imagen final a 320, 375, 768 y 1280 px, en "Resumen del día" y en "Acceso denegado" de los 3 roles. |
+| **H-2.6-01** | **Cerrado** | La barra mide 113 px a <= 767 px y 65 px a >= 768 px en todas las pantallas de los 3 roles (antes 121 px en `/resumen`), y el título ya no se corta con elipsis. |
+
+### Hallazgos nuevos
+Ninguno de severidad alta ni media. Dos notas sin criterio incumplido en el código:
+- **Nota (documental, mía):** `design-system.md` §5.11.1 dice "en `text-xl` 700", pero el título de pantalla usa `--text-2xl` (24/32, 700; §5.2 y la medición). Es una errata del diseño, no del código; las medidas de arriba son a 24 px. Se corrige en la próxima edición del design system.
+- **Pendiente de la demo (Etapa 4):** confirmar con VoiceOver/TalkBack reales que se anuncia "Resumen del día" y "Acceso denegado", y si "Acceso" visible resulta ambiguo (la decisión es del cliente, según la nota de §5.11.1).
+
+**Límites de esta verificación:** API simulada (sin datos reales en las pantallas); solo Chromium (WebKit lo cubren los tests e2e de la 2.13b/c); no se ejecutó la suite `visual`, así que no se tocó ninguna captura de `tests/screenshots/`.
