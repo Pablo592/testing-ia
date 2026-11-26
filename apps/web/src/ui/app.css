@@ -1,9 +1,13 @@
 /* Disposición de las pantallas de HU-01 con los tokens de tokens.css. */
 
 /* --- Barra superior (§5.11): 64 px, el título es el único h1 ---------------- */
+/* >= 768 px: una fila (h1 | Gestión | nombre · rol | Cerrar sesión).
+   <= 767 px: dos filas de 56 px (h1 + Gestión / nombre + Cerrar sesión), H-2.3-05. */
 .topbar {
-  display: flex;
-  flex-wrap: wrap;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: 'title user logout';
   align-items: center;
   gap: var(--space-1) var(--space-2);
   min-height: var(--space-8);
@@ -11,31 +15,40 @@
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
 }
+.topbar.has-gestion {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-areas: 'title gestion user logout';
+}
+.topbar-login {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: 'title user';
+}
 .topbar-title {
+  grid-area: title;
+  justify-self: start;
   margin: 0;
   font-size: var(--text-2xl);
   line-height: var(--text-2xl-lh);
   font-weight: 700;
-  flex: 1 1 auto;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 .topbar-brand {
+  grid-area: title;
   font-weight: 700;
   font-size: var(--text-lg);
-  flex: 1 1 auto;
 }
 .topbar-user {
+  grid-area: user;
   color: var(--color-text);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
-.topbar-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  align-items: center;
+.topbar-logout {
+  grid-area: logout;
 }
 .menu {
+  grid-area: gestion;
   position: relative;
 }
 .menu-list {
@@ -45,7 +58,7 @@
   z-index: 10;
   display: flex;
   flex-direction: column;
-  min-width: 240px;
+  width: 280px;
   margin: 0;
   padding: var(--space-1);
   list-style: none;
@@ -57,21 +70,68 @@
 .menu-list a {
   display: flex;
   align-items: center;
+  gap: var(--space-1);
   min-height: var(--touch-md);
   padding: 0 var(--space-2);
   color: var(--color-text);
   text-decoration: none;
   border-radius: var(--radius-sm);
 }
-.menu-list a:hover {
+.menu-list a:hover,
+.menu-list a.menu-current {
   background: var(--color-surface-muted);
+}
+.menu-label {
+  flex: 1 1 auto;
+}
+.menu-here {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm-lh);
+}
+@media (max-width: 767px) {
+  .topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'title title'
+      'user logout';
+    grid-auto-rows: minmax(var(--touch-md), auto);
+    gap: 0 var(--space-2);
+    padding: 0 var(--space-2);
+  }
+  .topbar.has-gestion {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'title gestion'
+      'user logout';
+  }
+  .topbar-login {
+    grid-template-areas: 'title user';
+  }
+  /* El panel se ancla a la barra (no al botón): ancho completo, justo debajo. */
+  .menu {
+    position: static;
+  }
+  .menu-list {
+    left: 0;
+    right: 0;
+    top: 100%;
+    width: auto;
+    border-radius: 0;
+    border-width: 0 0 1px;
+  }
 }
 
 .session-notices {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  padding: var(--space-1) var(--space-2) 0;
+  padding: var(--space-2) var(--space-4) 0;
+}
+@media (max-width: 767px) {
+  .session-notices {
+    padding: var(--space-2) var(--space-2) 0;
+  }
 }
 
 main.content {
@@ -232,16 +292,43 @@ main.content {
 .pin-back {
   align-self: flex-start;
 }
+.pin-box {
+  position: relative;
+}
+/* El texto del campo no se ve: los indicadores lo sustituyen (H-2.3-08). */
 .pin-input {
   width: 100%;
   min-height: var(--touch-lg);
   font-size: var(--text-2xl);
-  letter-spacing: 0.5em;
   text-align: center;
+  color: transparent;
+  caret-color: transparent;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   background: var(--color-surface);
-  color: var(--color-text);
+}
+.pin-input:disabled {
+  background: var(--color-surface-muted);
+  border-color: var(--color-border);
+}
+.pin-dots {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+.pin-dot {
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: 50%;
+  border: 2px solid var(--color-border-strong);
+}
+.pin-dot-filled {
+  background: var(--color-text);
+  border-color: var(--color-text);
 }
 .pin-help {
   color: var(--color-text-secondary);
@@ -298,4 +385,16 @@ main.content {
   display: flex;
   justify-content: space-between;
   gap: var(--space-2);
+}
+
+/* Error de carga de la rejilla con "Reintentar" (§5.12, H-2.3-07). */
+.load-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.load-error .error-text {
+  margin: 0;
 }

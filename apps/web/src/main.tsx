@@ -1,3 +1,5 @@
+// T-45: primer import, antes de cualquier módulo que pueda usar zod.
+import '@mi-app/shared/zod-csp';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';

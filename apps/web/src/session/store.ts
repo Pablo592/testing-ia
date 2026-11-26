@@ -3,7 +3,8 @@
 // Al terminar la sesión (primer 401, session.revoked, inactividad o logout) se
 // cierran TODOS los canales antes de mostrar P-01 (SEC-032).
 import { useSyncExternalStore } from 'react';
-import { REVOKED_REASONS, type LoginResponse, type MeResponse } from '@mi-app/shared/api';
+import type { LoginResponse, MeResponse } from '@mi-app/shared/api';
+import { REVOKED_REASONS } from '@mi-app/shared/api-constants';
 import { abortAll, api, lastActiveRequest, setClientHandlers } from '../api/client.ts';
 import { EventsClient } from '../realtime/events.ts';
 

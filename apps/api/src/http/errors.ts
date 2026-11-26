@@ -42,6 +42,7 @@ export const MESSAGES = {
   UNSUPPORTED_MEDIA_TYPE: 'Tipo de contenido no admitido',
   PAYLOAD_TOO_LARGE: 'Cuerpo demasiado grande',
   INTERNAL: 'Error interno',
+  SERVICE_UNAVAILABLE: 'Servicio no disponible',
 } as const;
 
 export function errorBody(request: FastifyRequest, code: string, message: string, details?: Record<string, unknown>): ApiError {

@@ -1,5 +1,5 @@
 // Componentes del design system usados en HU-01 (docs/ux/design-system.md §5).
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { Role } from '@mi-app/shared/pin';
 
 export const ROLE_TEXT: Record<Role, string> = { waiter: 'Camarero', kitchen: 'Barra', manager: 'Encargado' };
@@ -105,8 +105,9 @@ export function Keypad({ onDigit, onDelete, digitsDisabled, deleteDisabled, acti
 }
 
 /** h1 de la barra superior: recibe el foco en cada cambio de pantalla (§5.11). */
-export function ScreenTitle({ title, focusKey }: { title: string; focusKey: string }) {
-  const ref = useRef<HTMLHeadingElement>(null);
+export function ScreenTitle({ title, focusKey, headingRef }: { title: string; focusKey: string; headingRef?: RefObject<HTMLHeadingElement | null> }) {
+  const own = useRef<HTMLHeadingElement>(null);
+  const ref = headingRef ?? own;
   useEffect(() => {
     ref.current?.focus();
   }, [focusKey]);

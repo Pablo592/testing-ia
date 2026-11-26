@@ -14,8 +14,9 @@ import { readSessionCookie } from './cookies.ts';
 import { clientIp, type AppContext, type AuthSession } from './context.ts';
 import { HttpError, MESSAGES, sendError } from './errors.ts';
 import { tokenHash } from '../modules/auth/tokens.ts';
+import { IDLE_TIMEOUT_MS } from '../session-policy.ts';
 
-export const IDLE_TIMEOUT_MS = 15 * 60_000;
+export { IDLE_TIMEOUT_MS };
 const MODIFYING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 export function isApiPath(url: string): boolean {
@@ -53,6 +54,8 @@ export function createGuard(ctx: AppContext) {
       .where('expired_reason', 'is', null)
       .where('revoked_at', 'is', null)
       .executeTakeFirst();
+    // SEC-039: la sesión caducada no conserva flujos SSE abiertos.
+    hub.expire([row.id]);
     if (Number(r.numUpdatedRows) === 1) {
       metrics.sessionsEnded.inc({ reason });
       request.log.info(
@@ -122,12 +125,14 @@ export function createGuard(ctx: AppContext) {
       mustChangePin: row.must_change_pin,
       createdAt: row.created_at,
       expiresAt: row.expires_at,
+      lastActivityAt: row.last_activity_at,
     };
   }
 
   /** `last_activity_at` en cada petición que cuenta, sin intervalo mínimo (T-37). */
   async function touch(sessionId: string): Promise<void> {
     const now = clock.now();
+    hub.touch(sessionId, now);
     await db
       .updateTable('sessions')
       .set({ last_activity_at: sql<Date>`GREATEST(last_activity_at, ${now})` })

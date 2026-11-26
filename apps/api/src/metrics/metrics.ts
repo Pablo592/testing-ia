@@ -37,6 +37,7 @@ export interface AppMetrics {
   sseClients: Gauge<'role'>;
   sseConnections: Counter<'role'>;
   sseDisconnections: Counter<'role' | 'reason'>;
+  sseRejected: Counter<'reason'>;
 }
 
 export function createMetrics(): AppMetrics {
@@ -120,6 +121,8 @@ export function createMetrics(): AppMetrics {
     labelNames: ['role', 'reason'],
     registers,
   });
+  /** SEC-040: flujos rechazados antes de abrirse (tope global de RS-23). */
+  const sseRejected = new Counter({ name: 'sse_rejected_total', help: 'Flujos SSE rechazados', labelNames: ['reason'], registers });
 
   // RS-47: series a 0 desde el arranque.
   for (const result of LOGIN_RESULTS) loginAttempts.inc({ result }, 0);
@@ -140,6 +143,7 @@ export function createMetrics(): AppMetrics {
   staffPrivilegeChanges.inc({ kind: 'initial_manager', new_role: 'manager' }, 0);
   paymentsVoided.inc(0);
   for (const role of ROLES) sseClients.set({ role }, 0);
+  sseRejected.inc({ reason: 'global_limit' }, 0);
 
   return {
     registry,
@@ -160,5 +164,6 @@ export function createMetrics(): AppMetrics {
     sseClients,
     sseConnections,
     sseDisconnections,
+    sseRejected,
   };
 }

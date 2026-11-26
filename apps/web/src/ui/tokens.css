@@ -73,19 +73,20 @@ body {
   }
 }
 
-/* Foco siempre visible (anillo de 3 px con separación de 2 px, §5). */
-:focus-visible,
-button:focus,
-a:focus,
-input:focus {
+/* Foco visible con teclado (anillo de 3 px con separación de 2 px, §5). Solo
+   :focus-visible: tocar una tecla no deja el anillo puesto (H-2.3-09). */
+:focus {
+  outline: none;
+}
+:focus-visible {
   outline: 3px solid var(--color-focus);
   outline-offset: 2px;
 }
-h1:focus {
+/* Títulos y bloques de mensaje reciben el foco por código para el lector de
+   pantalla; no son controles, así que no llevan anillo (H-2.3-06). */
+[tabindex='-1']:focus,
+[tabindex='-1']:focus-visible {
   outline: none;
-}
-h1:focus-visible {
-  outline: 3px solid var(--color-focus);
 }
 
 .visually-hidden {

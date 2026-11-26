@@ -4,8 +4,9 @@ import { z } from 'zod';
 import type { Permission } from './permissions.ts';
 import type { Role } from './pin/index.ts';
 
-export const API_PREFIX = '/api/v1';
-export const SESSION_COOKIE = '__Host-sid';
+import { REVOKED_REASONS, type RevokedReason } from './api-constants.ts';
+
+export { API_PREFIX, SESSION_COOKIE, REVOKED_REASONS, type RevokedReason } from './api-constants.ts';
 
 /** Formato único de error (§5). `message` es solo diagnóstico: la UI decide por `code`. */
 export interface ApiError {
@@ -17,8 +18,6 @@ export interface ApiError {
   };
 }
 
-export const REVOKED_REASONS = ['logout', 'user_disabled', 'pin_reset', 'pin_changed', 'account_locked_manual'] as const;
-export type RevokedReason = (typeof REVOKED_REASONS)[number];
 
 /** `details` del 401 UNAUTHENTICATED: exactamente estas formas (§5, 2.1i). */
 export const UnauthenticatedDetails = z.union([
@@ -30,9 +29,19 @@ export type UnauthenticatedDetails = z.infer<typeof UnauthenticatedDetails>;
 /** Longitud máxima admitida en un campo de PIN recibido (se valida antes de cualquier hash). */
 export const PIN_FIELD_MAX = 64;
 
+/**
+ * Texto recibido por la API (SEC-042): sin caracteres de control C0 ni DEL
+ * (`NUL` rompe la consulta en PostgreSQL). Incidencia `rule: 'format'`.
+ * Pendiente del software-engineer: regla general de texto en docs/arquitectura.md §5.
+ */
+export const NO_CONTROL_CHARS = /^[^\u0000-\u001F\u007F]*$/;
+export function apiText(min: number, max: number) {
+  return z.string().min(min).max(max).regex(NO_CONTROL_CHARS);
+}
+
 export const LoginBody = z
   .object({
-    name: z.string().min(1).max(30),
+    name: apiText(1, 30),
     pin: z.string().min(1).max(PIN_FIELD_MAX),
   })
   .strict();

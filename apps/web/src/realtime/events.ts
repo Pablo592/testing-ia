@@ -2,7 +2,7 @@
 // dispositivo; vigilante de 5 s sin mensajes → reconexión forzada; al recibir
 // `session.revoked` se cierra sin reconectar. `stop()` cierra el EventSource
 // y cancela todos sus temporizadores (SEC-032).
-import { API_PREFIX, type RevokedReason } from '@mi-app/shared/api';
+import { API_PREFIX, type RevokedReason } from '@mi-app/shared/api-constants';
 
 export interface EventsHandlers {
   /** `hello` de una reconexión (no el de la primera conexión). */

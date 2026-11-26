@@ -54,6 +54,9 @@ export function LoginScreen() {
   const pinRef = useRef<HTMLInputElement>(null);
   const userInputRef = useRef<HTMLInputElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const messageRef = useRef<HTMLDivElement>(null);
+  const bannersRef = useRef<HTMLDivElement>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const tempUntil = message?.kind === 'temporary' ? message.until : 0;
   const now = useNow(tempUntil > Date.now() || deviceUntil > Date.now());
@@ -89,7 +92,14 @@ export function LoginScreen() {
       cancel = true;
       if (retry !== undefined) clearTimeout(retry);
     };
-  }, [blockDevice]);
+  }, [blockDevice, reloadKey]);
+
+  // H-2.3-10: al volver a P-01 por un cierre del sistema, el foco va al banner
+  // con el motivo (va justo antes del h1 en el orden de lectura).
+  const hasBanner = session.banner !== null;
+  useEffect(() => {
+    if (hasBanner) bannersRef.current?.focus();
+  }, [hasBanner]);
 
   useEffect(() => {
     if (selected) headingRef.current?.focus();
@@ -127,6 +137,17 @@ export function LoginScreen() {
   const minLength = isManager ? 6 : 4;
   const blocked = deviceBlocked || tempBlocked || manualBlocked;
 
+  /** H-2.3-03: el teclado y el campo se deshabilitan; el foco pasa al mensaje (nunca a body). */
+  function focusMessage() {
+    requestAnimationFrame(() => messageRef.current?.focus());
+  }
+
+  function retryLoad() {
+    setLoadFailed(false);
+    setUsers(null);
+    setReloadKey((k) => k + 1);
+  }
+
   async function submit() {
     if (!selected || loading || blocked || pin.length < minLength) return;
     setLoading(true);
@@ -143,14 +164,17 @@ export function LoginScreen() {
     if (r.status === 429) {
       blockDevice(retryAfterOf(r));
       setMessage({ kind: 'device' });
+      focusMessage();
       return;
     }
     if (r.status === 423 && code === 'ACCOUNT_LOCKED_MANUAL') {
       setMessage({ kind: 'manual' });
+      focusMessage();
       return;
     }
     if (r.status === 423) {
       setMessage({ kind: 'temporary', until: Date.now() + retryAfterOf(r) * 1000 });
+      focusMessage();
       return;
     }
     if (r.status === 403 && code === 'USER_DISABLED') setMessage({ kind: 'disabled' });
@@ -194,14 +218,14 @@ export function LoginScreen() {
 
   return (
     <>
-      <header className="topbar">
+      <header className="topbar topbar-login">
         <span className="topbar-brand">{APP_NAME}</span>
         <span className="topbar-user">Sin sesión</span>
       </header>
       <main className="login">
         {!selected ? (
           <section aria-labelledby="quien-eres">
-            <div className="login-banners">
+            <div className="login-banners" ref={bannersRef} tabIndex={-1}>
               {deviceBlocked ? (
                 <Notice icon="lock" role="status">
                   <p>{deviceText(retryMinutes((deviceUntil - now) / 1000))}</p>
@@ -214,11 +238,22 @@ export function LoginScreen() {
               ) : null}
             </div>
             <h1 id="quien-eres">¿Quién eres?</h1>
-            {users === null ? <p className="pin-help">Cargando usuarios…</p> : null}
+            {users === null ? (
+              <p className="pin-help" role="status">
+                Cargando usuarios…
+              </p>
+            ) : null}
             {users !== null && users.length === 0 && !loadFailed && !deviceBlocked ? (
               <p className="pin-help">Todavía no hay usuarios. Pide al encargado que te dé de alta.</p>
             ) : null}
-            {loadFailed ? <ErrorText>No se ha podido conectar. Reintenta.</ErrorText> : null}
+            {loadFailed ? (
+              <div className="load-error" role="alert">
+                <ErrorText>No se ha podido conectar. Reintenta.</ErrorText>
+                <button type="button" className="btn btn-secondary" onClick={retryLoad}>
+                  Reintentar
+                </button>
+              </div>
+            ) : null}
             {users && users.length > 0 ? (
               <ul className="user-grid">
                 {users.map((u) => (
@@ -295,7 +330,7 @@ export function LoginScreen() {
                 onChange={setPin}
                 onEnter={() => void submit()}
               />
-              <div id="pin-mensaje" className="message" role="alert">
+              <div id="pin-mensaje" className="message" role="alert" tabIndex={-1} ref={messageRef}>
                 {renderMessage()}
               </div>
               {!manualBlocked ? (

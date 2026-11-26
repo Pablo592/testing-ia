@@ -12,10 +12,13 @@ import type { Clock } from '../clock.ts';
 import type { Db } from '../db/database.ts';
 import type { Logger } from '../logging/logger.ts';
 import type { AppMetrics } from '../metrics/metrics.ts';
+import { IDLE_TIMEOUT_MS } from '../session-policy.ts';
 
 export const PING_INTERVAL_MS = 2000;
 /** docs/permisos.md §3.2: máx. 2 flujos por sesión (el más antiguo se cierra). */
 export const MAX_STREAMS_PER_SESSION = 2;
+/** RS-23 y docs/permisos.md §3.2: máx. 50 flujos en total (SEC-040). */
+export const MAX_STREAMS_TOTAL = 50;
 
 type CloseReason = 'client_closed' | 'session_revoked' | 'role_changed' | 'write_error' | 'server_shutdown' | 'expired' | 'replaced';
 
@@ -35,6 +38,8 @@ export interface StreamSession {
   userId: string;
   role: Role;
   expiresAt: Date;
+  /** `last_activity_at` de la sesión al abrir el flujo (SEC-039). */
+  lastActivityAt: Date;
 }
 
 export interface HubDeps {
@@ -49,6 +54,8 @@ export class Hub {
   private readonly conns = new Map<string, Conn>();
   /** Sesiones `kitchen` con flujo abierto → número de flujos abiertos. */
   private readonly kitchen = new Map<string, number>();
+  /** Última actividad (ms) de cada sesión con flujo abierto (SEC-039). */
+  private readonly activity = new Map<string, number>();
   private readonly pending = new Set<Promise<unknown>>();
   private readonly pingTimer: NodeJS.Timeout;
   private readonly kitchenTimer: NodeJS.Timeout;
@@ -72,8 +79,40 @@ export class Hub {
     return this.conns.size;
   }
 
+  /**
+   * SEC-040: ¿cabe un flujo más de esta sesión? Cuenta los flujos que quedarían
+   * tras cerrar los sobrantes de la misma sesión (el más antiguo se sustituye).
+   */
+  canAccept(sessionId: string): boolean {
+    let same = 0;
+    for (const c of this.conns.values()) if (c.sessionId === sessionId) same += 1;
+    const others = this.conns.size - same;
+    return others + Math.min(same, MAX_STREAMS_PER_SESSION - 1) + 1 <= MAX_STREAMS_TOTAL;
+  }
+
+  /** Actividad de una sesión (la guarda, en cada petición que cuenta). */
+  touch(sessionId: string, at: Date): void {
+    const prev = this.activity.get(sessionId);
+    if (prev !== undefined) this.activity.set(sessionId, Math.max(prev, at.getTime()));
+  }
+
+  /** Caducidad detectada (inactividad o absoluta): cierra los flujos de esas sesiones (SEC-039). */
+  expire(sessionIds: readonly string[]): number {
+    if (sessionIds.length === 0) return 0;
+    const set = new Set(sessionIds);
+    let closed = 0;
+    for (const c of [...this.conns.values()]) {
+      if (!set.has(c.sessionId)) continue;
+      this.end(c, 'expired');
+      closed += 1;
+    }
+    return closed;
+  }
+
   open(res: ServerResponse, s: StreamSession, requestId: string): void {
     const now = this.deps.clock.now();
+    const known = this.activity.get(s.sessionId);
+    this.activity.set(s.sessionId, Math.max(known ?? 0, s.lastActivityAt.getTime()));
     // Máximo de flujos por sesión: se cierra el más antiguo (reconexiones).
     const same = [...this.conns.values()].filter((c) => c.sessionId === s.sessionId).sort((a, b) => a.openedAt - b.openedAt);
     while (same.length >= MAX_STREAMS_PER_SESSION) {
@@ -138,6 +177,7 @@ export class Hub {
     clearInterval(this.pingTimer);
     clearInterval(this.kitchenTimer);
     for (const c of [...this.conns.values()]) this.end(c, 'server_shutdown');
+    this.activity.clear();
     this.stopped = true;
     await Promise.allSettled([...this.pending]);
   }
@@ -171,6 +211,7 @@ export class Hub {
     if (c.closed) return;
     c.closed = true;
     this.conns.delete(c.id);
+    if (![...this.conns.values()].some((o) => o.sessionId === c.sessionId)) this.activity.delete(c.sessionId);
     this.deps.metrics.sseDisconnections.inc({ role: c.role, reason });
     this.deps.metrics.sseClients.set({ role: c.role }, this.countRole(c.role));
     this.deps.log.info(
@@ -204,6 +245,8 @@ export class Hub {
     for (const c of [...this.conns.values()]) {
       // Caducidad absoluta: se cierra en el primer ping tras expires_at (§7).
       if (nowMs >= c.expiresAt) this.end(c, 'expired');
+      // SEC-039: inactividad sin peticiones REST; la barra con la cola abierta está exenta.
+      else if (c.role !== 'kitchen' && nowMs >= (this.activity.get(c.sessionId) ?? 0) + IDLE_TIMEOUT_MS) this.end(c, 'expired');
       else this.send(c, 'ping', data);
     }
   }

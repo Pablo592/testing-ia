@@ -10,7 +10,9 @@
     "./lockout": "./src/lockout.ts",
     "./retry": "./src/retry.ts",
     "./business-date": "./src/business-date.ts",
-    "./api": "./src/api.ts"
+    "./api": "./src/api.ts",
+    "./api-constants": "./src/api-constants.ts",
+    "./zod-csp": "./src/zod-csp.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"

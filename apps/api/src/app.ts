@@ -168,6 +168,14 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
   app.addHook('onRequest', createGuard(ctx));
 
+  // SEC-041 (RS-27): toda respuesta de /api lleva Cache-Control: no-store (también
+  // 401/403/404/204/503). El flujo SSE no pasa por aquí (hijack) y conserva
+  // `no-cache, no-transform`.
+  app.addHook('onSend', async (request, reply, payload) => {
+    if (isApiPath(request.url)) reply.header('cache-control', 'no-store');
+    return payload;
+  });
+
   app.addHook('onResponse', async (request: FastifyRequest, reply: FastifyReply) => {
     const route = routeTemplate(request);
     if (route === '/api/v1/events') return;

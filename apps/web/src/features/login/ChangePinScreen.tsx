@@ -36,6 +36,7 @@ export function ChangePinScreen() {
   const [message, setMessage] = useState<Message | null>(null);
   const [saving, setSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const messageRef = useRef<HTMLDivElement>(null);
 
   const until = message && message.kind !== 'error' ? message.until : 0;
   const now = useNow(until > Date.now());
@@ -78,8 +79,13 @@ export function ChangePinScreen() {
       end('account_locked_manual');
     } else if (r.status === 423) {
       setMessage({ kind: 'locked', until: Date.now() + retryAfterOf(r) * 1000 });
+      // H-2.3-03: teclado y botones quedan deshabilitados; el foco pasa al mensaje.
+      requestAnimationFrame(() => messageRef.current?.focus());
+      return;
     } else if (r.status === 429) {
       setMessage({ kind: 'device', until: Date.now() + retryAfterOf(r) * 1000 });
+      requestAnimationFrame(() => messageRef.current?.focus());
+      return;
     } else if (r.status === 400) {
       const issues = (r.error?.details as { issues?: { rule?: string }[] } | undefined)?.issues ?? [];
       setMessage({ kind: 'error', text: pinRuleMessage(issues[0]?.rule ?? '') });
@@ -134,7 +140,10 @@ export function ChangePinScreen() {
     <section className="pin-step">
       <div className="pin-column">
         <p>Antes de seguir tienes que crear un PIN nuevo.</p>
-        <p id="paso-pin">{STEP_TEXT[step]}</p>
+        {/* H-2.3-04: el cambio de paso se anuncia (región de estado). */}
+        <p id="paso-pin" role="status">
+          {STEP_TEXT[step]}
+        </p>
         <PinField
           id="pin-cambio"
           label={pinLabel(isManager)}
@@ -150,7 +159,7 @@ export function ChangePinScreen() {
             {pinRuleHelp(isManager)}
           </p>
         ) : null}
-        <div id="pin-cambio-mensaje" className="message" role="alert">
+        <div id="pin-cambio-mensaje" className="message" role="alert" tabIndex={-1} ref={messageRef}>
           {message?.kind === 'error' ? <ErrorText>{message.text}</ErrorText> : null}
           {message?.kind === 'locked' && waiting ? (
             <Notice icon="lock">

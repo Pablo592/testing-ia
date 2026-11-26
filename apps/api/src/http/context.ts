@@ -17,6 +17,7 @@ export interface AuthSession {
   mustChangePin: boolean;
   createdAt: Date;
   expiresAt: Date;
+  lastActivityAt: Date;
 }
 
 export interface AppContext {

@@ -5,9 +5,12 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { sql } from 'kysely';
 import { API_PREFIX } from '@mi-app/shared/api';
 import type { AppContext } from '../context.ts';
+import { HttpError, MESSAGES } from '../errors.ts';
 import { LATEST_MIGRATION } from '../../db/migrations/index.ts';
 
 const LAG_LIMIT_MS = 1000;
+/** Espera sugerida al rechazar un flujo por el tope global (el cliente reintenta a los 5 s). */
+const SSE_RETRY_AFTER_S = 5;
 
 export function registerSystemRoutes(app: FastifyInstance, ctx: AppContext): () => void {
   const lag = monitorEventLoopDelay({ resolution: 20 });
@@ -59,8 +62,21 @@ export function registerSystemRoutes(app: FastifyInstance, ctx: AppContext): () 
     config: { permission: 'events:subscribe', activity: false },
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
       const s = request.auth!;
+      // SEC-040 (RS-23): tope global de flujos, antes de abrir el flujo.
+      if (!ctx.hub.canAccept(s.id)) {
+        ctx.metrics.sseRejected.inc({ reason: 'global_limit' });
+        request.log.warn(
+          { event: 'sse.rejected', category: 'realtime', session_id: s.id, user_id: s.userId, role: s.role, reason: 'global_limit', clients_total: ctx.hub.size },
+          'Flujo SSE rechazado: tope global',
+        );
+        throw new HttpError(503, 'SERVICE_UNAVAILABLE', MESSAGES.SERVICE_UNAVAILABLE, undefined, { 'retry-after': String(SSE_RETRY_AFTER_S) });
+      }
       reply.hijack();
-      ctx.hub.open(reply.raw, { sessionId: s.id, userId: s.userId, role: s.role, expiresAt: s.expiresAt }, request.id);
+      ctx.hub.open(
+        reply.raw,
+        { sessionId: s.id, userId: s.userId, role: s.role, expiresAt: s.expiresAt, lastActivityAt: s.lastActivityAt },
+        request.id,
+      );
     },
   });
 

@@ -13,7 +13,12 @@ import { clientIp, uaFamily, type AppContext } from '../context.ts';
 import { HttpError, retryError, ValidationError } from '../errors.ts';
 import { validateBody } from '../validate.ts';
 import { newSessionToken, tokenHash } from '../../modules/auth/tokens.ts';
-import type { PinTarget, VerifyOutcome } from '../../modules/auth/verify-pin.ts';
+import type { VerifyFailure } from '../../modules/auth/verify-pin.ts';
+
+/** Clave del cerrojo por cuenta de verifyPin (SEC-038): el nombre de login normalizado. */
+function accountKey(name: string): string {
+  return name.toLowerCase();
+}
 
 const MSG = {
   invalidCredentials: 'Usuario o PIN incorrectos',
@@ -31,7 +36,7 @@ function localConfigFor(role: Role, installation: AppContext['installation']): M
 }
 
 /** Traducción común de los rechazos de verifyPin que no son "PIN incorrecto". */
-function lockOrLimitError(outcome: Exclude<VerifyOutcome, { ok: true }>): HttpError | undefined {
+function lockOrLimitError(outcome: VerifyFailure): HttpError | undefined {
   if (outcome.reason === 'rate_limited') return retryError(429, 'TOO_MANY_ATTEMPTS', MSG.tooMany, outcome.retryAfterSeconds ?? 1);
   if (outcome.reason === 'locked') return retryError(423, 'LOCKED', MSG.locked, outcome.retryAfterSeconds ?? 1);
   if (outcome.reason === 'locked_manual') return new HttpError(423, 'ACCOUNT_LOCKED_MANUAL', MSG.lockedManual);
@@ -80,17 +85,44 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
       const body = request.body as LoginBody;
       const ip = clientIp(request);
       const ua = uaFamily(request);
-      const user = await db
-        .selectFrom('users')
-        .select(['id', 'name', 'role', 'pin_hash', 'locked_until', 'locked_manual', 'active', 'must_change_pin'])
-        .where(sql`lower(name)`, '=', sql`lower(${body.name})`)
-        .executeTakeFirst();
-      const target: PinTarget | null = user
-        ? { id: user.id, role: user.role, pin_hash: user.pin_hash, locked_until: user.locked_until, locked_manual: user.locked_manual }
-        : null;
-      const outcome = await auth.verifyPin(target, body.pin, { ip, purpose: 'login', log: request.log, uaFamily: ua });
-
+      const token = newSessionToken();
+      const sessionId = randomUUID();
+      // SEC-038: la cuenta se lee en su turno del cerrojo y la sesión se crea en la
+      // misma transacción que confirma que sigue sin bloqueo.
+      const outcome = await auth.verifyPin({
+        accountKey: accountKey(body.name),
+        load: () =>
+          db
+            .selectFrom('users')
+            .select(['id', 'name', 'role', 'pin_hash', 'locked_until', 'locked_manual', 'active', 'must_change_pin'])
+            .where(sql`lower(name)`, '=', sql`lower(${body.name})`)
+            .executeTakeFirst()
+            .then((u) => u ?? null),
+        pin: body.pin,
+        ctx: { ip, purpose: 'login', log: request.log, uaFamily: ua },
+        onSuccess: async (trx, u) => {
+          if (!u.active) return false;
+          const now = clock.now();
+          await trx
+            .insertInto('sessions')
+            .values({
+              id: sessionId,
+              token_hash: tokenHash(token),
+              user_id: u.id,
+              created_at: now,
+              last_activity_at: now,
+              expires_at: new Date(now.getTime() + ctx.sessionMaxHours * 3600_000),
+              revoked_at: null,
+              revoked_reason: null,
+              expired_reason: null,
+              user_agent: String(request.headers['user-agent'] ?? '').slice(0, 200) || null,
+            })
+            .execute();
+          return true;
+        },
+      });
       if (!outcome.ok) {
+        const user = outcome.user;
         const err = lockOrLimitError(outcome);
         if (err) {
           metrics.loginAttempts.inc({ result: outcome.reason === 'rate_limited' ? 'ip_rate_limited' : 'locked' });
@@ -110,8 +142,8 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
         );
         throw new HttpError(401, 'INVALID_CREDENTIALS', MSG.invalidCredentials);
       }
-      if (!user) throw new HttpError(401, 'INVALID_CREDENTIALS', MSG.invalidCredentials);
-      if (!user.active) {
+      const user = outcome.user;
+      if (!outcome.value) {
         metrics.loginAttempts.inc({ result: 'disabled' });
         request.log.warn(
           { event: 'auth.login.disabled_user', category: 'security', client_ip: ip, ua_family: ua, target_user_id: user.id },
@@ -120,24 +152,6 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
         throw new HttpError(403, 'USER_DISABLED', MSG.disabled);
       }
 
-      const now = clock.now();
-      const token = newSessionToken();
-      const sessionId = randomUUID();
-      await db
-        .insertInto('sessions')
-        .values({
-          id: sessionId,
-          token_hash: tokenHash(token),
-          user_id: user.id,
-          created_at: now,
-          last_activity_at: now,
-          expires_at: new Date(now.getTime() + ctx.sessionMaxHours * 3600_000),
-          revoked_at: null,
-          revoked_reason: null,
-          expired_reason: null,
-          user_agent: String(request.headers['user-agent'] ?? '').slice(0, 200) || null,
-        })
-        .execute();
       metrics.loginAttempts.inc({ result: 'success' });
       request.log.info(
         {
@@ -222,12 +236,39 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
         throw new ValidationError([{ path: ['newPin'], rule: rule.rule }]);
       }
 
-      const user = await db
-        .selectFrom('users')
-        .select(['id', 'role', 'pin_hash', 'locked_until', 'locked_manual'])
-        .where('id', '=', s.userId)
-        .executeTakeFirstOrThrow();
-      const outcome = await auth.verifyPin(user, body.currentPin, { ip, sessionId: s.id, purpose: 'change', log: request.log, uaFamily: ua });
+      // SEC-038: currentPin se verifica en el turno de la cuenta y el PIN nuevo se
+      // guarda en la misma transacción que confirma que la cuenta sigue sin bloqueo.
+      const outcome = await auth.verifyPin({
+        accountKey: accountKey(s.name),
+        load: () =>
+          db
+            .selectFrom('users')
+            .select(['id', 'role', 'pin_hash', 'locked_until', 'locked_manual'])
+            .where('id', '=', s.userId)
+            .executeTakeFirst()
+            .then((u) => u ?? null),
+        pin: body.currentPin,
+        ctx: { ip, sessionId: s.id, purpose: 'change', log: request.log, uaFamily: ua },
+        prepare: () => auth.hashNewPin(body.newPin, s.role),
+        onSuccess: async (trx, _u, hashed) => {
+          if (!hashed || !hashed.ok) return { rule: hashed && !hashed.ok ? hashed.rule : undefined, revoked: [] as string[] };
+          const now = clock.now();
+          await trx
+            .updateTable('users')
+            .set({ pin_hash: hashed.hash, pin_digits: body.newPin.length, must_change_pin: false, updated_at: now })
+            .where('id', '=', s.userId)
+            .execute();
+          const rows = await trx
+            .updateTable('sessions')
+            .set({ revoked_at: now, revoked_reason: 'pin_changed' })
+            .where('user_id', '=', s.userId)
+            .where('id', '<>', s.id)
+            .where('revoked_at', 'is', null)
+            .returning('id')
+            .execute();
+          return { rule: undefined, revoked: rows.map((r) => r.id) };
+        },
+      });
       if (!outcome.ok) {
         const err = lockOrLimitError(outcome);
         if (err) throw err;
@@ -240,26 +281,8 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
         if (outcome.lockedManualNow) throw new HttpError(423, 'ACCOUNT_LOCKED_MANUAL', MSG.lockedManual);
         throw new HttpError(403, 'PIN_INVALID', MSG.pinInvalid);
       }
-
-      const hashed = await auth.hashNewPin(body.newPin, s.role);
-      if (!hashed.ok) throw new ValidationError([{ path: ['newPin'], rule: hashed.rule }]);
-      const now = clock.now();
-      const revoked = await db.transaction().execute(async (trx) => {
-        await trx
-          .updateTable('users')
-          .set({ pin_hash: hashed.hash, pin_digits: body.newPin.length, must_change_pin: false, updated_at: now })
-          .where('id', '=', s.userId)
-          .execute();
-        const rows = await trx
-          .updateTable('sessions')
-          .set({ revoked_at: now, revoked_reason: 'pin_changed' })
-          .where('user_id', '=', s.userId)
-          .where('id', '<>', s.id)
-          .where('revoked_at', 'is', null)
-          .returning('id')
-          .execute();
-        return rows.map((r) => r.id);
-      });
+      if (outcome.value.rule) throw new ValidationError([{ path: ['newPin'], rule: outcome.value.rule }]);
+      const revoked = outcome.value.revoked;
       hub.revoke(revoked, 'pin_changed');
       metrics.sessionsEnded.inc({ reason: 'pin_changed' }, revoked.length);
       request.log.info({ event: 'auth.pin.changed', ...logBase, sessions_revoked: revoked.length }, 'PIN provisional cambiado');

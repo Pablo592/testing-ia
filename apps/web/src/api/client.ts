@@ -5,7 +5,8 @@
 // - Toda petición lleva un AbortController; al primer 401 se abortan todas
 //   (`abortAll`) para que ninguna respuesta tardía de la sesión vieja borre la
 //   cookie de un login nuevo. Nunca se usan sendBeacon ni fetch({ keepalive }).
-import { API_PREFIX, type ApiError } from '@mi-app/shared/api';
+import type { ApiError } from '@mi-app/shared/api';
+import { API_PREFIX } from '@mi-app/shared/api-constants';
 
 export interface ApiResult<T = unknown> {
   status: number;
