@@ -22,3 +22,8 @@ node_modules/
 # Resultados de las ejecuciones de tests (T-35): informes, trazas y vídeos
 tests/results/*
 !tests/results/.gitkeep
+
+# Ficheros de entorno locales: nunca al repositorio (solo los .example)
+.env
+.env.*
+!.env.example
