@@ -71,6 +71,14 @@
 > condiciones**; EXC-01 sigue vigente. **SEC-049 sigue abierto (alta,
 > bloquea)**: `alpine3.23` no corrige `libxml2`, solo lo oculta al escáner.
 > Hallazgos nuevos SEC-051, SEC-052 y SEC-054 (media) y SEC-053 (baja).
+> Revisión 2.10d, 2026-11-26 (Etapa 2, HU-01): entrega 2.10c de
+> infrastructure (commit `46458cb`): `apk upgrade` en db, imagen derivada
+> del proxy, comprobación de paquetes atrasados y registro de aprobadas, con
+> pruebas propias en Podman rootless (Trivy con BD nueva y sin excepciones,
+> `image diff` del proxy, 7 builds reales en un clon con almacén aislado, 22
+> mutaciones) (§6.12). **SEC-055 verificado**; SEC-052 3a/3b verificados,
+> con requisitos nuevos (e)–(h); SEC-056 ampliado (M11–M12). Ningún
+> crítico ni alto abierto que bloquee la puerta de la Etapa 2.
 > Entradas: `docs/historias/` (README + HU-01..HU-09, IDs estables `CA-`),
 > `docs/arquitectura.md`, `docs/decisiones/ADR-001..008`, `docs/ux/`,
 > `docs/infraestructura.md`, `compose.dev.yaml`, `compose.test.yaml`,
@@ -2040,6 +2048,203 @@ y el build compruebe que ningún paquete Alpine va por detrás de su rama. La
 corrección es pequeña (una tarea de infrastructure). Después, testing debe
 repetir `integration` y `e2e` con las imágenes resultantes (2.11).
 
+### 6.12 Revisión 2.10d (2026-11-26): SEC-055, proxy derivado y registro de aprobadas (commit `46458cb`)
+
+Entradas: commit `46458cb` (`deploy/db/Containerfile`, `deploy/db/construir.sh`,
+`deploy/proxy/Containerfile`, `deploy/proxy/construir.sh`,
+`deploy/app/construir.sh`, `deploy/scan/comprobar-excepciones.sh`,
+`deploy/dev/levantar.sh`, `compose.test.yaml`, `docs/infraestructura.md` §8,
+§8.2 y §14.1). Es el 3.er y último ciclo de retroceso de las imágenes de
+HU-01 (`docs/estado.md`): lo que sigue indica, para cada punto, si bloquea la
+puerta de la Etapa 2 o va antes de DEMO.
+
+**Pruebas propias (Podman 5.7.0 rootless, sin `sudo`).** Todas fuera del
+repositorio, en el scratchpad, con el directorio comprobado antes de cada
+comando: (1) inspección de las imágenes de infrastructure (db
+`sha256:99b42f80…`, proxy `sha256:db29498f…`, app `sha256:9be1188a…`) en
+contenedores endurecidos (UID 1000, `--cap-drop=ALL`, `no-new-privileges`,
+`--read-only`); (2) Trivy 0.76.2 (mismo digest `8f6bb947…`) con una caché
+nueva (BD `UpdatedAt` 2026-11-26 13:14 UTC), **sin excepciones y con todas las
+severidades**, sobre db, proxy, app y la base oficial de Caddy;
+(3) `podman image diff` y capas del proxy frente a `caddy@sha256:003a9780…`,
+`getcap`, `caddy version` y `caddy list-modules`; (4) arranque endurecido de db
+y proxy (*healthy*, `podman top`, `/proc/1/status`); (5) un **clon del commit
+`c39d1e9` y un almacén de Podman aislado** (`CONTAINERS_STORAGE_CONF` propio):
+así los builds de prueba no movieron las etiquetas fijas
+`localhost/mi-app-db:19.0-alpine3.24` ni `localhost/mi-app-proxy:2.11.9-alpine`
+de infrastructure ni tocaron su registro (`SCAN_DIR` propio). Allí, 7
+ejecuciones reales de `deploy/app/construir.sh` (T1–T6) y 2 de
+`deploy/proxy/construir.sh` con el `Containerfile` mutado; (6) 22 mutaciones de
+`comprobar-excepciones.sh` sobre copias del commit. Contenedores, imágenes,
+almacenes y clones de prueba borrados al terminar; las imágenes y el registro
+de infrastructure no se tocaron.
+
+**1. SEC-055: VERIFICADO.**
+
+| Comprobación | db `99b42f80…` | proxy `db29498f…` | Base oficial `caddy@003a9780…` (referencia) |
+|---|---|---|---|
+| `/etc/alpine-release` | 3.24.4 | 3.24.4 | 3.24.4 |
+| `zstd-libs` (y `zstd`) | 1.6.0-r1 (y 1.6.0-r1) | 1.6.0-r1 | 1.5.7-r2 |
+| `libxml2` / `libffi` | 2.13.9-r5 / 3.8.1-r0 | — | — |
+| `libssl3`/`libcrypto3`, `zlib` | 3.5.9-r1, 1.4-r0 | 3.5.9-r1, 1.4-r0 | 3.5.9-r0, 1.3.2-r1 |
+| `apk --no-cache version -l '<'` (UID 1000, raíz de solo lectura) | solo la cabecera, código 0 | solo la cabecera, código 0 | 4 atrasados (`libcrypto3`, `libssl3`, `zlib`, `zstd-libs`) |
+| `gosu`, `su-exec`, `sudo`; binarios *setuid*/*setgid* | no existen; ninguno | no existen; ninguno | — |
+| `Config.User` / `HEALTHCHECK` | `1000:1000` / `pg_isready` | `1000:1000` / en el compose (`wget` de busybox a `:9180`) | *(vacío = root)* / — |
+| Trivy, sin excepciones, todas las severidades | **0** (solo objetivo `alpine`) | `alpine`: **0**; `usr/bin/caddy`: las 2 altas de EXC-03 + 7 medias + 1 desconocida | `alpine`: 7 medias y 4 bajas; `caddy`: igual |
+| Arranque endurecido | *healthy*; `CapEff=0`, `NoNewPrivs=1`; `postgres` 19.0 enlaza `libzstd.so.1` 1.6.0 | *healthy* (`/health` 200); `CapEff=0`, `CapBnd=0`, `NoNewPrivs=1`; `:2019` cerrado | — |
+
+App `9be1188a…`: sin cambios (solo las 2 altas de EXC-01 en `libssl3t64`).
+`podman top` muestra HUSER = UID 1000 del host (los compose usan `keep-id`),
+nunca root. Un build mío desde un clon limpio del commit (T1) da las mismas
+versiones, el mismo `caddy` y Trivy OK en las tres. Las comprobaciones de
+paquetes atrasados están en los dos sitios que pedía SEC-055: en el `RUN` de
+cada `Containerfile` y otra vez en cada `construir.sh` sobre la imagen final,
+como UID 1000 y con fallo cerrado si `apk` no lee el índice.
+
+**2. Proxy derivado: correcto. EXC-03 sigue aplicando.**
+- *Binario idéntico:* sha256 de `/usr/bin/caddy` = `a563843e…` en la oficial,
+  en la derivada de infrastructure y en la mía. Las 5 capas de la base son las
+  mismas (mismos digests) y hay una sola capa nueva. `podman image diff` frente
+  a la base da 33 entradas, todas de `apk` (`libzstd`, `libz`, `libssl`,
+  `libcrypto`, `engines-3`, `ossl-modules`, `/lib/apk/db`, certificados y
+  `apk.log`), y **ninguna** en `/usr/bin/caddy`, `/etc/caddy`, `/config` ni
+  `/data`. Iguales también `caddy version` (`v2.11.9 h1:bhZtcRKQ…`), los 137
+  módulos, `getcap` (`cap_net_bind_service=p`, sin bit *effective*: SEC-009
+  sigue verificado), `Entrypoint`/`Cmd`, `Env` y `/etc/apk/world`. En el clon,
+  un `RUN cp /bin/busybox /usr/bin/caddy` lo **rechaza** `deploy/proxy/construir.sh`
+  (sha256 distinto, etiqueta `-rechazada`).
+- *De root a 1000:* es una mejora. La oficial no tiene `USER`, así que
+  corre como root si alguien la lanza sin `--user`. La derivada fija
+  `1000:1000`, y los compose ya fijaban `user: 1000:1000` y `keep-id`.
+  `/usr/bin/caddy` pertenece a 1001:1001 (de la oficial), así que el proceso
+  (UID 1000) no puede escribirlo, y además la raíz es de solo lectura. Sin
+  hallazgo.
+- *`curl`/`libcurl` 8.23.0-r0:* actualizados y sin avisos. Nada los ejecuta (el
+  healthcheck usa el `wget` de busybox, que también está). Quitar `curl` (§3.2,
+  "solo lo necesario") reduciría superficie y avisos futuros, pero
+  `comprobar-excepciones.sh` prohíbe ahora `apk del`. Lo acepto así. Si algún
+  día `curl` trae una alta sin corrección, se quita con un `apk del curl` literal
+  que el script permita de forma explícita. Sin hallazgo.
+- *EXC-03:* el binario es el mismo, tiene las mismas 2 altas (`go-jose/v3`
+  v3.0.5 sin corrección, `x/net` v0.60.0) y no hay ningún Caddy posterior
+  publicado: la última etiqueta de `docker.io/library/caddy` el 2026-11-26 sigue
+  siendo `2.11.9`/`2.11.9-alpine`. El Caddyfile no cambia. La condición "imagen
+  oficial por digest, sin módulos añadidos" pasa a ser "**derivada de la
+  oficial por digest, con `/usr/bin/caddy` idéntico (sha256) y la misma
+  configuración de arranque (`Entrypoint`/`Cmd`)**". La segunda mitad no la
+  comprueba nada hoy (punto 3, M11). Hoy se cumple: `podman history` de
+  `db29498f…` solo tiene el `RUN` de `apk upgrade`, dos `LABEL` y `USER`, y
+  `Cmd` es el oficial. EXC-03 **sigue vigente** hasta el 2026-12-26 o 7 días
+  después de un Caddy corregido. El comentario de
+  `deploy/scan/trivyignore-proxy.yaml:8-12` sigue diciendo "imagen oficial por
+  digest" y "PENDIENTE" (SEC-056 punto 7).
+
+**3. `comprobar-excepciones.sh`: las reglas nuevas funcionan, pero el
+`Containerfile` del proxy deja una vía nueva para esquivar EXC-03 (SEC-056,
+M11–M12).**
+
+Directas, todas **fallan** (código 1, mensaje claro): `COPY`, `ADD`, `apk add`
+(también con opciones delante), segundo `FROM`, `CADDY_BASE` de otro
+repositorio o sin digest, `FROM` literal, `RUN --mount`, `wget`, imagen oficial
+en el compose, sin `pull_policy: never`, `construir.sh` sin `SHA_OFICIAL`, sin
+`Containerfile`. Sin cambios pasa. Las 12 directas de la 2.10b siguen
+fallando (las reglas del Caddyfile y de los compose no han cambiado).
+
+Indirectas:
+
+| # | Mutación (sobre copias del commit) | `comprobar-excepciones.sh` | Resto del build | ¿Efecto real? |
+|---|---|---|---|---|
+| I01/I02 | `CMD ["caddy","run","--resume"]` o `ENTRYPOINT [...]` en `deploy/proxy/Containerfile` | pasa | pasa (no se comparan `Cmd`/`Entrypoint`) | sí: el compose no define `command`, así que manda el de la imagen |
+| **I07** | `RUN` que escribe `/usr/share/caddy/c.json` (`admin` en `0.0.0.0:2019`, *handler* `templates`) + `CMD ["caddy","run","--config","/usr/share/caddy/c.json"]` | pasa | **`deploy/proxy/construir.sh` la acepta** (sha256 = oficial, sin atrasados, USER 1000) | **sí, probado:** arrancada como en el compose (Caddyfile montado en `ro`, sin `command`), la API de administración responde en `:2019`, `templates` se ejecuta (`{{.RemoteIP}}` → `127.0.0.1`) y el Caddyfile montado se ignora. El healthcheck sigue en verde |
+| I03 | `ENV CADDY_TLS=…` en el `Containerfile` | pasa | — | no por sí sola: el `environment` del compose la sustituye |
+| I04 | `RUN cp /bin/busybox /usr/bin/caddy` | pasa | **rechaza** (sha256) | no |
+| I05 | `USER root` al final | pasa | **rechaza** (`Config.User`) | no |
+| I06 | neutralizar la comparación de sha256 en `deploy/proxy/construir.sh` y dejar las cadenas `sha256sum /usr/bin/caddy` y `SHA_OFICIAL` | pasa (solo hace `grep` de esas cadenas) | — | sí: con esto, I04 pasaría |
+| I08 | `image: localhost/mi-app-proxy:otra` en el compose | pasa (acepta cualquier etiqueta) | **rechaza** (`construir.sh` exige `PROXY_TAG` exacto) | no |
+
+Valoración: es la misma clase que SEC-056 (hace falta un cambio deliberado
+del propio repositorio, en un fichero que revisa Cybersecurity) y hoy la
+imagen cumple (punto 2). **Media, antes de DEMO; no bloquea la puerta de la
+Etapa 2.** Lo añado a SEC-056 como M11 (`CMD`/`ENTRYPOINT`/`ENV`/otras
+instrucciones en el `Containerfile`) y M12 (comprobación del script por
+`grep`). Es una vía nueva porque, con la imagen oficial, `Cmd` no era nuestro.
+La corrección buena está en la imagen, no en el texto: `deploy/proxy/construir.sh`
+debe comparar `podman image inspect` de la derivada con la base
+(`Entrypoint`, `Cmd`, `Env`, `WorkingDir`, `Volumes`, `ExposedPorts`,
+`StopSignal`, `OnBuild`, `Shell`, iguales; solo pueden cambiar `User` y `Labels`),
+y `comprobar-excepciones.sh` debe aceptar en el `Containerfile` solo una lista
+cerrada de instrucciones (`ARG CADDY_BASE`, `FROM ${CADDY_BASE}`, `USER root`,
+un `RUN`, `LABEL` y `USER 1000:1000`).
+
+**4. Registro de aprobadas (SEC-052 punto 3): 3a y 3b funcionan, probados de
+verdad, pero el registro sigue sin poder decir qué se aprobó.**
+
+Ejecuciones reales de `deploy/app/construir.sh` en el clon, con almacén y
+`SCAN_DIR` propios:
+
+| # | Árbol | Etiqueta | Resultado | Registro `aprobadas/` |
+|---|---|---|---|---|
+| T1 | limpio | `c39d1e97588f` | aprobada, `68641536…` | **se crea**, con `etiqueta`, `commit`, `app`, `db`, `proxy`, `excepciones_sha256=697830f3…` |
+| T2 | limpio, `PATH` sin `readelf`/`nm` | `c39d1e97588f` → `-rechazada` | rechazada, **mismo digest** `68641536…` (caché de Buildah) | **se borra** el de T1 → **3a VERIFICADO** |
+| T3 | fichero nuevo `apps/api/NOTA-sec210d.txt` | `c39d1e97588f-sucio` | aprobada, `9a04679d…`, "AVISO: imagen -sucio…" | no se crea → **3b VERIFICADO** |
+| T4 | solo cambios sin commit en `deploy/scan/comprobar-excepciones.sh` (`exit 0` al principio), `deploy/scan/trivyignore-proxy.yaml` (una excepción nueva no aprobada) y `compose.test.yaml` | `c39d1e97588f` (**sin `-sucio`**) | aprobada; la comprobación SEC-054 **no se ejecutó** (no aparece su línea) | **se reescribe** con `commit=c39d1e9…` y `excepciones_sha256=41cf15b1…`, que no es el del commit (`697830f3…`) |
+| T5 | `apps/api/` sucio, etiqueta propia `prueba210d` | `prueba210d` | aprobada, **el mismo digest `9a04679d…` que T3 marcó `-sucio`** | **se crea**, con `commit=c39d1e9…` |
+| T6 | igual que T3, con el registro de T5 presente | `c39d1e97588f-sucio` | aprobada, `9a04679d…` | **se borra** el de T5 → la rama `-sucio` también limpia, VERIFICADO |
+
+Esto confirma la observación de infrastructure, con más alcance:
+- *El registro `9be1188a…` de infrastructure (`commit=fb427fa`) no describe lo
+  que se aprobó.* Lo dio el build de la 2.10c con cambios sin commit en
+  `deploy/` y `compose.test.yaml`. Las tres imágenes llevan
+  `org.opencontainers.image.revision=fb427fa…`, y la del proxy se construyó
+  con un `deploy/proxy/Containerfile` que **no existe** en `fb427fa`
+  (`git cat-file -e fb427fa:deploy/proxy/Containerfile` → no existe). Además
+  `comprobar-excepciones.sh`, `deploy/db/Containerfile` y las comprobaciones
+  que se ejecutaron eran las del árbol, no las del commit. Ese registro **no
+  vale para la puerta**.
+- *La lista de `-sucio` es correcta para lo que pretende SEC-037* (el
+  contenido de la imagen de la app; T3 y T6 lo confirman), pero no para lo
+  que decide la aprobación: las comprobaciones, las excepciones, los compose,
+  el Caddyfile y los `Containerfile`/scripts de db y proxy. Y con una etiqueta
+  propia ni siquiera se calcula (T5). Por eso no amplío SEC-037 (sigue
+  verificado). Lo añado a **SEC-052 punto 3** como requisitos (e)–(h).
+- *Queda en el registro real un resto de antes de 3a:* `aprobadas/19d162e3…`
+  (la imagen `41b104074c43-sucio`, que tiene también la etiqueta
+  `-rechazada`, y sin `etiqueta`/`commit`). `rechazar()` no actúa hacia atrás.
+  Lo debe borrar infrastructure (yo no lo toco), y la comprobación debe
+  rechazar registros sin `etiqueta`/`commit`.
+- *Si Trivy rechaza db o proxy*, `rechazar()` solo renombra la app. Las
+  etiquetas fijas `localhost/mi-app-db:19.0-alpine3.24` y
+  `localhost/mi-app-proxy:2.11.9-alpine` se quedan en las imágenes rechazadas,
+  y los compose las usarían. Es la misma clase que el requisito (c) (comprobar
+  el digest actual contra `db=`/`proxy=` del registro), y lo añado ahí.
+
+Severidad: **media (la de SEC-052), no bloquea la puerta de la Etapa 2.** Hoy
+nada consulta el registro, así que con él no se acepta ninguna imagen. Lo que
+sí se pierde es la trazabilidad de la puerta. **Condición para la puerta**
+(procedimiento, 2.11): las imágenes con las que se ejecutan `containers`,
+`integration` y `e2e` se construyen con `sh deploy/app/construir.sh` **sin
+argumento**, desde el commit final y con `git status --porcelain` **vacío en
+todo el árbol** (o desde un clon limpio). Sus tres digests (app, db y proxy) y
+el contenido del registro se anotan en `docs/estado.md`. Plazo de los
+requisitos (e)–(h): antes de DEMO, a la vez que el punto 3. Si la 2.11 ya
+exige el registro en `tests/run.sh`, debe rechazar registros sin `etiqueta`
+igual al commit corto, sin `commit` o sin `arbol_limpio=si` (requisito (e)).
+
+**5. Resto del commit.** `deploy/dev/levantar.sh` construye el proxy si falta
+(sin escanear, como la db en DEV: solo DEV/TESTING locales, cubierto por el
+requisito (c) de SEC-052). `compose.test.yaml` usa la derivada con
+`pull_policy: never` (control positivo, como en db). `docs/infraestructura.md`
+§8, §8.2 y §14.1 describen bien lo hecho. El "probado con mutaciones" de §8.2
+no incluye las de §6.12 punto 3.
+
+**Altos o críticos en esta revisión:** **SEC-055 VERIFICADO**. Ninguno nuevo.
+SEC-050 sigue con riesgo aceptado (EXC-03, vigente con la imagen derivada y
+pendiente de ratificación humana). Lo nuevo es medio y va antes de DEMO:
+M11–M12 en SEC-056 y los requisitos (e)–(h) en SEC-052. **No queda ningún
+hallazgo crítico ni alto abierto que bloquee la puerta de la Etapa 2 para
+HU-01.** Sí queda la condición de procedimiento del punto 4 (imágenes desde
+el commit final y con el árbol limpio).
+
 ## 7. Requisitos de seguridad verificables (para Testing)
 
 Formato: requisito → cómo se verifica. Tipos: **U** unitario, **I**
@@ -2590,7 +2795,7 @@ SEC-049), que Trivy no ve en `alpine3.23` (SEC-051).
 - Responsable: infrastructure
 - Cómo corregir: usar la misma lista que `containerignore` (`apps packages package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc 'tsconfig*.json' tests/package.json`) y añadir `--ignored=matching` para detectar ignorados dentro de esas rutas que no excluye el containerignore (o marcar `-sucio` si `git ls-files --others --ignored --exclude-standard -- apps packages` devuelve algo fuera de `node_modules`/`dist`/`.env*`). Mantener que el script no acepta `--build-arg` (las bases solo cambian editando el digest en el Containerfile).
 - Cómo verificar: con un cambio sin commit en un `tsconfig*.json` de la raíz o en `tests/package.json` → etiqueta `<commit>-sucio`; sin cambios → `<commit>`.
-- Estado: verificado (2.9): en un clon, con cambios en `tsconfig*`, `tests/package.json`, ficheros nuevos en `apps/` o `packages/` y `.npmrc` en `apps/api/` → `-sucio`; árbol limpio → `<commit>`. **[Estado anterior]** abierto (baja, no bloquea) **[2.3]** Ocurrió en la práctica: la imagen usada en las suites de la 2.2 es `69e823f40ad7-sucio` (etiqueta `revision` = `69e823f`), construida antes del commit `4460e09` desde un árbol con cambios. La imagen que se use para la puerta debe reconstruirse desde el commit final y sin `-sucio`.
+- Estado: verificado (2.9). **[2.10d]** Sigue verificado en su alcance (el contenido de la imagen de la app: T3 y T6 de §6.12 dan `-sucio`). Que la lista no cubra `deploy/` ni los compose no lo reabre, porque eso no entra en la imagen de la app: es un problema del registro de aprobadas, y está en SEC-052 (e)–(g). Verificación de la 2.9: en un clon, con cambios en `tsconfig*`, `tests/package.json`, ficheros nuevos en `apps/` o `packages/` y `.npmrc` en `apps/api/` → `-sucio`; árbol limpio → `<commit>`. **[Estado anterior]** abierto (baja, no bloquea) **[2.3]** Ocurrió en la práctica: la imagen usada en las suites de la 2.2 es `69e823f40ad7-sucio` (etiqueta `revision` = `69e823f`), construida antes del commit `4460e09` desde un árbol con cambios. La imagen que se use para la puerta debe reconstruirse desde el commit final y sin `-sucio`.
 
 ## SEC-038: `verifyPin` no resiste peticiones simultáneas: se saltan el límite por IP y el bloqueo, y un acierto entra en una cuenta ya bloqueada
 - Severidad: alta
@@ -2707,7 +2912,7 @@ SEC-049), que Trivy no ve en `alpine3.23` (SEC-051).
 - Responsable: infrastructure
 - Cómo corregir: (1) actualizar, por digest, a la última versión 2.x de Caddy cuyo binario lleve `x/net` ≥ 0.62.0 (y `go-jose` corregido, si ya existe), en `compose.test.yaml` y `docs/infraestructura.md`, y repetir los e2e (cabeceras de RS-26, SSE sin búfer, CA interna); (2) para lo que siga sin corrección (`go-jose`), pedir a Cybersecurity una excepción fechada por `purl` y versión; se concedería si el Caddyfile sigue sin `acme_server`, con `admin off` y sin módulos que analicen JWK de clientes, con caducidad a los 30 días o al salir la corrección, lo que llegue antes.
 - Cómo verificar: Trivy sobre `podman save` del digest nuevo → 0 críticas/altas salvo las cubiertas por la excepción (*suppressed*); `sh tests/run.sh e2e` en verde.
-- Estado: abierto (**riesgo aceptado con EXC-03** — **[2.10b]** la condición SEC-054 para la puerta se cumple: `comprobar-excepciones.sh` en el build, verificado; las vías indirectas son SEC-056, antes de DEMO; el `zstd-libs` de la imagen del proxy no lo cubre EXC-03: SEC-055 —; hasta el 2026-12-26 o 7 días después de que salga un Caddy 2.x con `x/net` ≥ 0.62.0 y sin `go-jose/v3` vulnerable; no bloquea mientras se cumplan sus condiciones; **SEC-054 antes de la puerta de la Etapa 2**; ratificación humana pendiente). **[2.9]** No hay Caddy corregido publicado (v2.11.9 es la última; `master` ya lleva `x/net` v0.62.0 y no lleva `go-jose/v3`); `xcaddy` no hace falta (§6.10, punto 5). **[Estado anterior]** abierto (**alta, bloquea la puerta de la Etapa 2**)
+- Estado: abierto (**riesgo aceptado con EXC-03** — **[2.10d]** sigue vigente con la imagen derivada `localhost/mi-app-proxy` (SEC-055): `/usr/bin/caddy` idéntico al oficial (`a563843e…`), mismas 2 altas, ningún Caddy posterior a 2.11.9 publicado el 2026-11-26; condición reescrita: derivada de la oficial por digest, con binario idéntico y la misma configuración de arranque (`Cmd`/`Entrypoint`, que hoy se cumple y aún no se comprueba: SEC-056 M11) —; **[2.10b]** la condición SEC-054 para la puerta se cumple: `comprobar-excepciones.sh` en el build, verificado; las vías indirectas son SEC-056, antes de DEMO; el `zstd-libs` de la imagen del proxy no lo cubre EXC-03: SEC-055 —; hasta el 2026-12-26 o 7 días después de que salga un Caddy 2.x con `x/net` ≥ 0.62.0 y sin `go-jose/v3` vulnerable; no bloquea mientras se cumplan sus condiciones; **SEC-054 antes de la puerta de la Etapa 2**; ratificación humana pendiente). **[2.9]** No hay Caddy corregido publicado (v2.11.9 es la última; `master` ya lleva `x/net` v0.62.0 y no lleva `go-jose/v3`); `xcaddy` no hace falta (§6.10, punto 5). **[Estado anterior]** abierto (**alta, bloquea la puerta de la Etapa 2**)
 
 ## SEC-051: La variante `alpine3.23` de PostgreSQL oculta al escáner las CVE de `libxml2` que no ha portado
 - Severidad: media (la vulnerabilidad en sí cuenta en SEC-049, alta)
@@ -2726,7 +2931,7 @@ SEC-049), que Trivy no ve en `alpine3.23` (SEC-051).
 - Cómo corregir: (1) quitar la variable o aceptarla solo si es `docker.io/aquasec/trivy@sha256:<64 hex>`, y mostrar en la salida la imagen usada; (2) escanear `"$REPO@$DIGEST"`; (3) al aprobar, guardar un registro (`$SCAN_DIR/aprobadas/<digest>` con la fecha, los digests de db/proxy y el sha256 de los ficheros de excepciones), y que el despliegue de DEMO/PROD y `tests/run.sh` (al menos en la ejecución de la puerta) rechacen un `APP_IMAGE` sin registro o con un escaneo de más de 7 días.
 - Cómo verificar: `TRIVY_IMAGE=docker.io/library/alpine:3.24 sh deploy/app/construir.sh x` → falla; `APP_IMAGE=<digest sin registro> sh tests/run.sh containers` → falla con un mensaje claro; lo mismo en el despliegue de DEMO.
 - Plazo: (1) y (2) en la próxima entrega de infrastructure; (3) antes del despliegue de DEMO (Etapa 4).
-- Estado: abierto (media, no bloquea la puerta de la Etapa 2). **[2.10b]** (1) **verificado**: `escanear.sh:18-19` hace `unset TRIVY_IMAGE` y fija el digest; con `TRIVY_IMAGE=docker.io/library/alpine:3.24` escanea con `aquasec/trivy@sha256:8f6bb947…` y lo muestra. Resto bajo de la misma clase: `TRIVY_CACHE_DIR` (`escanear.sh:36`) sí se respeta, y esa caché tiene la BD de vulnerabilidades (una BD antigua o manipulada con `NextUpdate` futuro no se actualiza); el escaneo no muestra ni limita la antigüedad de la BD. Corrección: ignorar `TRIVY_CACHE_DIR` o aceptarla solo bajo `$XDG_CACHE_HOME`, mostrar `UpdatedAt` de la BD, rechazar si tiene más de 48 h y guardarla en el registro. (2) **verificado**: app por `"$REPO@$DIGEST"` (`construir.sh:183`) y db por el digest de su etiqueta (`:167-168`). (3) **pendiente, antes de DEMO** (recomendado ya en la 2.11 para la ejecución de la puerta). Requisitos además de los de arriba, a la vista del registro real de esta máquina (el único es el de `19d162e3…`, una imagen `-sucio` que tiene también la etiqueta `-rechazada`): (a) `rechazar()` borra `aprobadas/<digest>` si existe; (b) el registro incluye la etiqueta, el commit y el sha256 del Caddyfile y de los compose, y la comprobación rechaza `-sucio` y registros cuyo `excepciones_sha256` no coincida con los ficheros del commit; (c) `tests/run.sh` y el despliegue comprueban que el digest **actual** de `localhost/mi-app-db:19.0-alpine3.24` (y del proxy) es el `db=` del registro: hoy `sh deploy/db/construir.sh` (lo lanza `levantar.sh`) mueve la etiqueta a una imagen sin escanear; (d) `compose.demo.yaml` y Quadlet referencian db (y el proxy derivado de SEC-055) **por digest**, transportados sin reconstruir (§6.11 punto 2).
+- Estado: abierto (media, no bloquea la puerta de la Etapa 2). **[2.10d]** (3a) **verificado con builds reales**: rechazo del mismo digest (`68641536…`, caché de Buildah) → `aprobadas/<digest>` borrado. (3b) **verificado**: un árbol con un fichero nuevo en `apps/` da `-sucio`, no se registra y borra un registro previo del mismo digest. Requisitos nuevos de la misma clase (§6.12 punto 4), **antes de DEMO**: (e) el registro solo se escribe si `git status --porcelain --untracked-files=all` está vacío en **todo** el árbol, sea cual sea la etiqueta (hoy, con `sh deploy/app/construir.sh <etiqueta>`, no se mira: T5 registró como aprobado el mismo digest `9a04679d…` que T3 había marcado `-sucio`); se guarda `arbol_limpio=si` y el `tree` del commit (`git rev-parse HEAD^{tree}`), y la comprobación rechaza registros sin `etiqueta`, sin `commit` o sin `arbol_limpio=si`; (f) lo mismo vale para lo que decide la aprobación y no entra en la imagen de la app: `deploy/` entero (comprobaciones, excepciones, `Containerfile` y scripts de db y proxy), `compose.*.yaml` y el Caddyfile (T4: con `comprobar-excepciones.sh` anulado por un `exit 0` sin commit y una excepción nueva, la imagen salió sin `-sucio` y se registró con `commit=c39d1e9…` y un `excepciones_sha256` distinto del del commit); (g) `deploy/db/construir.sh` y `deploy/proxy/construir.sh` ponen en `org.opencontainers.image.revision` `<commit>-sucio` si sus entradas tienen cambios sin commit (hoy la imagen del proxy registrada `db29498f…` dice `fb427fa…`, un commit en el que `deploy/proxy/Containerfile` no existe); (h) infrastructure borra el registro restante `aprobadas/19d162e3…` (imagen `-sucio` y `-rechazada`, sin `etiqueta`/`commit`), y el de `9be1188a…` (`commit=fb427fa`) no se usa para la puerta. Dentro de (c): si Trivy rechaza db o proxy, sus etiquetas fijas deben pasar también a `-rechazada` (hoy solo se renombra la app y los compose usarían la imagen rechazada). **Condición para la puerta de la Etapa 2 (procedimiento, 2.11):** imágenes construidas con `sh deploy/app/construir.sh` sin argumento, desde el commit final y con el árbol limpio, y sus tres digests anotados en `docs/estado.md`. **[2.10b]** (1) **verificado**: `escanear.sh:18-19` hace `unset TRIVY_IMAGE` y fija el digest; con `TRIVY_IMAGE=docker.io/library/alpine:3.24` escanea con `aquasec/trivy@sha256:8f6bb947…` y lo muestra. Resto bajo de la misma clase: `TRIVY_CACHE_DIR` (`escanear.sh:36`) sí se respeta, y esa caché tiene la BD de vulnerabilidades (una BD antigua o manipulada con `NextUpdate` futuro no se actualiza); el escaneo no muestra ni limita la antigüedad de la BD. Corrección: ignorar `TRIVY_CACHE_DIR` o aceptarla solo bajo `$XDG_CACHE_HOME`, mostrar `UpdatedAt` de la BD, rechazar si tiene más de 48 h y guardarla en el registro. (2) **verificado**: app por `"$REPO@$DIGEST"` (`construir.sh:183`) y db por el digest de su etiqueta (`:167-168`). (3) **pendiente, antes de DEMO** (recomendado ya en la 2.11 para la ejecución de la puerta). Requisitos además de los de arriba, a la vista del registro real de esta máquina (el único es el de `19d162e3…`, una imagen `-sucio` que tiene también la etiqueta `-rechazada`): (a) `rechazar()` borra `aprobadas/<digest>` si existe; (b) el registro incluye la etiqueta, el commit y el sha256 del Caddyfile y de los compose, y la comprobación rechaza `-sucio` y registros cuyo `excepciones_sha256` no coincida con los ficheros del commit; (c) `tests/run.sh` y el despliegue comprueban que el digest **actual** de `localhost/mi-app-db:19.0-alpine3.24` (y del proxy) es el `db=` del registro: hoy `sh deploy/db/construir.sh` (lo lanza `levantar.sh`) mueve la etiqueta a una imagen sin escanear; (d) `compose.demo.yaml` y Quadlet referencian db (y el proxy derivado de SEC-055) **por digest**, transportados sin reconstruir (§6.11 punto 2).
 
 ## SEC-053: Comprobaciones del build que fallan abiertas, no se repiten o informan mal
 - Severidad: baja
@@ -2755,17 +2960,17 @@ SEC-049), que Trivy no ve en `alpine3.23` (SEC-051).
 - Cómo corregir: (1) db: en `deploy/db/Containerfile`, `apk upgrade --no-cache` de **todos** los paquetes (mantener la comprobación de `LIBXML2_MIN`). (2) proxy: imagen derivada mínima `FROM docker.io/library/caddy:2.11.9-alpine@sha256:003a9780…` con `apk upgrade --no-cache` (y, si se quiere, `apk del curl`: no se usa), sin tocar `/usr/bin/caddy`. El build debe comprobar que el sha256 de `/usr/bin/caddy` es el de la imagen oficial, para que la condición "sin módulos añadidos" de EXC-03 siga siendo cierta. Se referencia como la de db, y se adapta la regla de imagen de `comprobar-excepciones.sh` y de `construir.sh` (`imagen_de … caddy`). (3) Comprobación general en los dos scripts de build, sobre **cada** imagen Alpine desplegable: `podman run --rm --user 1000:1000 --cap-drop=ALL --security-opt=no-new-privileges --read-only --tmpfs /tmp --entrypoint sh <imagen> -c "apk --no-cache version -l '<'"`. Debe salir con código 0 y sin ninguna línea aparte de la cabecera `Installed: Available:`. Si no, rechazar. Que falle cerrado si `apk` no puede descargar el índice. (4) `docs/infraestructura.md` §8/§8.2: el 0 de Trivy en Alpine no prueba nada sin la comprobación (3); añadir la regla.
 - Cómo verificar: en db y proxy, `apk list -I zstd-libs` ≥ 1.6.0-r1 (y en db `libffi` ≥ 3.8.1-r0); la comprobación (3) solo imprime la cabecera; en un clon con `apk upgrade` quitado, el build rechaza la imagen; Trivy 0 sin excepción (proxy: solo las 2 de EXC-03); sha256 de `/usr/bin/caddy` igual al de la oficial; `sh tests/run.sh containers`, `integration` y `e2e` en verde con las imágenes nuevas.
 - Plazo: **antes de la puerta de la Etapa 2**.
-- Estado: abierto (**alta, bloquea la puerta de la Etapa 2**)
+- Estado: **verificado (2.10d)**: db `localhost/mi-app-db@sha256:99b42f80…` (`zstd`/`zstd-libs` 1.6.0-r1, `libffi` 3.8.1-r0, `libxml2` 2.13.9-r5) y proxy derivado `localhost/mi-app-proxy@sha256:db29498f…` (`deploy/proxy/`, base `caddy:2.11.9-alpine@sha256:003a9780…`, `zstd-libs` 1.6.0-r1): `apk --no-cache version -l '<'` como UID 1000 solo con la cabecera; la comprobación va en el `RUN` de los dos `Containerfile` y otra vez en `deploy/db/construir.sh` y `deploy/proxy/construir.sh`, con fallo cerrado; `/usr/bin/caddy` con el sha256 oficial `a563843e…` (5 capas de la base intactas, `image diff` solo con ficheros de `apk`; un `cp` sobre el binario lo rechaza el build); Trivy con BD nueva, sin excepciones y con todas las severidades: db 0, proxy `alpine` 0 (`caddy`: solo EXC-03); arranque endurecido *healthy* sin root; build propio desde un clon limpio, igual (§6.12 puntos 1 y 2). **[Estado anterior]** abierto (**alta, bloquea la puerta de la Etapa 2**)
 
 ## SEC-056: `comprobar-excepciones.sh` se puede esquivar por el entorno, por el nombre del servicio, con anclas YAML o montando `/etc`
 - Severidad: media
-- Ubicación: deploy/scan/comprobar-excepciones.sh:28-46 (Caddyfile como texto: `admin off` en cualquier sitio; `import` comparado como regex), :49-71 (solo el servicio llamado exactamente `proxy`, leído como texto con 2 espacios de sangría; sin `environment`/`env_file`; montajes filtrados por `/etc/caddy|Caddyfile`), :73-78 (Quadlet: solo `Exec=`/`Entrypoint=`); deploy/scan/trivyignore-proxy.yaml:10 (comentario "PENDIENTE" desfasado)
-- Descripción: las mutaciones directas fallan como deben (§6.11 punto 3), pero estas pasan con código 0: otro servicio con la imagen de Caddy y su propio `--config` (M1); renombrar `proxy` (M2); `command` en un ancla YAML (M6); montar `./otro:/etc:ro` (M5); `Volume=` de otro Caddyfile en Quadlet (M8); `env_file` (M9). Y, probado con `caddy adapt` sobre Caddy 2.11.9: (M3) un valor de `CADDY_TLS` (o `SITE_ADDRESS`) con saltos de línea en el `environment` del proxy añade los *handlers* `templates` y `acme_server` **sin tocar el Caddyfile**, porque Caddy sustituye `{$VAR}` antes de analizar el fichero; (M4) con `admin off` dentro de un snippet que no se importa, en lugar de en las opciones globales, la API de administración queda activa. Con eso, EXC-03 seguiría ocultando las dos altas de Caddy con su condición incumplida. Hace falta un cambio deliberado del compose o del entorno, y hoy la configuración cumple, así que no bloquea la puerta de la Etapa 2. Pero la excepción se apoya en este control, y DEMO/PROD (otro compose, Quadlet, ficheros de entorno) son justo donde aparecerán estas variantes.
+- Ubicación: deploy/scan/comprobar-excepciones.sh:28-46 (Caddyfile como texto: `admin off` en cualquier sitio; `import` comparado como regex), :49-71 (solo el servicio llamado exactamente `proxy`, leído como texto con 2 espacios de sangría; sin `environment`/`env_file`; montajes filtrados por `/etc/caddy|Caddyfile`), :73-78 (Quadlet: solo `Exec=`/`Entrypoint=`); deploy/scan/trivyignore-proxy.yaml:8-12 (comentarios "imagen oficial por digest" y "PENDIENTE" desfasados); **[2.10d]** deploy/scan/comprobar-excepciones.sh:51-69 (`Containerfile` del proxy: lista de prohibidos, sin `CMD`/`ENTRYPOINT`/`ENV`; `construir.sh` comprobado con `grep`), deploy/proxy/construir.sh:55-61 (no compara `Cmd`/`Entrypoint` con la base)
+- Descripción: las mutaciones directas fallan como deben (§6.11 punto 3), pero estas pasan con código 0: otro servicio con la imagen de Caddy y su propio `--config` (M1); renombrar `proxy` (M2); `command` en un ancla YAML (M6); montar `./otro:/etc:ro` (M5); `Volume=` de otro Caddyfile en Quadlet (M8); `env_file` (M9). Y, probado con `caddy adapt` sobre Caddy 2.11.9: (M3) un valor de `CADDY_TLS` (o `SITE_ADDRESS`) con saltos de línea en el `environment` del proxy añade los *handlers* `templates` y `acme_server` **sin tocar el Caddyfile**, porque Caddy sustituye `{$VAR}` antes de analizar el fichero; (M4) con `admin off` dentro de un snippet que no se importa, en lugar de en las opciones globales, la API de administración queda activa. Con eso, EXC-03 seguiría ocultando las dos altas de Caddy con su condición incumplida. Hace falta un cambio deliberado del compose o del entorno, y hoy la configuración cumple, así que no bloquea la puerta de la Etapa 2. Pero la excepción se apoya en este control, y DEMO/PROD (otro compose, Quadlet, ficheros de entorno) son justo donde aparecerán estas variantes. **[2.10d]** Con la imagen derivada del proxy (SEC-055) aparece una vía más, porque ahora `Cmd` es nuestro: (M11) un `CMD`/`ENTRYPOINT` en `deploy/proxy/Containerfile` pasa `comprobar-excepciones.sh` y `deploy/proxy/construir.sh`; **probado** con un `RUN` que escribe un JSON (`admin` en `0.0.0.0:2019`, *handler* `templates`) y `CMD ["caddy","run","--config",…]`: arrancada como en el compose, con el Caddyfile montado, la API de administración responde en `:2019`, `templates` se ejecuta y el Caddyfile se ignora (healthcheck en verde). (M12) la exigencia de que `deploy/proxy/construir.sh` compare el sha256 es un `grep` de `sha256sum /usr/bin/caddy` y `SHA_OFICIAL`: se puede neutralizar la comparación dejando las cadenas. Hoy la imagen cumple (`Cmd` oficial; §6.12 punto 2).
 - Responsable: infrastructure
-- Cómo corregir: (1) comprobar la **configuración efectiva**: ejecutar `caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile` en un contenedor endurecido (imagen del proxy por digest, `--network none`, `--read-only`, UID 1000) con el Caddyfile y las variables de entorno **resueltas** de cada compose/Quadlet, y fallar si el JSON no tiene `admin.disabled=true` o contiene los *handlers* `templates`, `acme_server` o `markdown`, o la app `pki` con autoridades distintas de `local`. Se mantienen las comprobaciones de texto. (2) Leer los compose resueltos (`podman-compose -f <f> config` con todos los perfiles: resuelve anclas y `<<`), no el texto. Aplicar las reglas a **todo** servicio que use una imagen de Caddy o monte algo en `/etc`, `/etc/caddy`, `/config` o `/data`, y exigir que solo haya uno y que se llame `proxy`. (3) `environment` del proxy: solo las claves conocidas, con valores sin saltos de línea, `{`, `}` ni comillas (`SITE_ADDRESS` `^[a-z0-9.-]+(, ?[a-z0-9.-]+)*$`, `CADDY_TLS` `internal` o un correo, `PUBLIC_HTTPS_SUFFIX` vacío o `:[0-9]{2,5}`), y prohibir `env_file`. (4) Montajes: rechazar cualquier destino que sea `/etc` o un directorio que contenga `/etc/caddy`. (5) `import`: comparación literal con los nombres de snippet (`grep -F -x` o `awk`). (6) Quadlet: las mismas reglas sobre `Image=`, `Volume=`, `Environment=`, `EnvironmentFile=` y `Exec=`, cuando exista. (7) Corregir el comentario de `trivyignore-proxy.yaml:10`.
-- Cómo verificar: las 10 mutaciones M1–M10 de §6.11 (en copias fuera del repositorio) fallan, salvo M10, que la cubre el escaneo; las 12 directas siguen fallando; sin cambios pasa.
+- Cómo corregir: (1) comprobar la **configuración efectiva**: ejecutar `caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile` en un contenedor endurecido (imagen del proxy por digest, `--network none`, `--read-only`, UID 1000) con el Caddyfile y las variables de entorno **resueltas** de cada compose/Quadlet, y fallar si el JSON no tiene `admin.disabled=true` o contiene los *handlers* `templates`, `acme_server` o `markdown`, o la app `pki` con autoridades distintas de `local`. Se mantienen las comprobaciones de texto. (2) Leer los compose resueltos (`podman-compose -f <f> config` con todos los perfiles: resuelve anclas y `<<`), no el texto. Aplicar las reglas a **todo** servicio que use una imagen de Caddy o monte algo en `/etc`, `/etc/caddy`, `/config` o `/data`, y exigir que solo haya uno y que se llame `proxy`. (3) `environment` del proxy: solo las claves conocidas, con valores sin saltos de línea, `{`, `}` ni comillas (`SITE_ADDRESS` `^[a-z0-9.-]+(, ?[a-z0-9.-]+)*$`, `CADDY_TLS` `internal` o un correo, `PUBLIC_HTTPS_SUFFIX` vacío o `:[0-9]{2,5}`), y prohibir `env_file`. (4) Montajes: rechazar cualquier destino que sea `/etc` o un directorio que contenga `/etc/caddy`. (5) `import`: comparación literal con los nombres de snippet (`grep -F -x` o `awk`). (6) Quadlet: las mismas reglas sobre `Image=`, `Volume=`, `Environment=`, `EnvironmentFile=` y `Exec=`, cuando exista. (7) Corregir los comentarios de `trivyignore-proxy.yaml:8-12` (condición: derivada de la oficial por digest, con `/usr/bin/caddy` idéntico y la misma configuración de arranque; la comprobación ya existe). (8) **[2.10d]** En `deploy/proxy/construir.sh`, comparar `podman image inspect` de la derivada con la base: `Entrypoint`, `Cmd`, `Env`, `WorkingDir`, `Volumes`, `ExposedPorts`, `StopSignal`, `OnBuild` y `Shell` iguales (solo pueden cambiar `User` y `Labels`), y rechazar si no. (9) En `comprobar-excepciones.sh`, aceptar en `deploy/proxy/Containerfile` solo una lista cerrada (`ARG CADDY_BASE=…`, `FROM ${CADDY_BASE}`, `USER root`, un único `RUN`, `LABEL`, `USER 1000:1000`) en lugar de una lista de prohibidos, y quitar la comprobación por `grep` de `construir.sh` (la sustituye (8), que se ejecuta sobre la imagen real).
+- Cómo verificar: las 10 mutaciones M1–M10 de §6.11 (en copias fuera del repositorio) fallan, salvo M10, que la cubre el escaneo; las 12 directas siguen fallando; sin cambios pasa. **[2.10d]** Además, en un clon y un almacén aislado, I01/I02/I07 de §6.12 (`CMD`/`ENTRYPOINT` en el `Containerfile`) fallan en `comprobar-excepciones.sh` o en `deploy/proxy/construir.sh`, y I06 (comparación neutralizada) ya no es posible con (8).
 - Plazo: antes de crear `compose.demo.yaml` o Quadlet (Etapa 4). Hasta entonces, Cybersecurity revisa en cada entrega el servicio `proxy`, su entorno y el Caddyfile (hoy cumplen: `caddy adapt` da `admin.disabled=true`, sin `templates` ni `acme_server`).
-- Estado: abierto (media, no bloquea la puerta de la Etapa 2)
+- Estado: abierto (media, no bloquea la puerta de la Etapa 2). **[2.10d]** Sin cambios en M1–M10. Ampliado con M11–M12 (vía nueva por el `Containerfile` del proxy derivado, probada; §6.12 punto 3). Las 14 mutaciones directas nuevas del `Containerfile` y del compose fallan. Plazo igual: antes de `compose.demo.yaml`/Quadlet. Hasta entonces, Cybersecurity revisa también `deploy/proxy/Containerfile` y `podman image inspect` del proxy en cada entrega
 
 ## SEC-057: Trivy no analiza los binarios que no vienen de un paquete (PostgreSQL en db, Node en la distroless)
 - Severidad: baja
@@ -2778,7 +2983,61 @@ SEC-049), que Trivy no ve en `alpine3.23` (SEC-051).
 
 ---
 
-### Resumen de la revisión 2.10b (Etapa 2, HU-01, 2026-11-26)
+### Resumen de la revisión 2.10d (Etapa 2, HU-01, 2026-11-26)
+- **SEC-055 (alta): VERIFICADO.** db `localhost/mi-app-db@sha256:99b42f80…` y
+  proxy `localhost/mi-app-proxy@sha256:db29498f…`: Alpine 3.24.4,
+  `zstd-libs` 1.6.0-r1 (db también `zstd` 1.6.0-r1, `libffi` 3.8.1-r0,
+  `libxml2` 2.13.9-r5), `apk --no-cache version -l '<'` solo con la cabecera,
+  sin `gosu` ni *setuid*, `USER 1000:1000`. Trivy, con BD nueva, sin
+  excepciones y con todas las severidades: db 0; proxy `alpine` 0 y solo las 2
+  altas de EXC-03 en `caddy`; app solo EXC-01. Arrancan *healthy*
+  endurecidas, sin root en el host. La comprobación de atrasados está en el
+  build de las dos imágenes y vuelve a ejecutarse sobre la imagen final.
+- **Proxy derivado: correcto.** `/usr/bin/caddy` idéntico al oficial
+  (`a563843e…`), las 5 capas de la base intactas, `image diff` solo con
+  ficheros de `apk`, mismos módulos, `getcap` y `Cmd`. Pasar de root a 1000 es
+  una mejora. `curl` queda (actualizado y sin uso): aceptado. **EXC-03 sigue
+  aplicando** (no hay Caddy posterior a 2.11.9), con la condición reescrita:
+  derivada con binario idéntico y la misma configuración de arranque.
+- **SEC-052 (media), punto 3:** (a) `rechazar()` borra el registro y (b)
+  `-sucio` no se registra (y borra uno previo): **VERIFICADOS con builds
+  reales** (mismo digest por caché). Pero el registro aún no dice qué se
+  aprobó. Con una etiqueta propia se registra un árbol sucio (T5). Cambios sin
+  commit en comprobaciones, excepciones o compose se registran como el commit
+  limpio (T4, con `comprobar-excepciones.sh` anulado). El registro `9be1188a…`
+  de infrastructure (`commit=fb427fa`) se hizo con un `deploy/proxy/Containerfile`
+  que no existe en ese commit, y queda el resto `19d162e3…`. Requisitos nuevos
+  (e)–(h) en SEC-052. **No amplía SEC-037**, que sigue verificado. **No bloquea;
+  antes de DEMO.**
+- **SEC-056 (media), ampliado con M11–M12:** un `CMD`/`ENTRYPOINT` en
+  `deploy/proxy/Containerfile` pasa `comprobar-excepciones.sh` y
+  `deploy/proxy/construir.sh`. **Probado:** el proxy arranca con la API de
+  administración en `0.0.0.0:2019` y `templates` activo, e ignora el Caddyfile
+  montado. La comprobación de sha256 del script se valida con un `grep`. Hoy la
+  imagen cumple. **No bloquea; antes de DEMO.**
+- **Altos o críticos abiertos que bloqueen la puerta de la Etapa 2 para HU-01:
+  ninguno.** Riesgo aceptado: SEC-050 (EXC-03) y SEC-033 (EXC-01, baja).
+  Abiertos que no bloquean: SEC-003 (media), SEC-052 y SEC-056 (media),
+  SEC-025, SEC-043, SEC-046, SEC-047 y SEC-057 (baja).
+- **Condición de procedimiento para la puerta (2.11):** construir con `sh
+  deploy/app/construir.sh` sin argumento, desde el commit final y con `git
+  status --porcelain` vacío en todo el árbol (o desde un clon limpio). Repetir
+  `containers`, `integration` y `e2e` con esas imágenes y anotar en
+  `docs/estado.md` los digests de app, db y proxy. Las imágenes y el registro
+  actuales (`9be1188a…`, `commit=fb427fa`) **no valen para la puerta**.
+- **El humano debe ratificar en la puerta:** **EXC-01** (app, `libssl3t64`
+  CVE-2026-107494 y CVE-2026-124709, QUIC no alcanzable; hasta el 2026-12-24,
+  revisión el 2026-12-08) y **EXC-03** (proxy, `go-jose/v3` CVE-2026-116587 y
+  `x/net` CVE-2026-78661; hasta el 2026-12-26 o 7 días después de un Caddy
+  corregido; ahora sobre la imagen derivada con binario idéntico). Además,
+  conviene que dé por buenas dos condiciones de la 2.10b/2.10d: la puerta se
+  aprueba con digests concretos de las tres imágenes, y DEMO/PROD reciben esas
+  mismas imágenes por digest, sin reconstruir.
+- Contenedores: ninguno corre como root, usa `--privileged` ni monta el socket
+  o la red del host. Todas las pruebas se hicieron en Podman rootless, fuera del
+  repositorio, con almacenes de imágenes aislados.
+
+### Resumen de la revisión 2.10b (Etapa 2, HU-01, 2026-11-26; histórico, sustituido por el de 2.10d)
 - **SEC-049 (alta): VERIFICADO.** La imagen derivada
   `localhost/mi-app-db:19.0-alpine3.24` (`sha256:b5bd1672…`, base
   `postgres:19.0-alpine3.24@sha256:8e81a484…`) trae Alpine 3.24.4 y `libxml2`
