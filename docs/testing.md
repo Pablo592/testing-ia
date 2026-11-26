@@ -1023,6 +1023,17 @@ navegador solo visita la app bajo prueba). En ningún caso `--privileged` ni
 
 Siempre `podman-compose`; nunca `podman compose`, `docker compose` ni `sudo`.
 
+**Ajustes de la 2.2b (D-2.2-01..03, SEC-044).** Vitest **4.1.12** exacto con
+`--configLoader runner` (sigue haciendo falta: sin él escribe en
+`tests/node_modules/.vite-temp`, montado `ro`); Playwright se lanza con
+`node tests/node_modules/@playwright/test/cli.js` (sin `npx`, el ejecutor no
+tiene red) y 3 *workers* por defecto (`E2E_WORKERS`); `PLAYWRIGHT_IMAGE` y
+`TOXIPROXY_IMAGE` tienen un digest verificado por defecto en `run.sh`; las
+suites `unit`, `integration`, `security`, `e2e`, `a11y` y `visual` aceptan un
+filtro (`sh tests/run.sh integration integration/api/HU-01-login`) y cada parte
+de e2e (normales, `serie-pin`, `serie-red`) escribe en sus propios
+artefactos, JUnit e informe HTML.
+
 ### 7.4 Orden dentro de una ejecución completa
 
 `containers` (falla rápido si la pila incumple la política) → `unit` →
@@ -1291,7 +1302,7 @@ arquitectura (§2.1, §5, §7, §10.1). `sh tests/run.sh trazabilidad`: 23/23.
 | `unit/shared/permisos.unit.test.ts` | U | CA-F01, CA-F02, CA-F03, CA-N02 (RS-18, T-18) |
 | `unit/shared/bloqueo.unit.test.ts` | U | CA-F06 (RS-03, I-01) |
 | `unit/shared/minutos-restantes.unit.test.ts` | U | CA-F06, CA-F11, CA-F12 (I-03) |
-| `unit/api/config.unit.test.ts` (2.1e) | U | CA-N06 (RS-13: `SESSION_MAX_HOURS` 1–12, por defecto 12; resto de variables de §10.1) |
+| `unit/api/config.unit.test.ts` (2.1e, 2.2b) | U | CA-N06 (RS-13: `SESSION_MAX_HOURS` 1–12, por defecto 12; resto de variables de §10.1); `TRUSTED_PROXIES` (SEC-029) con los casos de SEC-045: `" "`, espacio final, `[::1]`, `::/119`, `::ffff:10.0.0.0/104` y `::ffff:10.89.240.0/120` aceptado |
 | `unit/web/pin-mensajes.unit.test.ts` (2.1e) | U | CA-N01 (tabla `PinRule` → texto total, con `digits_only` y regla desconocida; import pendiente de T-42) |
 | `integration/api/HU-01-login.int.test.ts` | I | CA-F01..F03 (`/auth/me`, permisos y `localConfig`), CA-F05 (RS-07), CA-F07, CA-F08 (RS-10, RS-11, RS-14), CA-N01 (RS-08, RS-31), CA-U01 (rejilla), RS-24 |
 | `integration/api/HU-01-bloqueo.int.test.ts` | I (FakeClock) | CA-F06 (25 intentos, RS-03), CA-N05 (eventos y métricas, RS-30, RS-47) |
@@ -1301,6 +1312,11 @@ arquitectura (§2.1, §5, §7, §10.1). `sh tests/run.sh trazabilidad`: 23/23.
 | `integration/realtime/HU-01-revocacion.int.test.ts` | R | CA-F08 (RS-14) |
 | `integration/api/HU-01-encargado-inicial.int.test.ts` | I (BD aislada) | Encargado inicial (RS-09), CA-F06 con `unlock-user` (RS-09b) |
 | `integration/api/HU-01-logs.int.test.ts` | I | CA-N01 (RS-29, TX-LOG-02 parcial), RS-30 |
+| `integration/api/HU-01-concurrencia.int.test.ts` (2.2b) | I (BD por fichero, ráfagas con `Promise.all`, hasher espía) | CA-F11, CA-F06, CA-F13 (RS-05b, SEC-038). **4 tests que fallan a propósito hasta la tarea 2.5** (`tests/README.md`) |
+| `integration/api/HU-01-dispositivo.int.test.ts` (2.2b, SEC-029) | I | + `buildApp` con `trustedProxies` inválido (`['uniquelocal']`, `loopback`, `true`, CIDR cortos, espacios, 5 elementos) → `ConfigError('trustedProxies')`; válidos arrancan |
+| `security/estatico.sec.test.ts` + `support/estatico.ts` (2.2b) | S (estático, sin BD) | CA-F06 (RS-16c), CA-F01 (RS-25), CA-F05 (RS-35); con fragmentos sintéticos que demuestran que cada detector detecta el defecto |
+| `e2e/HU-01-csp.e2e.ts` + `support/e2e/base.ts` (2.2b) | E | CA-F01 (RS-26 E): la CSP llega; sin violaciones en el recorrido; el vigilante detecta una violación provocada. Todos los `*.e2e.ts` usan el `test` de `base.ts` (falla con cualquier violación) |
+| `e2e/HU-01-sec032-retraso.e2e.ts` (2.2b) | E | CA-F09, CA-F08 (SEC-032: respuesta del latido y reconexión SSE retrasadas 3 s con login nuevo en medio) |
 | `integration/api/HU-01-autoria.int.test.ts` | I | CA-F10 (se ejecuta al entrar HU-02 y HU-04 en el alcance) |
 | `security/matriz-autorizacion.sec.test.ts` | S | CA-F04, CA-N02 (RS-15, RS-17, RS-18; filas de HU-02..HU-08 según alcance) |
 | `e2e/HU-01-iniciar-sesion.e2e.ts` | E | CA-F01..F04 ("Acceso denegado" con textos, foco, título y enlace; pantallas vacías; `403 FORBIDDEN` de la API, activo con HU-02), CA-F06, CA-F07, CA-F08 (sin banner tras logout), CA-F09 (banner por `reason: idle` al recargar), CA-F11 (presentación del `429`), CA-N01, CA-N06, CA-U01, CA-U04 |
@@ -1606,12 +1622,29 @@ captura o traza de Playwright), **agente responsable**.
 | — | 1 | — | — | Sin ejecuciones: aún no hay código ni `compose.test.yaml` | — | — |
 | 2026-11-24 | 2 (tarea 2.1e) | `trazabilidad` (`tests/run.sh`, `runner-unit` sin red) | `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:91651731…` / commit `4fafff8` + cambios sin commit de la 2.1e | **Pasa**: HU-01 23/23; sin IDs inexistentes ni retirados | — | Además, análisis de sintaxis de los 50 ficheros `.ts`/`.js` de `tests/` con `node --experimental-strip-types --check` en un contenedor sin red, UID 1000, `--read-only`, `cap-drop ALL` (sin cargar dependencias): sin errores (un falso positivo de `--check` en `support/e2e/red.ts`, que no tiene `import`; cargado como módulo ESM, correcto). Integración, seguridad y E2E siguen sin poder ejecutarse: no hay código ni `APP_IMAGE` (tarea 2.2) |
 | 2026-11-24 | 2 (tarea 2.1) | `trazabilidad` (`tests/run.sh`, `runner-unit` sin red) | `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:91651731…` / commit `9f87021` | **Pasa**: HU-01 23/23 criterios con test o verificación manual; sin IDs inexistentes ni retirados | — | `run.sh` probado de extremo a extremo (secretos en `$XDG_RUNTIME_DIR`, `trap` con `down -v`, `comprobar_enlaces` antes y después). El resto de suites no se puede ejecutar: no existe la imagen de la app (`APP_IMAGE`) ni el código (tarea 2.2); fallarán por diseño hasta entonces |
+| 2026-11-25 | 2 (tarea 2.2b) | `unit` (`tests/run.sh`) | `APP_IMAGE` = `localhost/mi-app@sha256:c87636f1…` (commit `3bbdeff`, imagen limpia) / `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:91651731…` / Vitest 4.1.12 | **Pasa**: 6 ficheros, 177/177 | — | Antes 171; +6 casos de SEC-029 (SEC-045 b). `--configLoader runner` sigue haciendo falta con Vitest 4.1.12. |
+| 2026-11-25 | 2 (tarea 2.2b) | `security` (`tests/run.sh`) | `APP_IMAGE` = `localhost/mi-app@sha256:c87636f1…` (commit `3bbdeff`, imagen limpia) / `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:91651731…` / Vitest 4.1.12 | **Pasa**: 73 pasan (39 de la matriz + 34 del estático RS-16c/RS-25/RS-35), 241 omitidos por alcance (filas de HU-02..HU-08) | — | El código actual no tiene ningún hallazgo estático. |
+| 2026-11-25 | 2 (tarea 2.2b) | `integration` (incluye el proyecto `security`) | `APP_IMAGE` = `localhost/mi-app@sha256:c87636f1…` (commit `3bbdeff`, imagen limpia) / `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:91651731…` / Vitest 4.1.12 | **Falla a propósito**: 250 pasan, **4 fallan** (RS-05b / SEC-038, `HU-01-concurrencia.int.test.ts`), 244 omitidos (241 de la matriz por alcance, 2 de `autoria`, 1 de `sesion`) | — | D-2.2-04 y D-2.2-05 corregidos (errores del test). Intermitencia T-44 (BD de fichero / comando) vista en 2 de 2 ejecuciones completas antes del reintento de `borrarBd`; 0 de 1 después. |
+| 2026-11-25 | 2 (tarea 2.2b) | `e2e` (estricto, con CSP) | `APP_IMAGE` = `localhost/mi-app@sha256:c87636f1…` (commit `3bbdeff`, imagen limpia) / `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:91651731…` / Vitest 4.1.12 / Playwright v1.65.1-noble por digest, 3 *workers* | **Falla**: 4 pasan, 72 fallan (70 normales, `serie-pin` 1 + 4 sin ejecutar, `serie-red` 1), 2 omitidos hasta HU-02. **Todos por una sola causa**: violación de CSP `script-src` bloqueó `eval` en cada carga (T-45) | — | Diagnóstico (el vigilante de CSP solo anota; no es el modo por defecto): 70 pasan y 2 omitidos en las partes normales, `serie-pin` 5/5 y `serie-red` 1/1; el único resto son los 2 tests de CSP y el de "por URL" con su propio vigilante (CSP, ×2 navegadores). SEC-032 con respuesta retrasada: pasa en Chromium y WebKit. |
+| 2026-11-25 | 2 (tarea 2.2b) | `a11y` | `APP_IMAGE` = `localhost/mi-app@sha256:c87636f1…` (commit `3bbdeff`, imagen limpia) / `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:91651731…` / Vitest 4.1.12 | **Intermitente**: 7/7 en 2 de 4 ejecuciones; en las otras 2 falla 1 o 2 tests por página en blanco (T-46) | — | Sin violaciones de axe en ninguna. |
+| 2026-11-25 | 2 (tarea 2.2b) | `visual` | `APP_IMAGE` = `localhost/mi-app@sha256:c87636f1…` (commit `3bbdeff`, imagen limpia) / `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:91651731…` / Vitest 4.1.12 | **Pasa**: 11/11 | — | Capturas regeneradas en `tests/screenshots/HU-01/`. |
+| 2026-11-25 | 2 (tarea 2.2b) | `containers` | `APP_IMAGE` = `localhost/mi-app@sha256:c87636f1…` (commit `3bbdeff`, imagen limpia) / `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:91651731…` / Vitest 4.1.12 | **Pasa**: TX-CONT-01 y TX-CMD-01 | — | — |
+| 2026-11-25 | 2 (tarea 2.2b) | `trazabilidad` | `APP_IMAGE` = `localhost/mi-app@sha256:c87636f1…` (commit `3bbdeff`, imagen limpia) / `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:91651731…` / Vitest 4.1.12 | **Pasa**: HU-01 23/23 | — | — |
+| 2026-11-25 | 2 (tarea 2.2b) | `perf` (control rápido, 3 rondas) | `APP_IMAGE` = `localhost/mi-app@sha256:c87636f1…` (commit `3bbdeff`, imagen limpia) / `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:91651731…` / Vitest 4.1.12 / k6 `docker.io/grafana/k6@sha256:70949fac…` (v2.4.0) | **Pasa**: 30/30 comprobaciones; login p95 = 175 ms (límite 1000 ms, HU-01/CA-N03) | — | Dos errores del propio test corregidos: `URL` no existe en k6 y la CA de la ejecución se pasaba con `k6 run -e` (solo `__ENV`) en vez de `SSL_CERT_FILE` del proceso. |
 
 ## 13. Fallos abiertos
 
+Estado tras la tarea 2.2b (2026-11-25). Cada fila: test, resultado esperado,
+resultado obtenido y agente responsable.
+
 | Test | Esperado | Obtenido | Responsable | Estado |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| `integration/api/HU-01-concurrencia.int.test.ts` › 50 logins simultáneos desde una IP con PIN erróneo (RS-05b, CA-F11) | ≤ 10 llamadas al hasher; el resto `429` | 50 verificaciones, 50 × `401`, ningún `429` | developer (SEC-038, tarea 2.5) | **Falla a propósito** (SEC-038 abierto, alta) |
+| ídem › 50 logins simultáneos contra una cuenta desde IP distintas (CA-F06) | ≤ 5 llamadas al hasher; el resto `423`; `failed_attempts` ≤ 5 | 50 × `401` | developer (SEC-038) | **Falla a propósito** |
+| ídem › ráfaga a `locked_manual` con el PIN correcto al final (CA-F13) | ese intento `423`, 0 sesiones sin revocar | `200` con cookie de sesión en una cuenta bloqueada de forma indefinida | developer (SEC-038) | **Falla a propósito** |
+| ídem › misma ráfaga con `currentPin` en `POST /auth/pin` (CA-F13) | `423`/`401`, `pin_hash` sin cambios | `204`: el PIN provisional se cambia en una cuenta bloqueada | developer (SEC-038) | **Falla a propósito** |
+| Todos los `e2e/*.e2e.ts` (72 de 80 ejecutados, en los dos navegadores) y `HU-01-csp.e2e.ts` › recorrido sin violaciones (RS-26 E) | 0 violaciones de CSP | `securitypolicyviolation`: `script-src` bloqueó `eval` en `assets/index-*.js:11:28087` en **cada carga de página** (T-45) | developer | Abierto (media: la SPA funciona, pero la consola registra un error de CSP en cada carga y RS-26 E no se cumple) |
+| `a11y` (1–2 tests por ejecución, en 2 de 4) y `serie-pin` (1 vez) | P-01 visible en 5 s | página en blanco 5 s: ninguna petición a `/auth/me`; CSS `-1` (sin terminar) en la traza (T-46) | testing + infrastructure (investigar) | Abierto (intermitente) |
 
 ## 14. Hallazgos de verificabilidad (Etapa 1)
 
@@ -1713,3 +1746,14 @@ T-33 y T-35 sin cambios.
 Además, §4.5 recoge las **interpretaciones** vigentes: I-01..I-10 confirmadas
 o corregidas por el PO (1.1f), I-11, I-12 pendientes de T-19 y T-20, e
 I-13..I-16 (1.7i) confirmadas por el PO en la 1.7k y verificadas en la 1.7m.
+
+### 14.7 Hallazgos y decisiones de la tarea 2.2b (HU-01)
+
+| ID | Responsable | Criterio / archivo | Problema | Propuesta | Severidad |
+|---|---|---|---|---|---|
+| D-2.2-04 | testing (resuelto) | `integration/api/HU-01-dispositivo.int.test.ts`, RS-06 | **Error del test, no ambigüedad**: `fallosDesde(IP_A, 1, …)` usaba siempre la primera víctima y el 6.º fallo de esa cuenta es `423` (HU-01/CA-F06: "cuando intenta un sexto"). | Corregido: la víctima rota en cada llamada (`inicio`). Mismas aserciones. | — |
+| D-2.2-05 | testing (resuelto) | `integration/api/HU-01-verify-pin.int.test.ts`, bloqueo de 15/60 min fabricado | **Error del test, no ambigüedad**: CA-F09 y `docs/arquitectura.md` §7 (`now >= last_activity_at + 15 min`, sin tolerancia) dan `401 idle` tras 15 min sin peticiones; con una sesión de 60 min de bloqueo la sesión no puede seguir viva sin actividad. | Corregido: el reloj avanza en pasos de 10 min con `GET /auth/me` (permitido con PIN provisional). Mismas aserciones. | — |
+| T-44 | testing | `tests/support/bd-admin.ts`, `HU-01-comandos-cli.int.test.ts` | Intermitencia en la suite completa: (a) `DROP DATABASE … WITH (FORCE)` falla con "permission denied to terminate process" porque el proceso del servidor de una conexión de `app_rw` recién cerrada aún no ha salido; (b) una vez, `create-initial-manager` dio `1` en la segunda ejecución (sin causa visible). Cada fichero pasa solo. | (a) `borrarBd` reintenta 5 s ante ese error (una fuga real sigue fallando); (b) el test muestra ahora el `stderr` si vuelve a ocurrir. Pendiente de confirmar con más ejecuciones. | baja |
+| T-45 | developer | RS-26 E, SEC-045 (g); `apps/web` (`zod` 4, sonda de JIT del *bundle*: `const l = Function; new l("")` en `assets/index-*.js`) | Cada carga de página provoca una violación de CSP `script-src` (`eval`) en Chromium y WebKit; zod la captura y sigue sin JIT, pero el navegador la registra (consola y `securitypolicyviolation`). Con la CSP de RS-26 (sin `unsafe-eval`) es el comportamiento esperado de zod 4. | Desactivar el JIT antes del primer uso de zod: `z.config({ jitless: true })` en el arranque de `apps/web` (y no añadir `unsafe-eval` a la CSP). Verificar con `sh tests/run.sh e2e HU-01-csp`. | media |
+| T-46 | testing, infrastructure | e2e / a11y; `deploy/proxy/Caddyfile`, Toxiproxy | En 3 de ~9 ejecuciones con 3 *workers*, la primera carga de P-01 de algún test queda en blanco > 5 s: no sale ninguna petición a `/auth/me` y el CSS aparece sin terminar. 40 cargas secuenciales: siempre 200–500 ms. | Sin causa confirmada (¿arranque simultáneo de 3 Chromium con `proxy` a 0,5 CPU?). Testing prueba con `E2E_WORKERS=1` y `proxy` con más CPU; no se ha subido el *timeout* de 5 s para no ocultarlo. | media (ruido en la puerta) |
+| T-47 | testing | `tests/run.sh`, `tests/playwright.config.ts` | Mejoras de infraestructura de pruebas necesarias para ejecutar: filtro por suite, *digests* por defecto (Playwright, Toxiproxy, k6), partes de e2e con artefactos propios (las series borraban las capturas y el informe de la anterior), `SSL_CERT_FILE` de k6 y `URL` en k6. | Hecho. | — |

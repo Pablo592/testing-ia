@@ -16,7 +16,8 @@ import { Trend } from 'k6/metrics';
 const USUARIOS = JSON.parse(open(__ENV.K6_USERS_FILE));
 const RONDAS = Number(__ENV.RONDAS || 20);
 const BASE = __ENV.BASE_URL || 'https://toxiproxy:8443';
-const ORIGEN = new URL(BASE).origin;
+// k6 no tiene el global URL: el origen se extrae con una expresión regular.
+const ORIGEN = BASE.replace(/^(https?:\/\/[^/]+).*$/, '$1');
 
 const tiempoLogin = new Trend('hu01_login_ms', true);
 

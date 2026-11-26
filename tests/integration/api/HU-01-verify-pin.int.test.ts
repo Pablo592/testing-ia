@@ -235,7 +235,15 @@ describe('Bloqueo temporal con la sesión abierta (CA-F12)', () => {
     const r = await cambiarPin(cookie, u.pin, pinAleatorio('waiter'));
     expect(r.status).toBe(423);
     expect(reintentarEn(r)).toBe(minutos * 60);
-    ctx.reloj.avanzar({ min: minutos });
+    // D-2.2-05: la sesión caduca por inactividad a los 15 min (CA-F09, §7), así
+    // que el reloj avanza en pasos de 10 min con actividad (GET /auth/me, que
+    // el PIN provisional permite) hasta llegar al final del bloqueo.
+    for (let restante = minutos; restante > 0; ) {
+      const paso = Math.min(10, restante);
+      ctx.reloj.avanzar({ min: paso });
+      restante -= paso;
+      if (restante > 0) expect((await pedir(ctx, { metodo: 'GET', ruta: '/auth/me', cookie })).status).toBe(200);
+    }
     expect((await cambiarPin(cookie, u.pin, pinAleatorio('waiter'))).status).toBe(204);
   });
 

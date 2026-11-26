@@ -35,14 +35,27 @@ export async function crearBdDesdePlantilla(nombre: string): Promise<void> {
 }
 
 export async function borrarBd(nombre: string): Promise<void> {
-  try {
-    await conAdmin((c) => c.query(`DROP DATABASE IF EXISTS "${nombreSeguro(nombre)}" WITH (FORCE)`));
-  } catch (e) {
-    throw new Error(
-      `No se pudo borrar la BD de prueba ${nombre}: ¿queda abierta una conexión de app_rw ` +
-        `(pool sin cerrar o app sin close())? ${(e as Error).message}`,
-    );
+  // Tras `pool.end()` el cliente cierra su socket, pero el proceso del servidor
+  // tarda unos milisegundos en salir; un DROP en ese instante ve una sesión de
+  // app_rw que test_admin no puede terminar ("permission denied to terminate
+  // process"). Se reintenta unos segundos: una fuga real de conexiones sigue
+  // fallando (T-44).
+  const INTENTOS = 20;
+  let ultimo: Error | undefined;
+  for (let i = 0; i < INTENTOS; i++) {
+    try {
+      await conAdmin((c) => c.query(`DROP DATABASE IF EXISTS "${nombreSeguro(nombre)}" WITH (FORCE)`));
+      return;
+    } catch (e) {
+      ultimo = e as Error;
+      if (!/permission denied to terminate|being accessed by other users/i.test(ultimo.message)) break;
+      await new Promise((ok) => setTimeout(ok, 250));
+    }
   }
+  throw new Error(
+    `No se pudo borrar la BD de prueba ${nombre}: ¿queda abierta una conexión de app_rw ` +
+      `(pool sin cerrar o app sin close())? ${ultimo?.message ?? ''}`,
+  );
 }
 
 /**

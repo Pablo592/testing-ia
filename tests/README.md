@@ -27,9 +27,26 @@ sh tests/run.sh perf            # k6 (Etapa 3; en Etapa 2 solo control rápido)
 sh tests/run.sh containers      # TX-CONT-01 en el host sobre la pila en marcha
 sh tests/run.sh trazabilidad    # cruza criterios de las historias con los títulos de los tests
 sh tests/run.sh all             # orden de docs/testing.md §7.4
+sh tests/run.sh integration integration/api/HU-01-login   # un fichero (filtro de Vitest)
+sh tests/run.sh visual -g "P-01"                          # filtro de Playwright (a11y | visual)
 ```
 
-Variables: ver la cabecera de `tests/run.sh`.
+Variables: ver la cabecera de `tests/run.sh`. Desde la 2.2b:
+
+- **Vitest 4.1.12** (versión exacta, SEC-044: `pnpm audit` sin `--prod` da 0
+  vulnerabilidades) y scripts `test:unit|integration|security` con
+  `--configLoader runner`. Sigue haciendo falta con la 4.1.12: sin él Vitest
+  empaqueta el `vitest.*.config.ts` y lo escribe en
+  `tests/node_modules/.vite-temp`, que el ejecutor monta en `ro`
+  (`ENOENT … mkdir '/workspace/tests/node_modules/.vite-temp'`, D-2.2-01).
+- **Playwright** se lanza con `node tests/node_modules/@playwright/test/cli.js`
+  (no `npx`: el ejecutor no tiene red, D-2.2-02) y **3 workers** por defecto
+  (`E2E_WORKERS`; con 12 Chromium cae con `Target crashed`, D-2.2-03).
+- **Imágenes por digest con valor por defecto** (verificadas con
+  `podman image inspect`): `PLAYWRIGHT_IMAGE` = `v1.65.1-noble`
+  (`sha256:766137e2…`, la del lockfile) y `TOXIPROXY_IMAGE` = 2.12.0
+  (`sha256:a3e24437…`). Siguen siendo obligatorios `APP_IMAGE`
+  (`sh deploy/app/construir.sh`) y, para `perf`, `K6_IMAGE`.
 
 ## Estructura
 
@@ -38,9 +55,9 @@ tests/
 ├── unit/shared/          reglas puras de packages/shared (PIN, permisos, bloqueo, minutos)
 ├── unit/api/             parseSettings(env) de @mi-app/api/config (RS-13, §10.1)
 ├── unit/web/             tabla PinRule → texto de la app (propuesta T-42)
-├── integration/api/      API + BD real con buildApp(deps) y FakeClock en proceso
+├── integration/api/      API + BD real con buildApp(deps) y FakeClock en proceso (incluye la concurrencia de RS-05b)
 ├── integration/realtime/ SSE (revocación, cierre del flujo)
-├── security/             matriz de autorización y denegación por defecto (se ejecuta con integration)
+├── security/             matriz de autorización y denegación por defecto; estático RS-16c/RS-25/RS-35 (se ejecuta con integration)
 ├── e2e/                  Playwright: *.e2e.ts (paralelo), *.pin.e2e.ts (serie, PIN erróneo) y *.red.e2e.ts (serie, cortes de Toxiproxy)
 ├── a11y/                 axe + comprobaciones de teclado/etiquetas
 ├── visual/               capturas 375/768/1024/1440/1920 para UX
@@ -51,6 +68,33 @@ tests/
 ├── results/  screenshots/   SALIDA (únicas rutas en escritura desde los contenedores)
 └── run.sh                punto de entrada (host)
 ```
+
+## Tests que fallan a propósito (SEC-038, para el Developer)
+
+`tests/integration/api/HU-01-concurrencia.int.test.ts` (RS-05b, SEC-045 a)
+lanza ráfagas **simultáneas** (`Promise.all`) y **debe fallar mientras SEC-038
+siga abierto** (tarea 2.5 del Developer). No se relajan ni se omiten; si la
+forma de cumplir RS-05b es otra, se avisa a Testing. Son 4 tests:
+
+| Test (resumido) | Debe cumplirse |
+|---|---|
+| 50 logins simultáneos desde una IP con PIN erróneo (50 usuarios distintos) | como mucho 10 llamadas al hasher y 10 respuestas `401`; el resto `429` |
+| 50 logins simultáneos contra una cuenta desde IP distintas | como mucho 5 llamadas al hasher; el resto `423`; `failed_attempts` ≤ 5 y bloqueo de 5 min activo |
+| ráfaga que lleva una cuenta de 19 fallos a `locked_manual`, con el PIN correcto al final | ese intento da `423`, sin `Set-Cookie` de sesión, 0 sesiones sin revocar |
+| la misma ráfaga con `currentPin` en `POST /auth/pin` (PIN provisional) | el intento correcto da `423` (o `401` si la sesión ya estaba revocada), nunca `204`; `pin_hash` y `must_change_pin` no cambian; 0 sesiones sin revocar |
+
+Con el código actual (`verifyPin` comprueba y luego actúa) se obtienen 50
+verificaciones, ningún `429`/`423` y el PIN correcto entra (SEC-038, prueba
+propia de Cybersecurity). Reproducir: `sh tests/run.sh integration
+integration/api/HU-01-concurrencia`. Los demás tests de `verifyPin` (en
+secuencia) pasan y no deben romperse al corregirlo.
+
+**También en rojo hoy (T-45, Developer):** todos los `e2e/*.e2e.ts` fallan por el
+vigilante de CSP (`tests/support/e2e/base.ts`): cada carga de la SPA registra una
+violación `script-src` (`eval`) por la sonda de JIT de zod 4. Corrección:
+`z.config({ jitless: true })` al arrancar `apps/web` (sin `unsafe-eval` en la
+CSP). Se comprueba con `sh tests/run.sh e2e HU-01-csp`; sin esa violación el
+resto de los e2e pasa (medido con el vigilante solo anotando: 70 + 5 + 1).
 
 ## Contrato con el código (HU-01)
 
@@ -263,6 +307,33 @@ HU-01/CA-F10 necesita `POST /orders` y `POST /payments`; las filas de la matriz
 de autorización de HU-02..HU-08) se ejecutan cuando su historia entra en la
 lista. Testing la actualiza al empezar cada historia; no es un mecanismo para
 saltarse tests fallidos.
+
+## Comprobaciones de seguridad que no son de comportamiento (SEC-045)
+
+- **Estático** (`tests/security/estatico.sec.test.ts`, detectores en
+  `tests/support/estatico.ts`, suite `security`): RS-16c (solo
+  `apps/api/src/modules/auth` importa `argon2`; el `PinHasher` solo lo nombran
+  `modules/auth/*` y las raíces de composición `app.ts`, `main.ts`,
+  `commands/index.ts` y `commands/cli.ts`, y estas solo se lo pasan a
+  `createAuthModule`; solo `verify-pin.ts` llama a `hasher.verify/hash`), RS-25
+  (ni `dangerouslySetInnerHTML`, `innerHTML`, `outerHTML`, `insertAdjacentHTML`,
+  `document.write`, `eval`, `new Function` ni `setTimeout("cadena")` en
+  `apps/web`) y RS-35 (ni `sql.raw|lit|ref|id|table`, ni `.raw(`, ni plantillas
+  con `${}` o concatenación de SQL fuera de la etiqueta `sql`` en `apps/api`).
+  Cada regla se prueba también con fragmentos sintéticos (defecto → detectado;
+  comentarios y código correcto → sin hallazgos). **Si una regla da un falso
+  positivo con código legítimo, el Developer lo comunica a Testing**: se ajusta
+  el detector, no se desactiva. No usan BD (corren en el ejecutor de integración).
+- **CSP en e2e** (RS-26 E): los `*.e2e.ts` importan `test` de
+  `tests/support/e2e/base.ts`, que falla el test si el navegador registra una
+  violación de CSP (`securitypolicyviolation` o mensaje de consola de CSP). Los
+  tests que crean su contexto con `browser.newContext()` usan `vigilarCsp`.
+  `e2e/HU-01-csp.e2e.ts` comprueba que la CSP de RS-26 llega y que el vigilante
+  detecta una violación provocada.
+- **SEC-032 con respuesta retrasada** (`e2e/HU-01-sec032-retraso.e2e.ts`): el
+  latido y la reconexión del SSE de la sesión vieja quedan retenidos 3 s, hay un
+  login nuevo en ese intervalo y, al entregarse la respuesta vieja (401 con la
+  cookie de borrado), la cookie nueva sigue y `GET /auth/me` da `200`.
 
 ## Cortes de red en E2E
 

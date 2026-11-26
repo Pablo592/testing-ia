@@ -118,6 +118,9 @@ describe('TRUSTED_PROXIES (SEC-029)', () => {
     ['10.89.240.0/23'],
     ['fd00::/64'],
     ['fd00::/119'],
+    // SEC-045 (b): /119 de IPv6 y el rango IPv4 equivalente de una IPv4 mapeada (/104 = /8).
+    ['::/119'],
+    ['::ffff:10.0.0.0/104'],
     ['0.0.0.0/0'],
     ['::/0'],
     // Nombres de proxy-addr, booleanos y números de saltos.
@@ -134,6 +137,9 @@ describe('TRUSTED_PROXIES (SEC-029)', () => {
     ['10.89.240.2,,10.89.240.3'],
     [' 10.89.240.2'],
     ['10.89.240.2, 10.89.240.3'],
+    // SEC-045 (b): solo espacios y espacio final (nunca se recorta ni se ignora).
+    [' '],
+    ['10.89.240.2 '],
     // Prefijos mal escritos o fuera de rango.
     ['10.89.240.2/'],
     ['10.89.240.2/33'],
@@ -144,6 +150,7 @@ describe('TRUSTED_PROXIES (SEC-029)', () => {
     ['10.0.0.1,300.1.1.1'],
     ['fe80::1%eth0'],
     ['[fd00::1]'],
+    ['[::1]'],
     // Más de 4 elementos.
     [cinco],
   ])('[HU-01/CA-F11][RS-06] %j → no arranca: ConfigError("TRUSTED_PROXIES") sin el valor', (valor) => {
@@ -158,6 +165,8 @@ describe('TRUSTED_PROXIES (SEC-029)', () => {
     ['fd00::2', ['fd00::2']],
     ['fd00::/120', ['fd00::/120']],
     ['fd00::1/128', ['fd00::1/128']],
+    // SEC-045 (b): IPv4 mapeada con el prefijo mínimo equivalente a /24.
+    ['::ffff:10.89.240.0/120', ['::ffff:10.89.240.0/120']],
     ['10.89.240.2,10.89.240.3', ['10.89.240.2', '10.89.240.3']],
     ['10.89.240.2,10.89.240.3,fd00::2,10.89.241.0/24', ['10.89.240.2', '10.89.240.3', 'fd00::2', '10.89.241.0/24']],
     ['', []],

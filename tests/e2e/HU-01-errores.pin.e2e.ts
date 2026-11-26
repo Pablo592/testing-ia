@@ -1,7 +1,7 @@
 // HU-01 E2E con PIN erróneo real (proyecto serie-pin, un worker, en serie).
 // Gasta 4 fallos de la IP de la suite (presupuesto en tests/README.md).
 // Los bloqueos largos se fabrican en BD (docs/testing.md §5.3).
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../support/e2e/base.ts';
 import { cerrarSemilla, fabricarBloqueo, fabricarFallos, sembrarUsuario } from '../support/e2e/semilla.ts';
 import { BarraSuperior, CambioPin, entrarComo, PantallaLogin, TEXTOS } from '../support/e2e/pantallas.ts';
 import { junto } from '../support/e2e/medidas.ts';

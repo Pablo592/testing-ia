@@ -3,7 +3,10 @@
 # HOST con el usuario sin privilegios; todo pnpm/node/npx corre en contenedores
 # efímeros de compose.test.yaml (docs/infraestructura.md §7.1 y §9).
 #
-# Uso:  sh tests/run.sh <suite>
+# Uso:  sh tests/run.sh <suite> [filtro...]
+#   El filtro (solo unit | integration | security | e2e | a11y | visual) se pasa tal
+#   cual a Vitest/Playwright: p. ej. `sh tests/run.sh integration integration/api/HU-01-login`
+#   o `sh tests/run.sh e2e HU-01-csp` o `sh tests/run.sh visual -g "P-01"`. Sin filtro se ejecuta toda la suite.
 #   unit | integration | security | e2e | a11y | visual | perf | containers |
 #   trazabilidad | all
 #
@@ -15,8 +18,12 @@
 #                     `APP_IMAGE=… sh tests/run.sh <suite>`
 #   TESTS_NODE_IMAGE  ejecutor Vitest; por defecto, la imagen de herramientas de
 #                     DEV (localhost/mi-app-dev-tools) resuelta a su digest
-#   PLAYWRIGHT_IMAGE  mcr.microsoft.com/playwright@sha256:... (misma versión que el lockfile)
-#   K6_IMAGE, TOXIPROXY_IMAGE, ZAP_IMAGE
+#   PLAYWRIGHT_IMAGE  mcr.microsoft.com/playwright@sha256:... (misma versión que el lockfile).
+#                     Por defecto, el digest verificado v1.65.1-noble (D-2.2-02).
+#   TOXIPROXY_IMAGE   ghcr.io/shopify/toxiproxy@sha256:... (por defecto, 2.12.0 verificado)
+#   K6_IMAGE          docker.io/grafana/k6@sha256:... (por defecto, la resuelta el 2026-11-25)
+#   ZAP_IMAGE         sin valor por defecto: se pasa por digest cuando se usa (Etapa 3)
+#   E2E_WORKERS       workers de Playwright en paralelo (por defecto 3; D-2.2-03)
 #   APP_TZ            zona de app (por defecto UTC; segunda ejecución con America/New_York)
 #   RONDAS            rondas de k6 (por defecto 3 en Etapa 2; 20 en Etapa 3)
 #
@@ -37,6 +44,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 cd "$ROOT"
 
 SUITE=${1:-}
+[ "$#" -gt 0 ] && shift
 case "$SUITE" in
   unit|integration|security|e2e|a11y|visual|perf|containers|trazabilidad|all) ;;
   *) echo "uso: sh tests/run.sh {unit|integration|security|e2e|a11y|visual|perf|containers|trazabilidad|all}" >&2; exit 2 ;;
@@ -228,6 +236,12 @@ if [ -z "${TESTS_NODE_IMAGE:-}" ]; then
     exit 1
   fi
 fi
+# D-2.2-02: digests verificados con `podman image inspect` (v1.65.1-noble = versión
+# del lockfile; toxiproxy 2.12.0). Se pueden sustituir exportando la variable.
+PLAYWRIGHT_IMAGE=${PLAYWRIGHT_IMAGE:-mcr.microsoft.com/playwright@sha256:766137e2d9caad4744187e53cdc89320ba6f2eb57cff097374020944b44dd0a9}
+TOXIPROXY_IMAGE=${TOXIPROXY_IMAGE:-ghcr.io/shopify/toxiproxy@sha256:a3e244375123dad8849091bcc59775e188624d3f602db01901f9af855682fef8}
+# k6 (usuario 12345, no root), resuelto el 2026-11-25 con `podman pull docker.io/grafana/k6:latest`.
+K6_IMAGE=${K6_IMAGE:-docker.io/grafana/k6@sha256:70949facc324f13a8903d24ee5b817ff32aca02bda3458389611e6aa4b38a097}
 for v in PLAYWRIGHT_IMAGE K6_IMAGE TOXIPROXY_IMAGE ZAP_IMAGE; do
   eval "actual=\${$v:-}"
   case "$SUITE:$v" in
@@ -294,7 +308,8 @@ ejecutar() {
   perfil=$1; servicio=$2; shift 2
   set +e
   $PC --profile "$perfil" run --rm --no-deps \
-    -e RESULTS_DIR="$RESULTS_DIR_CTR" -e CI=1 \
+    -e RESULTS_DIR="$RESULTS_DIR_CTR" -e CI=1 -e E2E_WORKERS="${E2E_WORKERS:-3}" -e E2E_PARTE="${E2E_PARTE:-}" \
+    $RUN_ENV_EXTRA \
     "$servicio" "$@"
   rc_ej=$?
   set -e
@@ -303,8 +318,12 @@ ejecutar() {
   return $rc_ej
 }
 
+RUN_ENV_EXTRA=""
 PROYECTOS_E2E="--project=tablet-h --project=tablet-h-webkit --project=tablet-v --project=tpv --project=barra --project=escritorio --project=movil"
-PW="npx playwright test -c tests/playwright.config.ts"
+# D-2.2-02: el binario de Playwright está en tests/node_modules (paquete del
+# workspace), no en /workspace; `npx` intentaría descargarlo y el ejecutor no
+# tiene red. Se invoca su CLI directamente, sin resolución por PATH ni red.
+PW="node tests/node_modules/@playwright/test/cli.js test -c tests/playwright.config.ts"
 RC=0
 
 case "$SUITE" in
@@ -312,7 +331,7 @@ case "$SUITE" in
     ejecutar unit runner-unit node tests/tools/trazabilidad.ts || RC=$?
     ;;
   unit)
-    ejecutar unit runner-unit pnpm --dir tests run test:unit || RC=$?
+    ejecutar unit runner-unit pnpm --dir tests run test:unit "$@" || RC=$?
     ;;
   integration|security)
     levantar_bd_y_migrar integration
@@ -324,11 +343,11 @@ case "$SUITE" in
     $PC --profile integration up -d app
     esperar_sano app
     if [ "$SUITE" = "integration" ]; then
-      ejecutar integration runner-integration pnpm --dir tests run test:integration || RC=$?
+      ejecutar integration runner-integration pnpm --dir tests run test:integration "$@" || RC=$?
     else
       # Parte en proceso (matriz de autorización, RS-17/RS-18). Cabeceras, TLS
       # y ZAP (runner-security) se añaden en la Etapa 3.
-      ejecutar integration runner-integration pnpm --dir tests run test:security || RC=$?
+      ejecutar integration runner-integration pnpm --dir tests run test:security "$@" || RC=$?
     fi
     ;;
   e2e|a11y|visual|perf|containers)
@@ -338,20 +357,25 @@ case "$SUITE" in
     esperar_sano proxy
     case "$SUITE" in
       e2e)
+        # Con filtro, las series sin tests que lo cumplan no son un error.
+        SIN_TESTS=""
+        [ "$#" -gt 0 ] && SIN_TESTS="--pass-with-no-tests"
         # shellcheck disable=SC2086
-        ejecutar e2e runner-e2e $PW $PROYECTOS_E2E || RC=$?
+        E2E_PARTE=normales ejecutar e2e runner-e2e $PW $PROYECTOS_E2E $SIN_TESTS "$@" || RC=$?
         # Serie con PIN erróneo: un worker (presupuesto de fallos por IP, tests/README.md).
-        ejecutar e2e runner-e2e $PW --project=serie-pin --workers=1 || RC=$?
+        E2E_PARTE=serie-pin ejecutar e2e runner-e2e $PW --project=serie-pin --workers=1 $SIN_TESTS "$@" || RC=$?
         # Serie con cortes de red (Toxiproxy es compartido: nada más en paralelo).
-        ejecutar e2e runner-e2e $PW --project=serie-red --workers=1 || RC=$?
+        E2E_PARTE=serie-red ejecutar e2e runner-e2e $PW --project=serie-red --workers=1 $SIN_TESTS "$@" || RC=$?
         ;;
-      a11y) ejecutar e2e runner-e2e $PW --project=a11y || RC=$? ;;
-      visual) ejecutar e2e runner-e2e $PW --project=visual --workers=1 || RC=$? ;;
+      a11y) ejecutar e2e runner-e2e $PW --project=a11y "$@" || RC=$? ;;
+      visual) ejecutar e2e runner-e2e $PW --project=visual --workers=1 "$@" || RC=$? ;;
       perf)
         # Semilla de 10 usuarios (Playwright, mismo acceso a BD que e2e, T-29) y k6.
         ejecutar e2e runner-e2e $PW --project=semilla-perf --workers=1 || RC=$?
         if [ "$RC" -eq 0 ]; then
-          ejecutar perf runner-perf run \
+          # k6 (Go) lee la CA de la ejecución de la variable de entorno del PROCESO
+          # (SSL_CERT_FILE); `k6 run -e` solo fija __ENV del script.
+          RUN_ENV_EXTRA="-e SSL_CERT_FILE=/caddy-data/caddy/pki/authorities/local/root.crt" ejecutar perf runner-perf run \
             -e K6_USERS_FILE="$RESULTS_DIR_CTR/k6-usuarios.json" \
             -e RONDAS="${RONDAS:-3}" \
             -e SSL_CERT_FILE=/caddy-data/caddy/pki/authorities/local/root.crt \

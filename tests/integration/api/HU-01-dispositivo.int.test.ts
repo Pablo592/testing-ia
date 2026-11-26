@@ -4,7 +4,9 @@
 // Los fallos se reparten entre usuarios distintos para que no salte el
 // bloqueo por usuario (CA-F06).
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { IP_PROXY, montarApp, type Ctx } from '../../support/app.ts';
+import { buildApp } from '@mi-app/api/app';
+import { ConfigError } from '@mi-app/api/config';
+import { depsApp, IP_PROXY, montarApp, type Ctx } from '../../support/app.ts';
 import { codigo, IP_A, IP_B, iniciarSesion, pedir, reintentarEn, sesion, type Resp } from '../../support/http.ts';
 import { crearUsuario, pinIncorrecto, type UsuarioPrueba } from '../../support/fixtures.ts';
 import { usuario } from '../../support/bd.ts';
@@ -21,11 +23,15 @@ afterEach(async () => {
   await ctx?.cerrar();
 });
 
-/** n fallos de login desde `ip`, como mucho 3 por usuario (ningún usuario llega a su bloqueo). */
-async function fallosDesde(ip: string, n: number, cabeceras?: Record<string, string>): Promise<Resp[]> {
+/**
+ * n fallos de login desde `ip`, repartidos entre las víctimas empezando por la
+ * `inicio`-ésima: con 4 víctimas y n <= 10 ninguna llega a 5 fallos (bloqueo,
+ * CA-F06). Si se llama de uno en uno hay que pasar `inicio` rotando (D-2.2-04).
+ */
+async function fallosDesde(ip: string, n: number, cabeceras?: Record<string, string>, inicio = 0): Promise<Resp[]> {
   const out: Resp[] = [];
   for (let i = 0; i < n; i++) {
-    const u = victimas[i % victimas.length];
+    const u = victimas[(inicio + i) % victimas.length];
     out.push(
       await pedir(ctx, {
         metodo: 'POST',
@@ -138,7 +144,9 @@ describe('La IP que cuenta es la del dispositivo (RS-06)', () => {
     const respuestas: Resp[] = [];
     for (let i = 0; i < 10; i++) {
       n += 1;
-      respuestas.push(...(await fallosDesde(IP_A, 1, { 'x-forwarded-for': `203.0.113.${n}` })));
+      // D-2.2-04: se rota la víctima en cada llamada; con la misma, el 6.º fallo
+      // sería 423 (CA-F06), no 401, y el test no probaría X-Forwarded-For.
+      respuestas.push(...(await fallosDesde(IP_A, 1, { 'x-forwarded-for': `203.0.113.${n}` }, i)));
     }
     expect(respuestas.every((r) => r.status === 401)).toBe(true);
     const otro = await crearUsuario(ctx, { rol: 'kitchen' });
@@ -181,4 +189,53 @@ describe('Registro del rechazo por dispositivo (CA-N05)', () => {
     expect(valorMetrica(await ctx.app.metricsText(), 'auth_verifications_total', { purpose: 'login', result: 'rate_limited_ip' })).toBe(1);
     expect(valorMetrica(await ctx.app.metricsText(), 'auth_login_attempts_total', { result: 'ip_rate_limited' })).toBe(1);
   });
+});
+
+// SEC-029 / SEC-045 (b): buildApp valida trustedProxies como parseSettings y pasa a
+// Fastify el array validado o false, nunca `true`, un nombre de proxy-addr
+// ('uniquelocal', 'loopback', 'linklocal') ni un número de saltos. Si no, un
+// cliente podría saltarse el límite por IP con X-Forwarded-For (CA-F11, RS-06).
+describe('trustedProxies en buildApp (SEC-029)', () => {
+  async function intentar(trustedProxies: unknown): Promise<unknown> {
+    let app: { close(): Promise<void> } | undefined;
+    let error: unknown;
+    try {
+      app = (await buildApp(depsApp({ trustedProxies }) as never)) as unknown as { close(): Promise<void> };
+    } catch (e) {
+      error = e;
+    }
+    await app?.close();
+    return error;
+  }
+
+  test.each([
+    [['uniquelocal']],
+    ['uniquelocal'],
+    [['loopback']],
+    [['linklocal']],
+    [true],
+    [1],
+    [['10.0.0.0/8']],
+    [['0.0.0.0/0']],
+    [['::/0']],
+    [[' 10.89.240.2']],
+    [['10.89.240.2 ']],
+    [['10.89.240.2', '']],
+    [['10.89.240.2', '10.89.240.3', '10.89.240.4', '10.89.240.5', '10.89.240.6']],
+  ])('[HU-01/CA-F11][RS-06] buildApp rechaza trustedProxies = %j con ConfigError("trustedProxies")', async (valor) => {
+    const e = await intentar(valor);
+    expect(e, `trustedProxies = ${JSON.stringify(valor)} debería rechazarse`).toBeInstanceOf(ConfigError);
+    expect((e as ConfigError).variable).toBe('trustedProxies');
+    // El mensaje no repite el valor recibido (RS-31).
+    for (const f of [valor].flat().filter((x): x is string => typeof x === 'string' && x.trim().length >= 3)) {
+      expect((e as ConfigError).message).not.toContain(f);
+    }
+  });
+
+  test.each([[[]], [['10.89.240.2']], [['10.89.240.0/24']], [['fd00::2', '10.89.240.2']]])(
+    '[HU-01/CA-F11][RS-06] buildApp acepta trustedProxies = %j',
+    async (valor) => {
+      expect(await intentar(valor)).toBeUndefined();
+    },
+  );
 });

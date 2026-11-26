@@ -5,6 +5,10 @@ import { defineConfig, devices } from '@playwright/test';
 
 const resultados = process.env.RESULTS_DIR ?? 'results/local';
 const baseURL = process.env.BASE_URL ?? 'https://toxiproxy:8443';
+// run.sh lanza Playwright varias veces seguidas (normales, serie-pin, serie-red):
+// cada parte escribe en sus propios ficheros y carpetas para no borrar los
+// artefactos (capturas, trazas) y el informe de la anterior.
+const parte = process.env.E2E_PARTE ? `-${process.env.E2E_PARTE}` : '';
 
 // Confianza en la CA de ESTA ejecución sin ignorar errores de certificado:
 // global-setup.ts verifica el certificado del proxy contra la CA
@@ -28,16 +32,20 @@ const DISPOSITIVO = /e2e\/.*\.dispositivo\.e2e\.ts$/;
 
 export default defineConfig({
   testDir: '.',
-  outputDir: `${resultados}/playwright-artifacts`,
+  outputDir: `${resultados}/playwright-artifacts${parte}`,
   fullyParallel: true,
+  // D-2.2-03: sin límite, Playwright lanza un worker por mitad de CPU (12 con 24
+  // CPU) y Chromium cae con "Target crashed" en runner-e2e (3 GB, 1024 pids).
+  // Con 3 pasa todo. Las series pin/red/visual fijan --workers=1 en run.sh.
+  workers: Number(process.env.E2E_WORKERS ?? 3),
   retries: 0,
   forbidOnly: true,
   timeout: 60_000,
   expect: { timeout: 5_000 },
   reporter: [
     ['list'],
-    ['junit', { outputFile: `${resultados}/e2e-junit.xml` }],
-    ['html', { outputFolder: `${resultados}/playwright-html`, open: 'never' }],
+    ['junit', { outputFile: `${resultados}/e2e${parte}-junit.xml` }],
+    ['html', { outputFolder: `${resultados}/playwright-html${parte}`, open: 'never' }],
   ],
   globalSetup: './support/e2e/global-setup.ts',
   use: {

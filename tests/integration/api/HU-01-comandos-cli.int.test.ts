@@ -96,9 +96,10 @@ describe('create-initial-manager', () => {
   test('[HU-07/CA-F04][RS-09] sin encargados → 0 y lo crea con PIN provisional; otra ejecución → 0 sin crear otro', async () => {
     const nombre = nombreUnico('Marta');
     const pin = pinAleatorio('manager');
-    expect(await ejecutar('create-initial-manager', [], envEncargado(nombre, pin))).toBe(0);
+    expect(await ejecutar('create-initial-manager', [], envEncargado(nombre, pin)), `stderr: ${stderr.texto()}`).toBe(0);
     expect(await usuarioPorNombre(ctx.bd, nombre)).toMatchObject({ role: 'manager', must_change_pin: true, active: true, pin_digits: 6 });
-    expect(await ejecutar('create-initial-manager', [], envEncargado(nombreUnico('Otra'), pinAleatorio('manager')))).toBe(0);
+    // (T-44: si vuelve a salir 1 aquí, el stderr dice por qué; sin el PIN, que el propio comando nunca imprime.)
+    expect(await ejecutar('create-initial-manager', [], envEncargado(nombreUnico('Otra'), pinAleatorio('manager'))), `stderr: ${stderr.texto()}`).toBe(0);
     expect(await encargados()).toBe(1);
     sinPin(pin);
     // Log JSON con la misma redacción (docs/logging.md).

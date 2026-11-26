@@ -1,7 +1,7 @@
 // HU-01 E2E (proyectos tablet-h y tablet-h-webkit). Sin PIN erróneo: los
 // fallos reales van en HU-01-errores.pin.e2e.ts (presupuesto por IP).
 // Textos exactos: docs/ux/wireframes/01-login.md. Selectores: tests/support/e2e/pantallas.ts.
-import { expect, test } from '@playwright/test';
+import { expect, test, vigilarCsp } from '../support/e2e/base.ts';
 import {
   caducarSesiones,
   cerrarSemilla,
@@ -84,6 +84,7 @@ test.describe('Destino y funciones por rol', () => {
     ];
     for (const [rol, rutas] of casos) {
       const ctx = await browser.newContext();
+      const csp = await vigilarCsp(ctx);
       const page = await ctx.newPage();
       const u = await sembrarUsuario({ rol });
       await entrarComo(page, u);
@@ -107,6 +108,7 @@ test.describe('Destino y funciones por rol', () => {
       await denegado.enlace(rol).click();
       await expect(page).toHaveURL(new RegExp(`${enlaceInicio(rol)[1]}$`));
       await expect(denegado.titulo()).toHaveCount(0);
+      expect(csp.violaciones, 'violaciones de CSP (RS-26 E)').toEqual([]);
       await ctx.close();
     }
   });

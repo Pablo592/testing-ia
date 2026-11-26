@@ -1,7 +1,7 @@
 // HU-01/CA-U02 (teclado ≥ 44x44 px), CA-U04 (nombre y rol visibles) y
 // WCAG 2.5.8 (≥ 24 px) en cada dispositivo: tablet-h, tablet-v, tpv, barra,
 // escritorio y movil (playwright.config.ts).
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../support/e2e/base.ts';
 import { cerrarSemilla, sembrarUsuario } from '../support/e2e/semilla.ts';
 import { BarraSuperior, entrarComo, PantallaLogin } from '../support/e2e/pantallas.ts';
 import { esperarTamanoMinimo } from '../support/e2e/medidas.ts';

@@ -4,9 +4,9 @@
   "type": "module",
   "description": "Suite de pruebas (Testing). Se ejecuta solo en contenedores con tests/run.sh.",
   "scripts": {
-    "test:unit": "vitest run --config vitest.unit.config.ts",
-    "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:security": "vitest run --config vitest.integration.config.ts --project security",
+    "test:unit": "vitest run --configLoader runner --config vitest.unit.config.ts",
+    "test:integration": "vitest run --configLoader runner --config vitest.integration.config.ts",
+    "test:security": "vitest run --configLoader runner --config vitest.integration.config.ts --project security",
     "test:e2e": "playwright test --config playwright.config.ts",
     "trazabilidad": "node --experimental-strip-types tools/trazabilidad.ts"
   },
@@ -22,6 +22,6 @@
     "@types/pg": "^8.15.0",
     "pg": "^8.16.0",
     "typescript": "^5.9.0",
-    "vitest": "^3.2.0"
+    "vitest": "4.1.12"
   }
 }

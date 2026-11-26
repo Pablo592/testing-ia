@@ -6,7 +6,7 @@
 // recibir `hello` tras la reconexión (GET /auth/me y los snapshots de la
 // pantalla montada) lleva `X-Activity: passive`; las acciones del usuario y
 // POST /session/activity, nunca.
-import { expect, test } from '@playwright/test';
+import { expect, test } from '../support/e2e/base.ts';
 import { cerrarSemilla, fabricarInactividad, sembrarUsuario } from '../support/e2e/semilla.ts';
 import { BarraSuperior, entrarComo, TEXTOS } from '../support/e2e/pantallas.ts';
 import { cortarRed, restaurarRed } from '../support/e2e/red.ts';
