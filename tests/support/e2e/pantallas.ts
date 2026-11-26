@@ -69,6 +69,25 @@ export const TITULO_RUTA: Record<keyof typeof RUTAS, string> = {
   resumen: 'Resumen del día',
 };
 
+/**
+ * Título corto visible a <= 767 px (design-system §5.11.1, 2.13a). El nombre
+ * accesible, el `<h1>` completo y el `<title>` siguen siendo el título completo;
+ * lo que sobra va en `<span class="sr-only">` dentro del `h1`. Siempre es un
+ * prefijo del título completo. Las pantallas sin `span` ("igual") muestran el
+ * título entero.
+ */
+export const TITULO_CORTO_MOVIL = {
+  pedidos: 'Pedidos',
+  cola: 'Cola',
+  menu: 'Menú',
+  personal: 'Personal',
+  resumen: 'Resumen',
+  accesoDenegado: 'Acceso',
+} as const;
+
+/** Sufijo de la barra en el `<title>` del documento (design-system §5.11). */
+export const SUFIJO_DOCUMENTO = ' · Café · Toma de pedidos';
+
 function escapar(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -136,14 +155,24 @@ export class PantallaLogin {
 export class AccesoDenegado {
   constructor(readonly page: Page) {}
 
+  /**
+   * Por nombre accesible (el título completo), no por el texto visible: a <= 767 px
+   * el texto visible es "Acceso" y " denegado" va en un `span.sr-only`
+   * (design-system §5.11.1, H-2.8c-01).
+   */
   titulo(): Locator {
-    return this.page.getByRole('heading', { level: 1, name: TEXTOS.accesoDenegadoTitulo });
+    return this.page.getByRole('heading', { level: 1, name: TEXTOS.accesoDenegadoTitulo, exact: true });
   }
 
   async comprobar(rol: 'waiter' | 'kitchen' | 'manager'): Promise<void> {
     await expect(this.titulo()).toBeVisible();
-    // Único elemento visible con ese texto (no se repite en el contenido ni en aria-live).
-    await expect(this.page.getByText(TEXTOS.accesoDenegado).filter({ visible: true })).toHaveCount(1);
+    await expect(this.titulo()).toHaveCount(1);
+    // Único elemento con ese texto en la página y es el `h1` (no se repite en el
+    // contenido ni en aria-live). Vale a cualquier ancho: el `h1` contiene el
+    // texto completo en el DOM aunque a <= 767 px se vea solo "Acceso".
+    const coincidencias = this.page.getByText(TEXTOS.accesoDenegado).filter({ visible: true });
+    await expect(coincidencias).toHaveCount(1);
+    await expect(coincidencias.and(this.page.locator('h1'))).toHaveCount(1);
     await expect(this.page.getByText(TEXTOS.accesoDenegadoTexto, { exact: true })).toBeVisible();
     await expect(this.page.getByText(TEXTOS.accesoDenegadoAyuda, { exact: true })).toBeVisible();
     await expect(this.page).toHaveTitle(TEXTOS.accesoDenegadoDocumento);
@@ -206,8 +235,13 @@ export class CambioPin {
 export class BarraSuperior {
   constructor(readonly page: Page) {}
 
+  /**
+   * `h1` por NOMBRE ACCESIBLE exacto (el título completo), nunca por el texto
+   * visible: a <= 767 px "Resumen del día" se ve "Resumen" y "Acceso denegado"
+   * se ve "Acceso" (design-system §5.11.1, H-2.8c-01).
+   */
   titulo(texto: string): Locator {
-    return this.page.getByRole('heading', { level: 1, name: texto });
+    return this.page.getByRole('heading', { level: 1, name: texto, exact: true });
   }
 
   usuario(u: Pick<UsuarioE2E, 'nombre' | 'rolTexto'>): Locator {
