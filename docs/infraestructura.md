@@ -101,7 +101,7 @@ Según ADR-007 y la arquitectura §10, DEV **no tiene Caddy**: el navegador usa
 
 | Servicio | Tipo | Imagen | Qué hace | Puerto en el host | Redes |
 |---|---|---|---|---|---|
-| `db` | permanente | `postgres:19.0-alpine3.23` por digest | PostgreSQL; inicializa roles y BD con `deploy/db/initdb/10-roles.sh` | **ninguno** | `backend` |
+| `db` | permanente | imagen derivada `localhost/mi-app-db:19.0-alpine3.24` (base `postgres:19.0-alpine3.24` por digest; §8, §8.2) | PostgreSQL; inicializa roles y BD con `deploy/db/initdb/10-roles.sh` | **ninguno** | `backend` |
 | `api` | permanente | `mi-app-dev-tools` | `pnpm --dir apps/api run dev` (Fastify en modo watch) | `127.0.0.1:3000` | `backend`, `frontend` |
 | `web` | permanente | `mi-app-dev-tools` | `pnpm --dir apps/web run dev` (Vite + HMR; proxy de `/api` a `api:3000`) | `127.0.0.1:5173` | `frontend` |
 | `deps` | efímero (perfil `setup`) | `mi-app-dev-tools` | `pnpm install --frozen-lockfile` | — | `deps` (única con salida a internet) |
@@ -360,7 +360,7 @@ Aplicado a **todos** los servicios de DEV con un bloque común (`x-hardening`):
 | `--memory`, `--cpus` | `deploy.resources.limits` (`memory`, `cpus`, `pids`) | cumple |
 | Sin `--privileged`, sin socket, sin `network=host`, sin directorios del sistema | redes bridge propias; solo se monta el proyecto, sus secretos y volúmenes con nombre | cumple |
 | Imagen con `USER` ≥ 1000 y `HEALTHCHECK` | `USER 1000:1000` y `HEALTHCHECK` en el Containerfile; además en compose | cumple |
-| Base por digest | `node:26.13.1-alpine@sha256:…`, `postgres:19.0-alpine3.23@sha256:…` (imagen final: §8.1) | cumple |
+| Base por digest | `node:26.13.1-alpine@sha256:…`, `postgres:19.0-alpine3.24@sha256:…` (derivada, §8.2; imagen final: §8.1) | cumple |
 
 `userns_mode: keep-id` hace que el UID 1000 del contenedor sea el usuario del
 host (sin privilegios). Así el código y los secretos (0600) se leen sin `chmod`
@@ -539,7 +539,8 @@ real en §15.
 | Uso | Referencia | Entornos |
 |---|---|---|
 | Base de la imagen de herramientas de DEV | `docker.io/library/node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5` (Node 26, LTS activa) | DEV |
-| PostgreSQL | `docker.io/library/postgres:19.0-alpine3.23@sha256:40ad7e457013448b5522c6c5d30dccb8248959c41adc0e56c1785be4293bbd67` (PostgreSQL 19.0, Alpine 3.23.8; última mayor estable, ADR-003; SEC-049) | todos |
+| PostgreSQL (base) | `docker.io/library/postgres:19.0-alpine3.24@sha256:8e81a484097154610d0b72f2fd1b70e1f8c31fd6b743b6d0da8b2a8c1ab2ea1d` (PostgreSQL 19.0, Alpine 3.24.4, `libxml2` 2.13.9-r2 y `gosu`; última mayor estable, ADR-003) | solo construcción de la imagen de db |
+| PostgreSQL (desplegable) | `localhost/mi-app-db:19.0-alpine3.24`, derivada de la anterior con `deploy/db/Containerfile`: `libxml2` ≥ 2.13.9-r3 (hoy r5), **sin** `/usr/local/bin/gosu`, `USER 1000:1000`, `HEALTHCHECK`. Se construye con `sh deploy/db/construir.sh` (lo llama `deploy/app/construir.sh` y `deploy/dev/levantar.sh`); los compose la usan con `pull_policy: never` (SEC-049, SEC-051) | todos |
 | Caddy | `docker.io/library/caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0` | TESTING, DEMO, PROD |
 | pnpm | 12.21.0 (`ARG PNPM_VERSION`) | DEV (y etapa de construcción de la imagen final) |
 | Etapa de construcción de la imagen final | `docker.io/library/node:26.13.1-trixie-slim@sha256:abe7e5a82b61a8ef67b315b85497c9e65173387ccf2f4a029248184b8e020be5` (Debian 13, glibc 2.41) | solo construcción |
@@ -555,11 +556,16 @@ desplegables** (app, db, proxy) con Trivy (§14.1).
 **Estado de las imágenes a 2026-11-26 (tarea 2.7).**
 - App (distroless `13e3ac17…`): 0 críticas/altas; solo las 2 de EXC-01
   (`libssl3t64`, QUIC, sin corrección en Debian) como *suppressed*.
-- db: el digest nuevo del tag `19.0-alpine` (índice `cac45fb4…`) es la misma
-  imagen que la anterior (mismo *image ID*; Alpine 3.24.4, `libxml2`
-  2.13.9-r2 sin corregir). Se usa la variante `19.0-alpine3.23` (Alpine
-  3.23.8), que trae `libxml2` corregido: 0 altas en el sistema. Queda `gosu`
-  (§8.2).
+- db (2.10): **rectificado.** La variante `19.0-alpine3.23` de la 2.7 NO tenía
+  `libxml2` corregido: traía 2.13.9-r1 sin los parches de 2026 y Trivy no los
+  veía porque la secdb de la rama 3.23 no los registra (falso negativo,
+  SEC-051). Ahora la base es `19.0-alpine3.24` (digest del índice `8e81a484…`)
+  y la imagen derivada sube `libxml2` a 2.13.9-r5 y elimina `gosu`: Trivy 0
+  críticas/altas, **sin excepciones** (EXC-02 retirada).
+  **Regla (SEC-051):** las imágenes Alpine desplegables van solo sobre la rama
+  más reciente con soporte (hoy 3.24). Bajar de rama exige aprobación de
+  Cybersecurity con la comparación de `secfixes`/APKBUILD de los paquetes
+  afectados. Un 0 de Trivy en una rama atrasada no prueba que esté corregido.
 - proxy: `2.11.9` es la última 2.x publicada (no hay `2.11.10` ni `2.12`); su
   binario lleva `go-jose/v3` v3.0.5 (sin corrección) y `x/net` v0.60.0
   (corregida en 0.62.0, pero ningún Caddy publicado la incluye). Ver §8.2.
@@ -702,35 +708,54 @@ o esperar a una base corregida. **Decide Cybersecurity** (hallazgo anotado
 para el Orquestador). El escaneo de la imagen real se repite en cada build
 con el mismo comando de §15.
 
-### 8.2 Excepciones propuestas de db y proxy (SEC-049, SEC-050; pendientes de Cybersecurity)
+### 8.2 Imagen de db sin excepciones y excepción de proxy (SEC-049, SEC-050, SEC-054)
 
-No hay versión corregida publicada de lo siguiente; las excepciones están en
-`deploy/scan/trivyignore-db.yaml` y `deploy/scan/trivyignore-proxy.yaml`,
-**marcadas como PROPUESTA hasta que Cybersecurity las valide** (borrar el
-fichero las retira y el build vuelve a fallar).
+**db (SEC-049, SEC-051): sin excepciones.** `deploy/db/Containerfile` parte de
+`postgres:19.0-alpine3.24@sha256:8e81a484…`, hace `apk upgrade libxml2`
+(el build falla si queda por debajo de 2.13.9-r3; hoy r5), borra
+`/usr/local/bin/gosu` (el `docker-entrypoint.sh` solo lo usa si arranca como
+root, y aquí nunca: `USER 1000:1000`) y define `HEALTHCHECK`.
+`deploy/db/construir.sh` construye (rootless, formato docker, `--no-cache`) y
+comprueba sobre la imagen real: Alpine 3.24.x, `libxml2` ≥ r3, `gosu` ausente,
+usuario 1000:1000 y healthcheck. La construcción no es idéntica bit a bit (la
+fecha y el `apk upgrade` cambian el digest); lo que se fija es la base por
+digest y el mínimo de `libxml2`. EXC-02 está **retirada**
+(`deploy/scan/trivyignore-db.yaml` borrado).
+
+**proxy (EXC-03, SEC-050).** Excepción en `deploy/scan/trivyignore-proxy.yaml`,
+aprobada por Cybersecurity hasta 2026-12-26 o 7 días tras un Caddy corregido
+(ratificación humana en la puerta):
 
 | Imagen | Qué | Alcance de la excepción | Caduca |
 |---|---|---|---|
-| db | `/usr/local/bin/gosu` (Go 1.24.6): 1 crítica y 25 altas de `stdlib`, con corrección en Go pero no en la imagen oficial | solo la ruta `usr/local/bin/gosu` y `pkg:golang/stdlib@v1.24.6`; 26 CVE listados por id | 2026-12-26 |
 | proxy | `go-jose/v3` v3.0.5 (CVE-2026-116587, sin corrección) y `x/net` v0.60.0 (CVE-2026-78661, corregida en 0.62.0 pero no en Caddy) | solo `usr/bin/caddy` y esos dos `purl` | 2026-12-26 |
 
-Condiciones que se cumplen hoy (SEC-049 y SEC-050): ningún `db` arranca como
-root (`user: 1000:1000`, `cap_drop: ALL`, `no-new-privileges`; lo comprueba
-`sh tests/run.sh containers`); ningún compose llama a `gosu` (lo comprueba
-`construir.sh`); el `Caddyfile` tiene `admin off`, sin `acme_server`,
-`templates` ni `markdown`.
+**Condiciones de EXC-03 y comprobación automática (SEC-054).** Las comprueba
+`deploy/scan/comprobar-excepciones.sh`, que `construir.sh` ejecuta **antes** de
+escanear (no `tests/run.sh containers`, que no mira el Caddyfile). Falla si:
+- `deploy/proxy/Caddyfile` (sin comentarios) contiene `acme_server`,
+  `templates` o `markdown`, no tiene exactamente un `admin off`, tiene otra
+  directiva `admin`, o hace `import` de algo que no sea un snippet propio;
+- algún `compose.*.yaml` define `command`/`entrypoint` en el servicio `proxy`
+  (otro `--config`, `--adapter`, `--resume`), monta algo distinto de
+  `./deploy/proxy/Caddyfile:/etc/caddy/Caddyfile:ro` en `/etc/caddy`, o no usa
+  `docker.io/library/caddy:<versión>@sha256:…` (sin módulos añadidos);
+- algún compose (o `deploy/quadlet/`, cuando exista en PROD) llama a `gosu`.
+Se puede lanzar suelta: `sh deploy/scan/comprobar-excepciones.sh`. Probada con
+mutaciones en un directorio temporal fuera del repositorio (templates,
+acme_server, admin distinto/ausente/duplicado, import ajeno, otro montaje,
+command, gosu: todas fallan; sin cambios, pasa).
 
-**Alternativas sin excepción** (para elegir con Cybersecurity):
-- db: imagen derivada (`FROM postgres:19.0-alpine3.23@sha256:…` + `RUN rm
-  /usr/local/bin/gosu`), construida en cada entorno; exige `build:` en los
-  compose y cambios en `tests/run.sh` (Testing). El `docker-entrypoint.sh` solo
-  usa `gosu` si arranca como root.
-- proxy: imagen propia con `caddy:2.11.9-builder-alpine` y `xcaddy build
-  --with … ` fijando `golang.org/x/net@v0.62.0` (y `go-jose` cuando exista
-  corrección). No se ha intentado: añade una cadena de construcción y una
-  imagen que mantener solo para una DoS no alcanzable con este `Caddyfile`.
-- Lo normal es esperar a `caddy:2.11.10`/`2.12` y a un `postgres:19.1`, y
-  retirar las excepciones al salir (el escaneo avisa solo: *Fixed Version*).
+**Opcional para Testing (no hecho, `tests/` no es de infrastructure):** añadir a
+`sh tests/run.sh containers` la misma comprobación, p. ej. un `TX-CONT-02` que
+ejecute `sh deploy/scan/comprobar-excepciones.sh` y falle si su código ≠ 0.
+Y comprobar que la imagen de `db` de `compose.test.yaml` es
+`localhost/mi-app-db:19.0-alpine3.24` y que no existe `/usr/local/bin/gosu` en
+ella.
+
+- proxy: alternativa `xcaddy` descartada por Cybersecurity (§6.10, punto 5). Se
+  actualiza el digest de Caddy en ≤ 7 días de que salga una versión corregida
+  y se retira la entrada.
 
 ## 9. TESTING (`compose.test.yaml`, T-12)
 
@@ -1514,16 +1539,21 @@ podman run --rm --network mi-app-dev_frontend <imagen postgres por digest> pg_is
 
 `sh deploy/app/construir.sh` construye la imagen de la app y, antes de imprimir
 `APP_IMAGE=`, comprueba y escanea. Si algo falla sale con código ≠ 0, **no
-imprime `APP_IMAGE`** y renombra la etiqueta a `-rechazada`.
+imprime `APP_IMAGE`** y renombra la etiqueta a `-rechazada` (SEC-053: se crea
+`localhost/mi-app:<etiqueta>-rechazada` y se quita solo el nombre original; las
+otras etiquetas del mismo ID no se tocan).
 
 | Control | Dónde |
 |---|---|
-| `pnpm audit --prod --audit-level high` (RS-39) | `Containerfile`, etapa `build`, tras `pnpm deploy` |
+| `pnpm audit --prod --audit-level high` (RS-39), **en cada build** (SEC-053): `RUN` propio con `ARG AUDIT_NONCE` (hora, la pasa `construir.sh`) que invalida la caché de esa capa | `Containerfile`, etapa `build`, tras `pnpm deploy` |
 | Integridad de pnpm (`PNPM_INTEGRITY`, sha512; SEC-035) | `Containerfile` de la app y de `deploy/dev` |
 | `.npmrc` sin credenciales (`_auth*`, `_password`, `username`, `certfile`, `keyfile`; no muestra el valor; SEC-036) | `Containerfile`, tras `COPY . .`; y el final busca `.npmrc`, `.env*`, `*.pem`, `*.key` en `/app` (excepto `node_modules`) |
 | `node_use_quic` = `false`; `/app/dist` sin `node:quic`, `--experimental-quic` ni `dgram`; ningún `.node` con `NEEDED libssl/libcrypto` ni símbolos `OSSL_QUIC_*`, `SSL_new_listener`, `SSL_set_quic_tls_cbs` (SEC-033, condiciones 3 y 4) | `construir.sh`, sobre la imagen real (node en contenedor endurecido; `podman create` + `export`, `readelf`/`nm` fuera de la imagen) |
 | Etiqueta `-sucio` con la lista del `containerignore` (`apps packages package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig*.json tests/package.json` y `deploy/app/Containerfile|containerignore`) y con ficheros ignorados por git dentro de `apps/` y `packages/` (SEC-037); el script sigue sin aceptar `--build-arg` | `construir.sh` |
-| Trivy sobre **app, db y proxy** (db y proxy se leen de `compose.test.yaml`; deben ser únicas y coincidir con `compose.dev.yaml`) | `deploy/scan/escanear.sh` |
+| Imagen de db derivada: Alpine 3.24, `libxml2` ≥ 2.13.9-r3, sin `gosu` (SEC-049, SEC-051) | `deploy/db/construir.sh` (la llama `construir.sh`) |
+| Condiciones de EXC-03 y EXC-02 sobre el Caddyfile y los compose (SEC-054, §8.2) | `deploy/scan/comprobar-excepciones.sh`, antes de escanear |
+| Fallo cerrado de la condición 4 de EXC-01: si faltan `readelf` o `nm`, o fallan sobre un `.node` ELF, se rechaza (SEC-053); los prebuilds no ELF (win32, darwin) se cuentan y omiten | `construir.sh` |
+| Trivy sobre **app, db y proxy**: la app y la db **por digest** (`repo@sha256:…`, lo mismo que se imprime como `APP_IMAGE`; SEC-052); proxy por digest de `compose.test.yaml`. La db debe ser `localhost/mi-app-db:19.0-alpine3.24` en todos los compose y el proxy una sola imagen coincidente | `deploy/scan/escanear.sh` |
 
 `deploy/scan/escanear.sh <imagen> [excepciones.yaml] [informe.json]`: `podman
 save` a `$XDG_RUNTIME_DIR` (nunca el socket), Trivy 0.76.2 por digest en
@@ -1531,12 +1561,26 @@ contenedor rootless (`--user 1000:1000`, `--cap-drop=ALL`,
 `no-new-privileges`, `--read-only`, `.tar` en `ro`), `--severity
 HIGH,CRITICAL --exit-code 1 --show-suppressed`, caché de la BD en
 `~/.cache/mi-app-trivy`. Excepciones fechadas con `expired_at`: app
-`deploy/app/trivyignore.yaml` (EXC-01), db `deploy/scan/trivyignore-db.yaml` y
-proxy `deploy/scan/trivyignore-proxy.yaml` (§8.2). **Prohibido**
+`deploy/app/trivyignore.yaml` (EXC-01), proxy `deploy/scan/trivyignore-proxy.yaml` (§8.2); db sin excepciones
+(EXC-02 retirada). **Prohibido**
 `--ignore-unfixed`. Los informes JSON quedan en
 `~/.local/state/mi-app/escaneos/<etiqueta>-<app|db|proxy>.json`
 (`SCAN_DIR` lo cambia). Se puede lanzar suelto con cualquiera de las tres
 referencias. Necesita red para bajar la BD de Trivy.
+
+**Escáner fijo (SEC-052).** `escanear.sh` ignora `TRIVY_IMAGE` del entorno
+(`unset`) y usa el digest escrito en el script; muestra qué escáner usó. Para
+cambiar de versión se edita el digest (y §8).
+
+**Registro de escaneo aprobado (SEC-052, punto 3): PENDIENTE, antes de DEMO
+(Etapa 4).** Hoy `construir.sh`, si todo pasa, escribe
+`~/.local/state/mi-app/escaneos/aprobadas/<digest-app>` con fecha, digests de
+app/db/proxy y sha256 de los ficheros de excepciones. Falta que lo exijan:
+(a) `tests/run.sh` (de Testing, al menos en la ejecución de la puerta): rechazar
+un `APP_IMAGE` sin ese registro o con más de 7 días; (b) el despliegue de
+DEMO/PROD (Infrastructure, al crear `compose.demo.yaml`/Quadlet). Mientras
+tanto, una imagen hecha con `podman build` directo o rechazada puede usarse por
+digest en `tests/run.sh`.
 
 La imagen de herramientas de DEV no se despliega y no se escanea.
 

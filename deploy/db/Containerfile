@@ -1,0 +1,38 @@
+# Imagen de db: derivada de la oficial de PostgreSQL, la MISMA en DEV, TESTING,
+# DEMO y PROD (SEC-049, SEC-051; docs/infraestructura.md §8.2).
+#
+# Por que derivada:
+#  - libxml2: la imagen oficial 19.0-alpine3.24 trae 2.13.9-r2 (vulnerable,
+#    CVE-2026-86144 y otras); el repositorio de Alpine 3.24 ya tiene r5.
+#    `apk upgrade libxml2` y la comprobacion de version minima (LIBXML2_MIN).
+#  - gosu: el binario /usr/local/bin/gosu (Go 1.24.6, 1 critica y 25 altas de
+#    stdlib) solo lo usa docker-entrypoint.sh si arranca como root. Aqui nunca
+#    arranca como root (USER 1000:1000) y el binario se elimina: sin excepcion (EXC-02 retirada).
+#  - Rama Alpine: solo la mas reciente con soporte (SEC-051). Trivy solo ve CVE
+#    "corregidas" en la secdb de la rama; en una rama atrasada oculta las demas.
+#
+# Construir SIEMPRE con el script (rootless, sin sudo, formato docker para
+# conservar el HEALTHCHECK, comprobaciones y escaneo):
+#   sh deploy/db/construir.sh
+ARG PG_BASE=docker.io/library/postgres:19.0-alpine3.24@sha256:8e81a484097154610d0b72f2fd1b70e1f8c31fd6b743b6d0da8b2a8c1ab2ea1d
+FROM ${PG_BASE}
+
+ARG LIBXML2_MIN=2.13.9-r3
+# Unico paso como root, solo en construccion (rootless en el host).
+USER root
+RUN set -eu; \
+    apk upgrade --no-cache libxml2; \
+    v=$(apk list -I libxml2 | sed 's/^libxml2-\([^ ]*\) .*/\1/'); \
+    [ "$(apk version -t "$v" "${LIBXML2_MIN}")" != "<" ] \
+      || { echo "ERROR: libxml2 $v < ${LIBXML2_MIN} (SEC-049)" >&2; exit 1; }; \
+    echo "libxml2 $v"; \
+    rm -f /usr/local/bin/gosu; \
+    [ ! -e /usr/local/bin/gosu ]; \
+    rm -rf /var/cache/apk/*
+
+LABEL org.opencontainers.image.title="mi-app-db" \
+      org.opencontainers.image.description="PostgreSQL 19.0 sobre Alpine 3.24 sin gosu y con libxml2 corregido"
+
+USER 1000:1000
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
+  CMD ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "postgres"]

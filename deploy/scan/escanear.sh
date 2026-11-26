@@ -13,7 +13,10 @@
 # - Las excepciones se muestran (--show-suppressed).
 set -eu
 
-TRIVY_IMAGE=${TRIVY_IMAGE:-docker.io/aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb}
+# SEC-052: el escaner NO se puede cambiar por entorno. Se ignora cualquier TRIVY_IMAGE
+# heredado; para actualizar Trivy se cambia este digest (y docs/infraestructura.md §8).
+unset TRIVY_IMAGE
+TRIVY_IMAGE=docker.io/aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 IMG=${1:?uso: escanear.sh <imagen> [ficheroexcepciones.yaml] [informe.json]}
@@ -59,7 +62,7 @@ trivy() { # trivy <formato> <salida|-> <codigo-de-salida>
 # Informe JSON (sin fallar) y tabla legible con el codigo de salida que cuenta.
 trivy json /out/informe.json 0 || { echo "ERROR: Trivy fallo" >&2; exit 2; }
 if [ -n "$INFORME" ]; then cp "$TMP/informe.json" "$INFORME"; fi
-echo "== Trivy: $IMG"
+echo "== Trivy: $IMG (escaner: $TRIVY_IMAGE)"
 set +e
 trivy table "" 1
 RC=$?

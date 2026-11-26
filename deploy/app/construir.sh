@@ -6,9 +6,15 @@
 #
 # Despues de construir (SEC-034, docs/infraestructura.md §14.1):
 #   1. comprobaciones de SEC-033 (condiciones 3 y 4) sobre la imagen real;
-#   2. Trivy sobre TODAS las imagenes desplegables (app, db, proxy) con las
-#      excepciones fechadas (deploy/app/trivyignore.yaml, deploy/scan/*);
-#   (pnpm audit --prod y las comprobaciones de .npmrc/pnpm estan en el Containerfile.)
+#   2. construye la imagen de db (deploy/db/construir.sh: postgres 19.0-alpine3.24
+#      por digest, libxml2 >= r3, sin gosu; SEC-049/051) y la comprueba;
+#   3. comprueba las condiciones de EXC-03 y EXC-02 (SEC-054,
+#      deploy/scan/comprobar-excepciones.sh: Caddyfile y compose);
+#   4. Trivy sobre TODAS las imagenes desplegables (app y db por digest, proxy)
+#      con las excepciones fechadas (deploy/app/trivyignore.yaml,
+#      deploy/scan/trivyignore-proxy.yaml); Trivy fijo, no cambia por entorno (SEC-052);
+#   (pnpm audit --prod: build-arg AUDIT_NONCE, se ejecuta en CADA build, SEC-053;
+#   las comprobaciones de .npmrc/pnpm estan en el Containerfile.)
 # Si algo falla: codigo != 0, NO imprime APP_IMAGE y la etiqueta pasa a -rechazada.
 #
 # Al terminar imprime la referencia POR DIGEST que se usa como APP_IMAGE:
@@ -59,6 +65,7 @@ podman build \
   --pull=missing \
   --ignorefile deploy/app/containerignore \
   --label "org.opencontainers.image.revision=$REVISION" \
+  --build-arg "AUDIT_NONCE=$(date +%s)-$$" \
   -f deploy/app/Containerfile \
   -t "$REPO:$ETIQUETA" \
   .
@@ -69,9 +76,14 @@ echo "Imagen: $REPO:$ETIQUETA ($DIGEST)"
 # --- Verificacion (SEC-034). Cualquier fallo: etiqueta -rechazada y sin APP_IMAGE.
 rechazar() {
   echo "ERROR: $1" >&2
-  podman tag "$REPO:$ETIQUETA" "$REPO:${ETIQUETA%-rechazada}-rechazada" 2>/dev/null || true
-  podman untag "$REPO:$ETIQUETA" 2>/dev/null || true
-  echo "La imagen NO se acepta (etiqueta $REPO:${ETIQUETA%-rechazada}-rechazada); no hay APP_IMAGE." >&2
+  RECH="$REPO:${ETIQUETA%-rechazada}-rechazada"
+  # SEC-053: crear la etiqueta -rechazada y quitar SOLO el nombre original
+  # (`podman untag <img>` sin nombre quita todos los nombres de la imagen).
+  if podman tag "$REPO:$ETIQUETA" "$RECH" 2>/dev/null; then
+    [ "$REPO:$ETIQUETA" = "$RECH" ] || podman untag "$REPO:$ETIQUETA" "$REPO:$ETIQUETA" 2>/dev/null || true
+    podman image exists "$RECH" || echo "AVISO: no se pudo crear $RECH" >&2
+  fi
+  echo "La imagen NO se acepta (etiqueta $RECH); no hay APP_IMAGE." >&2
   exit 1
 }
 BASE=${XDG_RUNTIME_DIR:-/tmp}
@@ -103,36 +115,63 @@ fi
 if find "$TMP/fs/app" \( -name .npmrc -o -name '.env' -o -name '.env.*' \) -not -path '*/node_modules/*' | grep -q .; then
   rechazar "SEC-036: .npmrc o .env* en /app"
 fi
+# SEC-053: sin readelf o nm la condicion 4 no se puede comprobar: se rechaza (no pasa en silencio).
+command -v readelf >/dev/null 2>&1 && command -v nm >/dev/null 2>&1 \
+  || rechazar "SEC-053: faltan readelf o nm (binutils): no se puede comprobar SEC-033 condicion 4"
 NODOS=0
-for f in $(find "$TMP/fs/app" -name '*.node' -type f 2>/dev/null); do
+NOELF=0
+find "$TMP/fs/app" -name '*.node' -type f > "$TMP/nodos.txt"
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
   NODOS=$((NODOS+1))
-  if readelf -d "$f" 2>/dev/null | grep -Eq 'NEEDED.*(libssl|libcrypto)'; then
+  # Solo se inspeccionan los ELF (los que carga Linux). Los prebuilds de otros
+  # sistemas (win32 PE, darwin Mach-O) no se cargan aqui y readelf no los lee.
+  if [ "$(head -c 4 "$f" | od -An -tx1 | tr -d ' \n')" != "7f454c46" ]; then
+    NOELF=$((NOELF+1)); continue
+  fi
+  # Fallo cerrado: si readelf o nm fallan sobre un .node, se rechaza.
+  SALIDA=$(readelf -d "$f" 2>&1) || rechazar "SEC-053: readelf fallo sobre $f"
+  if printf '%s\n' "$SALIDA" | grep -Eq 'NEEDED.*(libssl|libcrypto)'; then
     rechazar "SEC-033 condicion 4: $f enlaza libssl/libcrypto"
   fi
-  if nm -D --undefined-only "$f" 2>/dev/null | grep -Eq 'OSSL_QUIC_|SSL_new_listener|SSL_set_quic_tls_cbs'; then
+  SALIDA=$(nm -D --undefined-only "$f" 2>&1) || rechazar "SEC-053: nm fallo sobre $f"
+  if printf '%s\n' "$SALIDA" | grep -Eq 'OSSL_QUIC_|SSL_new_listener|SSL_set_quic_tls_cbs'; then
     rechazar "SEC-033 condicion 4: $f importa simbolos QUIC de OpenSSL"
   fi
-done
-echo "SEC-033: node_use_quic=false; dist sin node:quic/dgram; $NODOS modulo(s) .node sin libssl/libcrypto ni simbolos QUIC"
+done < "$TMP/nodos.txt"
+echo "SEC-033: node_use_quic=false; dist sin node:quic/dgram; $NODOS modulo(s) .node ($NOELF no ELF omitidos) sin libssl/libcrypto ni simbolos QUIC"
 rm -rf "$TMP/fs"
 
-# 2) Trivy sobre TODAS las imagenes desplegables (app, db, proxy). db y proxy se
-#    leen de compose.test.yaml (misma referencia por digest en DEV/TESTING/DEMO/PROD).
-imagen_de() { # imagen_de <fichero> <repo>
-  sed -n "s#^ *image: *\(docker.io/library/$2:[^ ]*@sha256:[0-9a-f]\{64\}\) *\$#\1#p" "$1" | sort -u
+# 2) Imagen de db (SEC-049, SEC-051): derivada de postgres:19.0-alpine3.24 por
+#    digest, libxml2 >= r3, sin gosu. Etiqueta fija en los compose; se comprueba
+#    que DEV, TESTING y DEMO usan la misma y se escanea por digest.
+imagen_de() { # imagen_de <fichero> <repo-con-prefijo>  (proxy: caddy por digest)
+  sed -n "s#^ *image: *\($2:[^ ]*@sha256:[0-9a-f]\{64\}\) *\$#\1#p" "$1" | sort -u
 }
-DB_IMAGE=$(imagen_de compose.test.yaml postgres)
-PROXY_IMAGE=$(imagen_de compose.test.yaml caddy)
-[ "$(printf '%s\n' "$DB_IMAGE" | grep -c .)" = 1 ] || rechazar "compose.test.yaml: debe haber una sola imagen postgres por digest"
+DB_TAG=localhost/mi-app-db:19.0-alpine3.24
+db_de() { sed -n 's#^ *image: *\(localhost/mi-app-db:[^ ]*\) *$#\1#p' "$1" | sort -u; }
+[ "$(db_de compose.test.yaml)" = "$DB_TAG" ] || rechazar "compose.test.yaml: la imagen de db debe ser $DB_TAG (una sola)"
+for c in compose.dev.yaml compose.demo.yaml; do
+  [ -f "$c" ] || continue
+  [ "$(db_de "$c")" = "$DB_TAG" ] || rechazar "$c: la imagen de db no coincide con compose.test.yaml ($DB_TAG)"
+done
+PROXY_IMAGE=$(imagen_de compose.test.yaml docker.io/library/caddy)
 [ "$(printf '%s\n' "$PROXY_IMAGE" | grep -c .)" = 1 ] || rechazar "compose.test.yaml: debe haber una sola imagen caddy por digest"
 for c in compose.dev.yaml compose.demo.yaml; do
   [ -f "$c" ] || continue
-  [ "$(imagen_de "$c" postgres)" = "$DB_IMAGE" ] || rechazar "$c: la imagen de db no coincide con compose.test.yaml"
+  P=$(imagen_de "$c" docker.io/library/caddy)
+  [ -z "$P" ] || [ "$P" = "$PROXY_IMAGE" ] || rechazar "$c: la imagen de caddy no coincide con compose.test.yaml"
 done
-if grep -n 'gosu' compose.*.yaml 2>/dev/null | grep -v '^[^:]*:[0-9]*: *#' | grep -q .; then
-  rechazar "SEC-049: un compose llama a gosu"
-fi
+sh deploy/db/construir.sh > "$TMP/db.log" 2>&1 || { cat "$TMP/db.log" >&2; rechazar "deploy/db/construir.sh fallo (SEC-049, SEC-051)"; }
+tail -3 "$TMP/db.log"
+DB_DIGEST=$(podman image inspect --format '{{.Digest}}' "$DB_TAG")
+DB_IMAGE=localhost/mi-app-db@$DB_DIGEST
 
+# 3) SEC-054: condiciones de EXC-03 (Caddyfile, compose del proxy) y EXC-02 (gosu).
+sh deploy/scan/comprobar-excepciones.sh || rechazar "SEC-054: condicion de una excepcion incumplida"
+
+# 4) Trivy sobre TODAS las imagenes desplegables. La app por DIGEST (no por
+#    etiqueta, SEC-052): se escanea lo que se imprime como APP_IMAGE.
 ESCANEO=0
 escanear() { # escanear <nombre> <imagen> [excepciones]
   if sh deploy/scan/escanear.sh "$2" "${3:-}" "$SCAN_DIR/$ETIQUETA-$1.json"; then
@@ -141,10 +180,22 @@ escanear() { # escanear <nombre> <imagen> [excepciones]
     echo "Trivy $1: FALLA" >&2; ESCANEO=1
   fi
 }
-escanear app "$REPO:$ETIQUETA" deploy/app/trivyignore.yaml
-escanear db "$DB_IMAGE" deploy/scan/trivyignore-db.yaml
+escanear app "$REPO@$DIGEST" deploy/app/trivyignore.yaml
+escanear db "$DB_IMAGE"
 escanear proxy "$PROXY_IMAGE" deploy/scan/trivyignore-proxy.yaml
 [ "$ESCANEO" -eq 0 ] || rechazar "Trivy: HIGH/CRITICAL sin excepcion vigente en app, db o proxy (SEC-034)"
+
+# Registro de escaneo aprobado (SEC-052 punto 3). Hoy solo se escribe: la
+# comprobacion en tests/run.sh y en el despliegue de DEMO/PROD esta pendiente
+# (docs/infraestructura.md §14.1).
+mkdir -p "$SCAN_DIR/aprobadas"
+{
+  echo "fecha=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "app=$REPO@$DIGEST"
+  echo "db=$DB_IMAGE"
+  echo "proxy=$PROXY_IMAGE"
+  echo "excepciones_sha256=$(cat deploy/app/trivyignore.yaml deploy/scan/trivyignore-proxy.yaml | sha256sum | cut -d' ' -f1)"
+} > "$SCAN_DIR/aprobadas/${DIGEST#sha256:}"
 
 echo "Imagen: $REPO:$ETIQUETA"
 echo "APP_IMAGE=$REPO@$DIGEST"

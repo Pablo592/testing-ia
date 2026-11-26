@@ -94,6 +94,11 @@ if ! podman image exists "$IMAGE"; then
   BUILDAH_FORMAT=docker $PC --profile setup build deps
 fi
 
+# 3b. Imagen de db (derivada, SEC-049): local, no se descarga; se construye si falta.
+if ! podman image exists localhost/mi-app-db:19.0-alpine3.24; then
+  sh deploy/db/construir.sh
+fi
+
 # 4. Dependencias (requiere package.json y pnpm-lock.yaml en la raíz).
 if [ "$SIN_DEPS" -eq 0 ]; then
   if [ ! -f pnpm-lock.yaml ]; then

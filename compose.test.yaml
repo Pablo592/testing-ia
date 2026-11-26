@@ -105,7 +105,11 @@ services:
   db:
     <<: *hardening
     profiles: [integration, e2e, perf, security]
-    image: docker.io/library/postgres:19.0-alpine3.23@sha256:40ad7e457013448b5522c6c5d30dccb8248959c41adc0e56c1785be4293bbd67
+    # Imagen derivada (SEC-049, SEC-051): postgres:19.0-alpine3.24 por digest, libxml2 >= r3,
+    # sin gosu. Local: se construye con `sh deploy/db/construir.sh` (lo hace construir.sh de la app
+    # y levantar.sh); nunca se descarga (pull_policy: never). docs/infraestructura.md §8.
+    image: localhost/mi-app-db:19.0-alpine3.24
+    pull_policy: never
     command:
       - postgres
       - -c

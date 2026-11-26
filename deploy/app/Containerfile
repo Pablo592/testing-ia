@@ -87,8 +87,13 @@ RUN set -eu; \
 RUN pnpm install --offline --frozen-lockfile \
       --filter "${API_PKG}..." --filter "${WEB_PKG}..." \
  && pnpm --filter "${API_PKG}..." --filter "${WEB_PKG}..." run build \
- && pnpm --filter "${API_PKG}" deploy --prod /out/api \
- && pnpm audit --prod --audit-level high
+ && pnpm --filter "${API_PKG}" deploy --prod /out/api
+
+# 3b) SEC-053: pnpm audit en CADA build. AUDIT_NONCE (lo pasa construir.sh con
+#    la hora) cambia la clave de cache de esta capa; sin ella, un build con el
+#    mismo lockfile y codigo reutilizaria la capa y no consultaria la base de avisos.
+ARG AUDIT_NONCE=sin-nonce
+RUN echo "audit: ${AUDIT_NONCE}" && pnpm audit --prod --audit-level high
 
 # 4) Comprobación del contrato: si falta un punto de entrada, falla el build
 #    (mejor aquí que en TESTING). docs/arquitectura.md §2.1, §10; infraestructura §8.1.
