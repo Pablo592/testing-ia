@@ -18,12 +18,23 @@ FROM docker.io/library/node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb
 # raíz cuando el Developer lo cree. Node >= 25 ya no trae corepack, por eso se
 # instala con npm en tiempo de construcción.
 ARG PNPM_VERSION=12.21.0
+# dist.integrity de pnpm@12.21.0 (SEC-035); mismo valor que deploy/app/Containerfile.
+ARG PNPM_INTEGRITY=sha512-Zv2CeO4ok1zpUXktNDZ/869cQyonVkRYIwKVM4NbjaUpu+C+UTCv1W7QcT+4eJ5Hutgtk71a4v5UsVVi1idu8A==
 
 # Único paso como root: solo en construcción (rootless), nunca en ejecución.
-RUN npm install --global --no-fund --no-audit "pnpm@${PNPM_VERSION}" \
- && npm cache clean --force \
- && mkdir -p /workspace /pnpm-store \
- && chown 1000:1000 /workspace /pnpm-store
+# SEC-035: integridad de pnpm fijada. Se descarga el .tgz, se comprueba su
+# sha512 contra PNPM_INTEGRITY (falla el build si no coincide) y se instala
+# desde el fichero, sin scripts. Al actualizar pnpm se cambian los dos ARG juntos.
+RUN set -eu; \
+    cd /tmp; \
+    npm pack --silent --ignore-scripts "pnpm@${PNPM_VERSION}" >/dev/null; \
+    got="sha512-$(node -e "process.stdout.write(require('crypto').createHash('sha512').update(require('fs').readFileSync('pnpm-${PNPM_VERSION}.tgz')).digest('base64'))")"; \
+    [ "$got" = "${PNPM_INTEGRITY}" ] || { echo "ERROR: la integridad de pnpm@${PNPM_VERSION} no coincide con PNPM_INTEGRITY (SEC-035)" >&2; exit 1; }; \
+    npm install --global --no-fund --no-audit --ignore-scripts "./pnpm-${PNPM_VERSION}.tgz"; \
+    rm -f /tmp/pnpm-*.tgz; \
+    npm cache clean --force; \
+    mkdir -p /workspace /pnpm-store; \
+    chown 1000:1000 /workspace /pnpm-store
 
 # El usuario "node" de la imagen oficial tiene UID/GID 1000.
 USER 1000:1000

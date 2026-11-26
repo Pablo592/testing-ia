@@ -92,7 +92,7 @@ services:
 
   db:
     <<: *hardening
-    image: docker.io/library/postgres:19.0-alpine@sha256:8b0ff4cdf221f0c53d7fcda681d3b461be725c492cd881c5ec9c0ad25023f188
+    image: docker.io/library/postgres:19.0-alpine3.23@sha256:40ad7e457013448b5522c6c5d30dccb8248959c41adc0e56c1785be4293bbd67
     # Configuración de logs de docs/logging.md §5.4 (hallazgo M-05).
     # log_parameter_max_length*=0: NUNCA se escriben valores de parámetros.
     command:

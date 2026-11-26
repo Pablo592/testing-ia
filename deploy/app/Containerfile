@@ -25,12 +25,14 @@ ARG BUILD_IMAGE=docker.io/library/node:26.13.1-trixie-slim@sha256:abe7e5a82b61a8
 # Ejecución: distroless nodejs26 sobre Debian 13 (Node v26.13.1, binario
 # /nodejs/bin/node). Etiqueta "latest" (no "nonroot": el usuario se fija abajo
 # a 1000:1000, SEC-010).
-ARG RUNTIME_IMAGE=gcr.io/distroless/nodejs26-debian13@sha256:b462e87a3db156aea160dd8a5306b85d02c3061ca0e3194fe0af81282a830ab0
+ARG RUNTIME_IMAGE=gcr.io/distroless/nodejs26-debian13@sha256:13e3ac17e2911d238622fea7808a7a161ba6b33a41e542ded6e399387e1dbc84
 
 FROM ${BUILD_IMAGE} AS build
 
 # Debe coincidir con "packageManager" del package.json raíz (docs/infraestructura.md §2).
 ARG PNPM_VERSION=12.21.0
+# dist.integrity de pnpm@12.21.0 (sha512, base64); contrastada con el .tgz del registro.
+ARG PNPM_INTEGRITY=sha512-Zv2CeO4ok1zpUXktNDZ/869cQyonVkRYIwKVM4NbjaUpu+C+UTCv1W7QcT+4eJ5Hutgtk71a4v5UsVVi1idu8A==
 # Rutas de salida del build dentro del monorepo (contrato con el Developer,
 # docs/infraestructura.md §8.1). Solo cambian si cambia la estructura de §3.
 ARG API_DIST=apps/api/dist
@@ -41,10 +43,19 @@ ARG WEB_PKG=@mi-app/web
 
 # Único paso como root, solo en construcción (rootless): pnpm global y la
 # carpeta de trabajo del usuario node (UID/GID 1000 en la imagen oficial).
-RUN npm install --global --no-fund --no-audit "pnpm@${PNPM_VERSION}" \
- && npm cache clean --force \
- && mkdir -p /src /out \
- && chown 1000:1000 /src /out
+# SEC-035: integridad de pnpm fijada. Se descarga el .tgz, se comprueba su
+# sha512 contra PNPM_INTEGRITY (falla el build si no coincide) y se instala
+# desde el fichero, sin scripts. Al actualizar pnpm se cambian los dos ARG juntos.
+RUN set -eu; \
+    cd /tmp; \
+    npm pack --silent --ignore-scripts "pnpm@${PNPM_VERSION}" >/dev/null; \
+    got="sha512-$(node -e "process.stdout.write(require('crypto').createHash('sha512').update(require('fs').readFileSync('pnpm-${PNPM_VERSION}.tgz')).digest('base64'))")"; \
+    [ "$got" = "${PNPM_INTEGRITY}" ] || { echo "ERROR: la integridad de pnpm@${PNPM_VERSION} no coincide con PNPM_INTEGRITY (SEC-035)" >&2; exit 1; }; \
+    npm install --global --no-fund --no-audit --ignore-scripts "./pnpm-${PNPM_VERSION}.tgz"; \
+    rm -f /tmp/pnpm-*.tgz; \
+    npm cache clean --force; \
+    mkdir -p /src /out; \
+    chown 1000:1000 /src /out
 
 USER 1000:1000
 WORKDIR /src
@@ -60,6 +71,14 @@ RUN pnpm fetch
 # 2) Código del monorepo (solo lo que deja pasar deploy/app/containerignore).
 COPY --chown=1000:1000 . .
 
+# SEC-036: ningun .npmrc del contexto puede llevar credenciales (solo se listan
+# los nombres de fichero, nunca el valor). Los tokens de registro van con
+# `podman build --secret`, nunca en el contexto ni en un build arg.
+RUN set -eu; \
+    if find . -name .npmrc -not -path '*/node_modules/*' -exec grep -liE '(_auth|_password|username|certfile|keyfile)' {} + | grep -q .; then \
+      echo "ERROR: un .npmrc del contexto lleva credenciales (SEC-036); quitalas del fichero" >&2; exit 1; \
+    fi
+
 # 3) Instalación sin red (--offline), solo de api, web y sus dependencias (no
 #    las de tests/), build en orden topológico (packages/shared antes que apps/*)
 #    y node_modules de PRODUCCIÓN de apps/api en /out/api (pnpm deploy, sin
@@ -68,7 +87,8 @@ COPY --chown=1000:1000 . .
 RUN pnpm install --offline --frozen-lockfile \
       --filter "${API_PKG}..." --filter "${WEB_PKG}..." \
  && pnpm --filter "${API_PKG}..." --filter "${WEB_PKG}..." run build \
- && pnpm --filter "${API_PKG}" deploy --prod /out/api
+ && pnpm --filter "${API_PKG}" deploy --prod /out/api \
+ && pnpm audit --prod --audit-level high
 
 # 4) Comprobación del contrato: si falta un punto de entrada, falla el build
 #    (mejor aquí que en TESTING). docs/arquitectura.md §2.1, §10; infraestructura §8.1.
@@ -84,7 +104,7 @@ RUN set -eu; \
     cp -a /out/api/package.json /out/api/node_modules /out/app/; \
     cp -a "${API_DIST}" /out/app/dist; \
     cp -a "${WEB_DIST}" /out/app/public; \
-    if find /out/app/dist /out/app/public -name '.env*' -o -name '*.pem' -o -name '*.key' | grep -q .; then \
+    if find /out/app -path /out/app/node_modules -prune -o \( -name '.npmrc' -o -name '.env*' -o -name '*.pem' -o -name '*.key' \) -print | grep -q .; then \
       echo "ERROR: fichero de secreto en la salida del build" >&2; exit 1; \
     fi
 

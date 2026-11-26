@@ -1,0 +1,17 @@
+# Excepciones del escaneo de la imagen de la app (SEC-034). Cambiar este fichero
+# requiere una entrada nueva o actualizada de Cybersecurity en docs/seguridad.md.
+# Prohibido --ignore-unfixed, ignorar por paquete entero o entradas sin expired_at.
+#
+# EXC-01 (SEC-033): QUIC de OpenSSL en libssl3t64, sin correccion publicada en
+# Debian; no alcanzable (docs/seguridad.md §6.7). Concedida 2026-11-24, revision
+# 2026-12-08, caduca 2026-12-24. Queda invalidada si Debian publica la correccion
+# (Trivy mostrara "Fixed Version": retirar la entrada en <= 7 dias).
+vulnerabilities:
+  - id: CVE-2026-107494
+    purls: ["pkg:deb/debian/libssl3t64@3.5.9-1~deb13u1?arch=amd64&distro=debian-13.8"]
+    expired_at: 2026-12-24
+    statement: "SEC-033 / EXC-01: QUIC no alcanzable (docs/seguridad.md §6.7)"
+  - id: CVE-2026-124709
+    purls: ["pkg:deb/debian/libssl3t64@3.5.9-1~deb13u1?arch=amd64&distro=debian-13.8"]
+    expired_at: 2026-12-24
+    statement: "SEC-033 / EXC-01: QUIC no alcanzable (docs/seguridad.md §6.7)"

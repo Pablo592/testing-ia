@@ -1,0 +1,19 @@
+# PROPUESTA de excepcion (SEC-050), PENDIENTE de validacion de Cybersecurity.
+# /usr/bin/caddy de caddy:2.11.9-alpine (la ultima 2.x publicada a 2026-11-26):
+#  - CVE-2026-116587 go-jose/v3 v3.0.5: sin correccion publicada.
+#  - CVE-2026-78661 x/net v0.60.0: corregida en x/net 0.62.0, pero ningun Caddy
+#    publicado la lleva todavia.
+# Condiciones: Caddyfile sin acme_server, con `admin off` y sin templates ni
+# markdown (comprobado por tests/run.sh containers); caduca a los 30 dias o al
+# salir la correccion, lo que llegue antes (retirar la entrada).
+vulnerabilities:
+  - id: CVE-2026-116587
+    paths: ["usr/bin/caddy"]
+    purls: ["pkg:golang/github.com/go-jose/go-jose/v3@v3.0.5"]
+    expired_at: 2026-12-26
+    statement: "SEC-050 (propuesta): Caddy no analiza JWK de clientes (admin off, sin acme_server)"
+  - id: CVE-2026-78661
+    paths: ["usr/bin/caddy"]
+    purls: ["pkg:golang/golang.org/x/net@v0.60.0"]
+    expired_at: 2026-12-26
+    statement: "SEC-050 (propuesta): Caddy no analiza HTML (sin templates ni markdown)"

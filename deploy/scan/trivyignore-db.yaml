@@ -1,0 +1,140 @@
+# PROPUESTA de excepcion (SEC-049), PENDIENTE de validacion de Cybersecurity.
+# Solo el binario /usr/local/bin/gosu de la imagen postgres (Go 1.24.6, stdlib):
+# 1 critica y 25 altas, todas con correccion en Go pero no en la imagen
+# oficial. gosu solo lo usa docker-entrypoint.sh si el contenedor arranca como
+# root; los `db` de todos los entornos corren con user 1000:1000, cap_drop ALL y
+# no-new-privileges, y no llaman a gosu (comprobado por tests/run.sh containers).
+# Alcance: solo la ruta usr/local/bin/gosu y solo pkg:golang/stdlib@v1.24.6;
+# otro binario u otra version vuelve a fallar. Revision a los 30 dias.
+# La alternativa sin excepcion es una imagen derivada sin gosu (docs/infraestructura.md §8.2).
+vulnerabilities:
+  - id: CVE-2025-68121
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2025-61726
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2025-61729
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-111943
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-25679
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-27145
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-32280
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-32281
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-32283
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-33811
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-33814
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-33818
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-39820
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-39821
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-39822
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-39836
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-42499
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-42504
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-56853
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-56858
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-56859
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-56860
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-56862
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-78667
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-78669
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
+  - id: CVE-2026-97031
+    paths: ["usr/local/bin/gosu"]
+    purls: ["pkg:golang/stdlib@v1.24.6"]
+    expired_at: 2026-12-26
+    statement: "SEC-049 (propuesta): gosu no se ejecuta, db sin root (docs/seguridad.md SEC-049)"
