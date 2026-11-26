@@ -8,8 +8,12 @@
 # EXC-03 (Caddy, SEC-050): el Caddyfile no tiene acme_server, templates ni
 #   markdown, tiene exactamente un "admin off" y ninguna otra directiva admin;
 #   ningun compose monta otro fichero en /etc/caddy, ni arranca Caddy con
-#   command/entrypoint (--config, --adapter, --resume...), y la imagen es la
-#   oficial de caddy por digest.
+#   command/entrypoint (--config, --adapter, --resume...), y la imagen del proxy es
+#   la derivada minima localhost/mi-app-proxy:<version> (pull_policy: never) cuya
+#   base (deploy/proxy/Containerfile) es la oficial caddy:<version> por digest, con
+#   un solo FROM y sin COPY/ADD/xcaddy/apk add. Que /usr/bin/caddy sea identico
+#   al oficial (sha256) lo comprueba deploy/proxy/construir.sh al construir
+#   (SEC-055); aqui se exige que el script siga haciendolo.
 # EXC-02 retirada (SEC-049): la imagen de db no lleva gosu; aqui ademas ningun
 #   compose lo llama.
 # Los compose que no existan (DEMO, antes de la Etapa 4) se omiten; Quadlet
@@ -44,6 +48,26 @@ else
   fi
 fi
 
+# Imagen derivada del proxy (SEC-055): base oficial por digest y sin nada que cambie caddy.
+PF=deploy/proxy/Containerfile
+if [ ! -f "$PF" ]; then
+  mal "falta $PF (imagen derivada del proxy)"
+else
+  PL=$(sin_comentarios "$PF")
+  printf '%s\n' "$PL" | grep -Eq '^ARG CADDY_BASE=docker\.io/library/caddy:[^[:space:]@]+@sha256:[0-9a-f]{64}[[:space:]]*$' \
+    || mal "$PF: ARG CADDY_BASE no es docker.io/library/caddy:<version>@sha256:<digest> (base oficial por digest)"
+  [ "$(printf '%s\n' "$PL" | grep -Eic '^[[:space:]]*FROM[[:space:]]')" = 1 ] \
+    && printf '%s\n' "$PL" | grep -Eq '^FROM \$\{CADDY_BASE\}[[:space:]]*$' \
+    || mal "$PF: debe tener un unico FROM \${CADDY_BASE}"
+  if printf '%s\n' "$PL" | grep -Eiq '(^|[^[:alnum:]_])(COPY|ADD|xcaddy|add-package|remove-package|curl|wget)([^[:alnum:]_]|$)|apk[[:space:]]+(--[a-z-]+[[:space:]]+)*(add|del)|--mount|--from'; then
+    mal "$PF: COPY/ADD/xcaddy/apk add o descargas: podria cambiar /usr/bin/caddy (condicion 'sin modulos anadidos' de EXC-03)"
+  fi
+  PS=deploy/proxy/construir.sh
+  if [ ! -f "$PS" ] || ! grep -q 'sha256sum /usr/bin/caddy' "$PS" || ! grep -q 'SHA_OFICIAL' "$PS"; then
+    mal "$PS no compara el sha256 de /usr/bin/caddy con la imagen oficial (condicion de EXC-03)"
+  fi
+fi
+
 for C in compose.*.yaml; do
   [ -f "$C" ] || continue
   LIMPIO=$(sin_comentarios "$C")
@@ -56,8 +80,10 @@ for C in compose.*.yaml; do
     if printf '%s\n' "$BLOQUE" | grep -Eq '^[[:space:]]+(command|entrypoint):'; then
       mal "$C: el servicio proxy define command/entrypoint (otro --config/--adapter/--resume; condicion de EXC-03)"
     fi
-    printf '%s\n' "$BLOQUE" | grep -Eq '^[[:space:]]+image:[[:space:]]*docker\.io/library/caddy:[^[:space:]@]+@sha256:[0-9a-f]{64}[[:space:]]*$' \
-      || mal "$C: la imagen del proxy no es docker.io/library/caddy:<version>@sha256:<digest> (sin modulos anadidos)"
+    printf '%s\n' "$BLOQUE" | grep -Eq '^[[:space:]]+image:[[:space:]]*localhost/mi-app-proxy:[A-Za-z0-9._-]+[[:space:]]*$' \
+      || mal "$C: la imagen del proxy no es localhost/mi-app-proxy:<version> (la derivada de deploy/proxy/Containerfile; SEC-055)"
+    printf '%s\n' "$BLOQUE" | grep -Eq '^[[:space:]]+pull_policy:[[:space:]]*never[[:space:]]*$' \
+      || mal "$C: el proxy no tiene pull_policy: never (la imagen derivada es local)"
     for m in $(printf '%s\n' "$BLOQUE" | grep -E '/etc/caddy|Caddyfile' | sed -e 's/^[[:space:]]*-[[:space:]]*//' -e 's/"//g' -e "s/'//g" | tr -d ' '); do
       [ "$m" = "./deploy/proxy/Caddyfile:/etc/caddy/Caddyfile:ro" ] \
         || mal "$C: el proxy monta '$m' (solo ./deploy/proxy/Caddyfile:/etc/caddy/Caddyfile:ro)"

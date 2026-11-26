@@ -7,7 +7,9 @@
 # Despues de construir (SEC-034, docs/infraestructura.md §14.1):
 #   1. comprobaciones de SEC-033 (condiciones 3 y 4) sobre la imagen real;
 #   2. construye la imagen de db (deploy/db/construir.sh: postgres 19.0-alpine3.24
-#      por digest, libxml2 >= r3, sin gosu; SEC-049/051) y la comprueba;
+#      por digest, libxml2 >= r3, sin gosu, sin paquetes atrasados; SEC-049/051/055)
+#      y la del proxy (deploy/proxy/construir.sh: caddy:2.11.9-alpine por digest
+#      + apk upgrade, /usr/bin/caddy identico al oficial; SEC-055/EXC-03) y las comprueba;
 #   3. comprueba las condiciones de EXC-03 y EXC-02 (SEC-054,
 #      deploy/scan/comprobar-excepciones.sh: Caddyfile y compose);
 #   4. Trivy sobre TODAS las imagenes desplegables (app y db por digest, proxy)
@@ -77,6 +79,8 @@ echo "Imagen: $REPO:$ETIQUETA ($DIGEST)"
 rechazar() {
   echo "ERROR: $1" >&2
   RECH="$REPO:${ETIQUETA%-rechazada}-rechazada"
+  # SEC-052 punto 3a: una imagen rechazada no puede quedar en el registro de aprobadas.
+  [ -z "${DIGEST:-}" ] || rm -f "${SCAN_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/mi-app/escaneos}/aprobadas/${DIGEST#sha256:}"
   # SEC-053: crear la etiqueta -rechazada y quitar SOLO el nombre original
   # (`podman untag <img>` sin nombre quita todos los nombres de la imagen).
   if podman tag "$REPO:$ETIQUETA" "$RECH" 2>/dev/null; then
@@ -142,12 +146,9 @@ done < "$TMP/nodos.txt"
 echo "SEC-033: node_use_quic=false; dist sin node:quic/dgram; $NODOS modulo(s) .node ($NOELF no ELF omitidos) sin libssl/libcrypto ni simbolos QUIC"
 rm -rf "$TMP/fs"
 
-# 2) Imagen de db (SEC-049, SEC-051): derivada de postgres:19.0-alpine3.24 por
+# 2) Imagen de db (SEC-049, SEC-051, SEC-055): derivada de postgres:19.0-alpine3.24 por
 #    digest, libxml2 >= r3, sin gosu. Etiqueta fija en los compose; se comprueba
 #    que DEV, TESTING y DEMO usan la misma y se escanea por digest.
-imagen_de() { # imagen_de <fichero> <repo-con-prefijo>  (proxy: caddy por digest)
-  sed -n "s#^ *image: *\($2:[^ ]*@sha256:[0-9a-f]\{64\}\) *\$#\1#p" "$1" | sort -u
-}
 DB_TAG=localhost/mi-app-db:19.0-alpine3.24
 db_de() { sed -n 's#^ *image: *\(localhost/mi-app-db:[^ ]*\) *$#\1#p' "$1" | sort -u; }
 [ "$(db_de compose.test.yaml)" = "$DB_TAG" ] || rechazar "compose.test.yaml: la imagen de db debe ser $DB_TAG (una sola)"
@@ -155,17 +156,24 @@ for c in compose.dev.yaml compose.demo.yaml; do
   [ -f "$c" ] || continue
   [ "$(db_de "$c")" = "$DB_TAG" ] || rechazar "$c: la imagen de db no coincide con compose.test.yaml ($DB_TAG)"
 done
-PROXY_IMAGE=$(imagen_de compose.test.yaml docker.io/library/caddy)
-[ "$(printf '%s\n' "$PROXY_IMAGE" | grep -c .)" = 1 ] || rechazar "compose.test.yaml: debe haber una sola imagen caddy por digest"
+PROXY_TAG=localhost/mi-app-proxy:2.11.9-alpine
+proxy_de() { sed -n 's#^ *image: *\(localhost/mi-app-proxy:[^ ]*\) *$#\1#p' "$1" | sort -u; }
+[ "$(proxy_de compose.test.yaml)" = "$PROXY_TAG" ] || rechazar "compose.test.yaml: la imagen del proxy debe ser $PROXY_TAG (una sola, derivada: SEC-055)"
 for c in compose.dev.yaml compose.demo.yaml; do
   [ -f "$c" ] || continue
-  P=$(imagen_de "$c" docker.io/library/caddy)
-  [ -z "$P" ] || [ "$P" = "$PROXY_IMAGE" ] || rechazar "$c: la imagen de caddy no coincide con compose.test.yaml"
+  P=$(proxy_de "$c")
+  [ -z "$P" ] || [ "$P" = "$PROXY_TAG" ] || rechazar "$c: la imagen del proxy no coincide con compose.test.yaml ($PROXY_TAG)"
 done
 sh deploy/db/construir.sh > "$TMP/db.log" 2>&1 || { cat "$TMP/db.log" >&2; rechazar "deploy/db/construir.sh fallo (SEC-049, SEC-051)"; }
 tail -3 "$TMP/db.log"
 DB_DIGEST=$(podman image inspect --format '{{.Digest}}' "$DB_TAG")
 DB_IMAGE=localhost/mi-app-db@$DB_DIGEST
+# Imagen del proxy (SEC-055): derivada minima de caddy:2.11.9-alpine por digest, con
+# /usr/bin/caddy identico al oficial (EXC-03) y sin paquetes atrasados.
+sh deploy/proxy/construir.sh > "$TMP/proxy.log" 2>&1 || { cat "$TMP/proxy.log" >&2; rechazar "deploy/proxy/construir.sh fallo (SEC-055, EXC-03)"; }
+tail -3 "$TMP/proxy.log"
+PROXY_DIGEST=$(podman image inspect --format '{{.Digest}}' "$PROXY_TAG")
+PROXY_IMAGE=localhost/mi-app-proxy@$PROXY_DIGEST
 
 # 3) SEC-054: condiciones de EXC-03 (Caddyfile, compose del proxy) y EXC-02 (gosu).
 sh deploy/scan/comprobar-excepciones.sh || rechazar "SEC-054: condicion de una excepcion incumplida"
@@ -187,15 +195,24 @@ escanear proxy "$PROXY_IMAGE" deploy/scan/trivyignore-proxy.yaml
 
 # Registro de escaneo aprobado (SEC-052 punto 3). Hoy solo se escribe: la
 # comprobacion en tests/run.sh y en el despliegue de DEMO/PROD esta pendiente
-# (docs/infraestructura.md §14.1).
-mkdir -p "$SCAN_DIR/aprobadas"
-{
-  echo "fecha=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo "app=$REPO@$DIGEST"
-  echo "db=$DB_IMAGE"
-  echo "proxy=$PROXY_IMAGE"
-  echo "excepciones_sha256=$(cat deploy/app/trivyignore.yaml deploy/scan/trivyignore-proxy.yaml | sha256sum | cut -d' ' -f1)"
-} > "$SCAN_DIR/aprobadas/${DIGEST#sha256:}"
+# (docs/infraestructura.md §14.1). Una imagen -sucio (cambios sin commit) NO se
+# registra como aprobada (SEC-052 punto 3b) y se borra un registro previo.
+case $ETIQUETA in
+  *-sucio*)
+    rm -f "$SCAN_DIR/aprobadas/${DIGEST#sha256:}"
+    echo "AVISO: imagen -sucio (cambios sin commit): no se registra como aprobada (SEC-052)" >&2 ;;
+  *)
+    mkdir -p "$SCAN_DIR/aprobadas"
+    {
+      echo "fecha=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo "etiqueta=$ETIQUETA"
+      echo "commit=$REVISION"
+      echo "app=$REPO@$DIGEST"
+      echo "db=$DB_IMAGE"
+      echo "proxy=$PROXY_IMAGE"
+      echo "excepciones_sha256=$(cat deploy/app/trivyignore.yaml deploy/scan/trivyignore-proxy.yaml | sha256sum | cut -d' ' -f1)"
+    } > "$SCAN_DIR/aprobadas/${DIGEST#sha256:}" ;;
+esac
 
 echo "Imagen: $REPO:$ETIQUETA"
 echo "APP_IMAGE=$REPO@$DIGEST"

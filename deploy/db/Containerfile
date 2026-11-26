@@ -5,6 +5,10 @@
 #  - libxml2: la imagen oficial 19.0-alpine3.24 trae 2.13.9-r2 (vulnerable,
 #    CVE-2026-86144 y otras); el repositorio de Alpine 3.24 ya tiene r5.
 #    `apk upgrade libxml2` y la comprobacion de version minima (LIBXML2_MIN).
+#  - Paquetes atrasados (SEC-055): `apk upgrade` de TODOS los paquetes (zstd-libs
+#    1.6.0-r1, libffi 3.8.1-r0...: Alpine publica "security upgrades" sin anotar
+#    la CVE en secfixes y Trivy no los ve). El build falla si
+#    `apk --no-cache version -l '<'` lista algo (solo cabecera = limpio).
 #  - gosu: el binario /usr/local/bin/gosu (Go 1.24.6, 1 critica y 25 altas de
 #    stdlib) solo lo usa docker-entrypoint.sh si arranca como root. Aqui nunca
 #    arranca como root (USER 1000:1000) y el binario se elimina: sin excepcion (EXC-02 retirada).
@@ -21,11 +25,14 @@ ARG LIBXML2_MIN=2.13.9-r3
 # Unico paso como root, solo en construccion (rootless en el host).
 USER root
 RUN set -eu; \
-    apk upgrade --no-cache libxml2; \
+    apk upgrade --no-cache; \
     v=$(apk list -I libxml2 | sed 's/^libxml2-\([^ ]*\) .*/\1/'); \
     [ "$(apk version -t "$v" "${LIBXML2_MIN}")" != "<" ] \
       || { echo "ERROR: libxml2 $v < ${LIBXML2_MIN} (SEC-049)" >&2; exit 1; }; \
     echo "libxml2 $v"; \
+    atrasados=$(apk --no-cache version -l '<'); \
+    [ "$(printf '%s\n' "$atrasados" | grep -c .)" -le 1 ] \
+      || { printf 'ERROR: paquetes atrasados (SEC-055):\n%s\n' "$atrasados" >&2; exit 1; }; \
     rm -f /usr/local/bin/gosu; \
     [ ! -e /usr/local/bin/gosu ]; \
     rm -rf /var/cache/apk/*

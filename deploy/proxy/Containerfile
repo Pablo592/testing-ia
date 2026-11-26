@@ -1,0 +1,36 @@
+# Imagen del proxy: derivada MINIMA de la oficial de Caddy, la MISMA en DEV,
+# TESTING, DEMO y PROD (SEC-055; docs/infraestructura.md §8.2).
+#
+# Por que derivada: caddy:2.11.9-alpine trae paquetes de Alpine atrasados
+# (zstd-libs 1.5.7-r2, CVE-2026-124851). Alpine publica "security upgrades" sin
+# anotar la CVE en secfixes y Trivy no las ve. Aqui solo se hace `apk upgrade`
+# y se comprueba que:
+#  - `apk --no-cache version -l '<'` no lista ningun paquete atrasado;
+#  - /usr/bin/caddy NO cambia (mismo sha256 que en la imagen oficial): asi la
+#    condicion "sin modulos anadidos" de EXC-03 (SEC-050) sigue siendo cierta.
+#    deploy/proxy/construir.sh lo vuelve a comprobar contra la imagen oficial.
+# No se cambia ENTRYPOINT ni CMD ni el Caddyfile (se monta en ejecucion). USER pasa de
+# root (la oficial) a 1000:1000, como en db; los compose ya fijan user: 1000:1000.
+#
+# Construir SIEMPRE con el script (rootless, sin sudo):
+#   sh deploy/proxy/construir.sh
+ARG CADDY_BASE=docker.io/library/caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
+FROM ${CADDY_BASE}
+
+# Unico paso como root, solo en construccion (rootless en el host).
+USER root
+RUN set -eu; \
+    antes=$(sha256sum /usr/bin/caddy | cut -d' ' -f1); \
+    apk upgrade --no-cache; \
+    despues=$(sha256sum /usr/bin/caddy | cut -d' ' -f1); \
+    [ "$antes" = "$despues" ] \
+      || { echo "ERROR: /usr/bin/caddy cambio ($antes -> $despues; EXC-03)" >&2; exit 1; }; \
+    atrasados=$(apk --no-cache version -l '<'); \
+    [ "$(printf '%s\n' "$atrasados" | grep -c .)" -le 1 ] \
+      || { printf 'ERROR: paquetes atrasados (SEC-055):\n%s\n' "$atrasados" >&2; exit 1; }; \
+    rm -rf /var/cache/apk/*
+
+LABEL org.opencontainers.image.title="mi-app-proxy" \
+      org.opencontainers.image.description="Caddy 2.11.9 oficial (binario identico) sobre Alpine con apk upgrade"
+
+USER 1000:1000

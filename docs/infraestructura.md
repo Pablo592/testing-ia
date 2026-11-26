@@ -540,8 +540,9 @@ real en §15.
 |---|---|---|
 | Base de la imagen de herramientas de DEV | `docker.io/library/node:26.13.1-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5` (Node 26, LTS activa) | DEV |
 | PostgreSQL (base) | `docker.io/library/postgres:19.0-alpine3.24@sha256:8e81a484097154610d0b72f2fd1b70e1f8c31fd6b743b6d0da8b2a8c1ab2ea1d` (PostgreSQL 19.0, Alpine 3.24.4, `libxml2` 2.13.9-r2 y `gosu`; última mayor estable, ADR-003) | solo construcción de la imagen de db |
-| PostgreSQL (desplegable) | `localhost/mi-app-db:19.0-alpine3.24`, derivada de la anterior con `deploy/db/Containerfile`: `libxml2` ≥ 2.13.9-r3 (hoy r5), **sin** `/usr/local/bin/gosu`, `USER 1000:1000`, `HEALTHCHECK`. Se construye con `sh deploy/db/construir.sh` (lo llama `deploy/app/construir.sh` y `deploy/dev/levantar.sh`); los compose la usan con `pull_policy: never` (SEC-049, SEC-051) | todos |
-| Caddy | `docker.io/library/caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0` | TESTING, DEMO, PROD |
+| PostgreSQL (desplegable) | `localhost/mi-app-db:19.0-alpine3.24`, derivada de la anterior con `deploy/db/Containerfile`: `apk upgrade` de todos los paquetes (hoy `zstd-libs` 1.6.0-r1, `libffi` 3.8.1-r0), `libxml2` ≥ 2.13.9-r3 (hoy r5), **sin** `/usr/local/bin/gosu`, `USER 1000:1000`, `HEALTHCHECK`. Se construye con `sh deploy/db/construir.sh` (lo llama `deploy/app/construir.sh` y `deploy/dev/levantar.sh`); los compose la usan con `pull_policy: never` (SEC-049, SEC-051) | todos |
+| Caddy (base) | `docker.io/library/caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0` | solo construcción de la imagen del proxy |
+| Caddy (desplegable) | `localhost/mi-app-proxy:2.11.9-alpine`, derivada MÍNIMA de la anterior con `deploy/proxy/Containerfile`: `apk upgrade` (hoy `zstd-libs` 1.6.0-r1), `/usr/bin/caddy` con el mismo sha256 que el oficial, `USER 1000:1000`. Se construye con `sh deploy/proxy/construir.sh` (lo llama `deploy/app/construir.sh` y `deploy/dev/levantar.sh` si falta); `compose.test.yaml` la usa con `pull_policy: never` (SEC-055) | TESTING, DEMO, PROD |
 | pnpm | 12.21.0 (`ARG PNPM_VERSION`) | DEV (y etapa de construcción de la imagen final) |
 | Etapa de construcción de la imagen final | `docker.io/library/node:26.13.1-trixie-slim@sha256:abe7e5a82b61a8ef67b315b85497c9e65173387ccf2f4a029248184b8e020be5` (Debian 13, glibc 2.41) | solo construcción |
 | Etapa final de la imagen de la app | `gcr.io/distroless/nodejs26-debian13@sha256:13e3ac17e2911d238622fea7808a7a161ba6b33a41e542ded6e399387e1dbc84` (etiqueta `latest`; Node v26.13.1, glibc 2.41, sin shell; trae `libzstd1` corregida, SEC-048; antes `b462e87a…`) | TESTING, DEMO, PROD |
@@ -710,17 +711,36 @@ con el mismo comando de §15.
 
 ### 8.2 Imagen de db sin excepciones y excepción de proxy (SEC-049, SEC-050, SEC-054)
 
-**db (SEC-049, SEC-051): sin excepciones.** `deploy/db/Containerfile` parte de
-`postgres:19.0-alpine3.24@sha256:8e81a484…`, hace `apk upgrade libxml2`
-(el build falla si queda por debajo de 2.13.9-r3; hoy r5), borra
+**db (SEC-049, SEC-051, SEC-055): sin excepciones.** `deploy/db/Containerfile` parte de
+`postgres:19.0-alpine3.24@sha256:8e81a484…`, hace `apk upgrade` de **todos** los
+paquetes (el build falla si `libxml2` queda por debajo de 2.13.9-r3 o si
+`apk --no-cache version -l '<'` lista algún paquete atrasado), borra
 `/usr/local/bin/gosu` (el `docker-entrypoint.sh` solo lo usa si arranca como
 root, y aquí nunca: `USER 1000:1000`) y define `HEALTHCHECK`.
 `deploy/db/construir.sh` construye (rootless, formato docker, `--no-cache`) y
-comprueba sobre la imagen real: Alpine 3.24.x, `libxml2` ≥ r3, `gosu` ausente,
-usuario 1000:1000 y healthcheck. La construcción no es idéntica bit a bit (la
+comprueba sobre la imagen real: Alpine 3.24.x, `libxml2` ≥ r3, ningún paquete
+atrasado (`apk --no-cache version -l '<'` como UID 1000, raíz de solo lectura;
+falla cerrado si `apk` no lee el índice), `gosu` ausente, usuario 1000:1000 y
+healthcheck. La construcción no es idéntica bit a bit (la
 fecha y el `apk upgrade` cambian el digest); lo que se fija es la base por
 digest y el mínimo de `libxml2`. EXC-02 está **retirada**
 (`deploy/scan/trivyignore-db.yaml` borrado).
+
+**Regla (SEC-055): el 0 de Trivy en una imagen Alpine no prueba nada sin la
+comprobación de paquetes atrasados.** Alpine publica "security upgrades" sin
+anotar la CVE en `secfixes` (`zstd` 1.6.0-r1, CVE-2026-124851) y Trivy no los
+ve. Por eso cada imagen Alpine desplegable (db y proxy) hace `apk upgrade` en
+el build y se rechaza si `apk --no-cache version -l '<'` imprime algo más que
+la cabecera `Installed: Available:`; el script de build lo repite sobre la imagen
+final.
+
+**proxy: imagen derivada (SEC-055).** `deploy/proxy/Containerfile`:
+`FROM docker.io/library/caddy:2.11.9-alpine@sha256:003a9780…`, `apk upgrade`, sin
+tocar `/usr/bin/caddy`. El `RUN` compara el sha256 de `/usr/bin/caddy` antes y
+después, y `deploy/proxy/construir.sh` lo compara con el de la imagen oficial
+por digest (`a563843e…`): si difiere, `-rechazada`. Así la condición "sin
+módulos añadidos" de EXC-03 sigue siendo cierta con una imagen distinta de la
+oficial. `construir.sh` imprime `PROXY_IMAGE=localhost/mi-app-proxy@sha256:…`.
 
 **proxy (EXC-03, SEC-050).** Excepción en `deploy/scan/trivyignore-proxy.yaml`,
 aprobada por Cybersecurity hasta 2026-12-26 o 7 días tras un Caddy corregido
@@ -739,7 +759,12 @@ escanear (no `tests/run.sh containers`, que no mira el Caddyfile). Falla si:
 - algún `compose.*.yaml` define `command`/`entrypoint` en el servicio `proxy`
   (otro `--config`, `--adapter`, `--resume`), monta algo distinto de
   `./deploy/proxy/Caddyfile:/etc/caddy/Caddyfile:ro` en `/etc/caddy`, o no usa
-  `docker.io/library/caddy:<versión>@sha256:…` (sin módulos añadidos);
+  `localhost/mi-app-proxy:<versión>` con `pull_policy: never`;
+- `deploy/proxy/Containerfile` no tiene `ARG CADDY_BASE` = caddy oficial por
+  digest, tiene más de un `FROM` o usa `COPY`/`ADD`/`xcaddy`/`apk add|del`/
+  `curl`/`wget`/`--mount`/`--from`; o `deploy/proxy/construir.sh` ya no compara
+  el sha256 de `/usr/bin/caddy` con el oficial (la igualdad real la comprueba
+  ese script al construir);
 - algún compose (o `deploy/quadlet/`, cuando exista en PROD) llama a `gosu`.
 Se puede lanzar suelta: `sh deploy/scan/comprobar-excepciones.sh`. Probada con
 mutaciones en un directorio temporal fuera del repositorio (templates,
@@ -1550,10 +1575,11 @@ otras etiquetas del mismo ID no se tocan).
 | `.npmrc` sin credenciales (`_auth*`, `_password`, `username`, `certfile`, `keyfile`; no muestra el valor; SEC-036) | `Containerfile`, tras `COPY . .`; y el final busca `.npmrc`, `.env*`, `*.pem`, `*.key` en `/app` (excepto `node_modules`) |
 | `node_use_quic` = `false`; `/app/dist` sin `node:quic`, `--experimental-quic` ni `dgram`; ningún `.node` con `NEEDED libssl/libcrypto` ni símbolos `OSSL_QUIC_*`, `SSL_new_listener`, `SSL_set_quic_tls_cbs` (SEC-033, condiciones 3 y 4) | `construir.sh`, sobre la imagen real (node en contenedor endurecido; `podman create` + `export`, `readelf`/`nm` fuera de la imagen) |
 | Etiqueta `-sucio` con la lista del `containerignore` (`apps packages package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig*.json tests/package.json` y `deploy/app/Containerfile|containerignore`) y con ficheros ignorados por git dentro de `apps/` y `packages/` (SEC-037); el script sigue sin aceptar `--build-arg` | `construir.sh` |
-| Imagen de db derivada: Alpine 3.24, `libxml2` ≥ 2.13.9-r3, sin `gosu` (SEC-049, SEC-051) | `deploy/db/construir.sh` (la llama `construir.sh`) |
+| Imagen de db derivada: Alpine 3.24, `libxml2` ≥ 2.13.9-r3, sin `gosu`, sin paquetes atrasados (`apk --no-cache version -l '<'` vacío; SEC-049, SEC-051, SEC-055) | `deploy/db/construir.sh` (la llama `construir.sh`) |
+| Imagen del proxy derivada: Alpine 3.24, sin paquetes atrasados, `/usr/bin/caddy` con el sha256 de la imagen oficial (SEC-055, EXC-03) | `deploy/proxy/construir.sh` (la llama `construir.sh`) |
 | Condiciones de EXC-03 y EXC-02 sobre el Caddyfile y los compose (SEC-054, §8.2) | `deploy/scan/comprobar-excepciones.sh`, antes de escanear |
 | Fallo cerrado de la condición 4 de EXC-01: si faltan `readelf` o `nm`, o fallan sobre un `.node` ELF, se rechaza (SEC-053); los prebuilds no ELF (win32, darwin) se cuentan y omiten | `construir.sh` |
-| Trivy sobre **app, db y proxy**: la app y la db **por digest** (`repo@sha256:…`, lo mismo que se imprime como `APP_IMAGE`; SEC-052); proxy por digest de `compose.test.yaml`. La db debe ser `localhost/mi-app-db:19.0-alpine3.24` en todos los compose y el proxy una sola imagen coincidente | `deploy/scan/escanear.sh` |
+| Trivy sobre **app, db y proxy**: la app y la db **por digest** (`repo@sha256:…`, lo mismo que se imprime como `APP_IMAGE`; SEC-052); el proxy (derivada) por el digest de su etiqueta. La db debe ser `localhost/mi-app-db:19.0-alpine3.24` y el proxy `localhost/mi-app-proxy:2.11.9-alpine` en todos los compose | `deploy/scan/escanear.sh` |
 
 `deploy/scan/escanear.sh <imagen> [excepciones.yaml] [informe.json]`: `podman
 save` a `$XDG_RUNTIME_DIR` (nunca el socket), Trivy 0.76.2 por digest en
@@ -1574,8 +1600,9 @@ cambiar de versión se edita el digest (y §8).
 
 **Registro de escaneo aprobado (SEC-052, punto 3): PENDIENTE, antes de DEMO
 (Etapa 4).** Hoy `construir.sh`, si todo pasa, escribe
-`~/.local/state/mi-app/escaneos/aprobadas/<digest-app>` con fecha, digests de
-app/db/proxy y sha256 de los ficheros de excepciones. Falta que lo exijan:
+`~/.local/state/mi-app/escaneos/aprobadas/<digest-app>` con fecha, etiqueta, commit, digests de
+app/db/proxy y sha256 de los ficheros de excepciones. Una imagen `-sucio` no se
+registra y `rechazar()` borra el registro de ese digest (SEC-052 punto 3a/3b). Falta que lo exijan:
 (a) `tests/run.sh` (de Testing, al menos en la ejecución de la puerta): rechazar
 un `APP_IMAGE` sin ese registro o con más de 7 días; (b) el despliegue de
 DEMO/PROD (Infrastructure, al crear `compose.demo.yaml`/Quadlet). Mientras
