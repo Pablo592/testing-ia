@@ -119,3 +119,51 @@ Fecha: 2026-11-25. Alcance: P-01 (paso 1 y paso 2), cambio obligatorio del PIN, 
 
 ### Verificación posterior
 Cuando el developer corrija, repetir el arnés (`docs/ux/arnes-2.3/harness.mjs`) y comprobar: H-2.3-01 con un e2e de navegación del encargado; H-2.3-02, H-2.3-03 y H-2.3-04 en la tablet real y con lector de pantalla (Etapa 4); H-2.3-03 con `document.activeElement` distinto de `body` en cada estado de bloqueo.
+
+## Tarea 2.6 (parte UX): verificación de la entrega 2.5 (commit 0d7ca30)
+
+Fecha: 2026-11-26. Imagen construida desde el commit: `APP_IMAGE=localhost/mi-app@sha256:66fcdf09d0b3757c57318e0d370803554937fbedbdb3ba92ff008dcb68ed5b06`. Alcance: P-01, cambio obligatorio del PIN, barra superior y menú "Gestión", avisos, "Acceso denegado" y pantallas vacías, a 375, 768, 1280 y 1440 px (320 px solo reflow).
+
+### Resultado
+
+**0 hallazgos de severidad alta, 0 medios abiertos y 2 bajos nuevos.** De los 11 hallazgos de la 2.3: 9 cerrados (H-2.3-01, 02, 03, 05, 06, 08, 09, 10, 11); H-2.3-04 baja de media a baja (queda la etiqueta por paso, D-2.5-01) y H-2.3-07 queda en baja por el esqueleto. H-2.3-02 se cierra por el código y el DOM; sigue pendiente su confirmación en la tablet real (Etapa 4). La puerta de la Etapa 2 no se bloquea por UX.
+
+| ID | Sev. anterior | Estado | Evidencia |
+|---|---|---|---|
+| H-2.3-01 | media | **Cerrado** | Menú "Gestión" con 5 opciones y "Pedidos" primero en `/pedidos`, `/cola`, `/menu`, `/personal`, `/resumen` y los 4 anchos; la opción actual lleva `aria-current="page"` y "Estás aquí" (`aria-hidden`, el lector oye "página actual") y no cambia de posición; pulsarla cierra el menú sin navegar y deja el foco en "Gestión". De `/resumen` a `/pedidos`: 2 toques, y el foco llega al `h1` "Pedidos". Camarero y cocina no ven "Gestión". Coincide con `flujos.md` §0, wireframes 02/06/10 y `design-system.md` §5.11. `capturas-2.6/V-menu-pedidos-{m375,t768,t1280}.png`. |
+| H-2.3-02 | media | **Cerrado en código** (confirmar en tablet) | `PinField.tsx:37` `inputMode="none"`; el campo sigue siendo `type=password` editable (teclado físico). El teclado virtual no se puede emular en el arnés: confirmar en la tablet real en la demo. |
+| H-2.3-03 | media | **Cerrado** | `document.activeElement` ya no es `body` en ningún caso medido (375 y 1280 px): bloqueo temporal, indefinido y por dispositivo en P-01 -> `div#pin-mensaje`; cambio de PIN con `423`/`429` -> `div#pin-cambio-mensaje`; `403` y `503` -> el campo; "Seguir conectado" -> `h1`; Escape y Tab fuera del panel "Gestión" -> botón "Gestión". |
+| H-2.3-04 | media | **Baja de media a baja** (ver abajo) | El texto del paso es ahora `role="status"` y el foco va al campo tras "Siguiente", que lo lee con `aria-describedby` (paso 2: "PIN (6 dígitos)" + "Paso 2 de 3 · PIN nuevo"). Falta la etiqueta distinta por paso. |
+| H-2.3-05 | baja | **Cerrado** | A 375 px la barra del encargado tiene 2 filas (113 px; antes 3 filas y unos 160 px): `h1` + "Gestión" arriba, nombre y rol + "Cerrar sesión" debajo. El panel ocupa 359 px (todo el ancho menos márgenes) bajo la barra, sin solapar ningún control (medido: 0 solapes), opciones de 56 px. A 768/1280/1440 el panel mide 280 px bajo "Gestión". axe sin violaciones (incluido `target-size`) con el menú abierto. `capturas-2.6/V-menu-resumen-m375.png`. |
+| H-2.3-06 | baja | **Cerrado** | `outline` del `h1` en `none` al enfocarlo por código; ya no aparece el recuadro. |
+| H-2.3-07 | baja | **Parcial, queda baja** | Hecho: botón "Reintentar" y `role="alert"` en el error de carga (`V-errorcarga-m375.png`), "Cargando usuarios…" con `role="status"`. Falta el esqueleto de 4 tarjetas (`design-system.md` §5.12, "Cargando": forma del contenido); sigue siendo solo texto (`V-cargando-m375.png`). |
+| H-2.3-08 | baja | **Cerrado** | 6 indicadores de 16 px (rellenos / vacíos) en P-01 y en el cambio de PIN: "● ● ○ ○ ○ ○" tras 2 dígitos (`V-paso2-2dig-m375.png`). |
+| H-2.3-09 | baja | **Cerrado** | Tras tocar una tecla el anillo ya no se queda (`outline: none` en la tecla enfocada por puntero); con Tab sigue visible (test a11y de teclado en verde). |
+| H-2.3-10 | baja | **Cerrado** | Al volver a P-01 con motivo, el foco va al banner ("Sesión cerrada por inactividad") en 375 y 1280 px; ya no queda en `body`. |
+| H-2.3-11 | baja | **Cerrado** | Avisos alineados con el contenido (mismos márgenes, 32 px / 16 px a <= 767 px); icono `log-out` de Lucide en lugar de "⎋"; el bundle baja de 370 kB a 291 kB (93 kB gzip) y ya no contiene zod (`api-constants.ts`). |
+
+### Valoración de H-2.3-04: media a baja
+Lo que falta es solo la etiqueta propia del campo ("PIN actual / PIN nuevo / Repite el PIN nuevo"). Se baja a **baja** porque el propósito del paso ya se comunica de tres formas: texto visible justo encima del campo, `role="status"` que anuncia el cambio, y `aria-describedby` que lo lee al enfocar el campo (el foco va al campo tras cada "Siguiente"). El criterio WCAG 4.1.3 queda cubierto y el 2.4.6 / 3.3.2 queda cubierto en la práctica por la descripción; lo que queda es pulido de la etiqueta. Se mantiene abierto como H-2.3-04 (baja) hasta D-2.5-01 (testing) y se confirma con VoiceOver/TalkBack en la demo; no justifica cerrarlo todavía porque una etiqueta genérica "PIN (6 dígitos)" en los 3 pasos es lo que lee primero un lector de pantalla.
+
+### Hallazgos nuevos
+
+#### H-2.6-01 (baja): la barra del encargado a 375 px cambia de altura según el título
+- **Pantalla:** barra superior en `/resumen` a 375 px. **Captura:** `capturas-2.6/V-menu-resumen-m375.png`.
+- **Medido:** altura 121 px en `/resumen` frente a 113 px en `/pedidos`, `/cola`, `/menu` y `/personal`: "Resumen del día" ocupa 2 líneas porque "Gestión" le deja unos 150 px.
+- **Criterio:** Nielsen 4 (consistencia); `design-system.md` §5.11 define la barra de 2 filas con altura fija. El contenido salta 8 px al cambiar de pantalla y el título parte una palabra clave en 2 líneas.
+- **Propuesta:** que el `h1` no se parta (`white-space: nowrap` con `text-overflow: ellipsis`) o acortar el título visible a "Resumen" en <= 767 px (el `<title>` del documento puede mantener "Resumen del día"). Tiene el mismo origen en "Cola de barra" si el título pasa a ese texto.
+
+#### H-2.6-02 (baja): el estado "Cargando usuarios…" sigue sin esqueleto
+Es el resto de H-2.3-07 (ver arriba), registrado aquí solo como seguimiento: no es un hallazgo nuevo. Propuesta sin cambios: 4 tarjetas esqueleto o, como mínimo, mantener el texto con `role="status"` (ya hecho) y aceptar la desviación del §5.12 por escrito.
+
+### Sin regresiones
+- **axe-core** (`wcag2a/aa`, `wcag21a/aa`, `wcag22aa`, `best-practice`): 0 violaciones en los 46 estados del arnés (P-01 todos los estados, cambio de PIN en 3 pasos, barra con y sin menú abierto a 375/768, avisos, errores y cargando) y `sh tests/run.sh a11y` 7/7 en verde.
+- **`sh tests/run.sh visual`**: 11/11 en verde. Al ejecutarlo regenera `tests/screenshots/HU-01/*.png` (7 imágenes difieren por píxeles); se restauraron con `git checkout` para no mezclar cambios en el árbol de trabajo.
+- **375 y 320 px:** sin desplazamiento horizontal (`scrollWidth` = `clientWidth`); ningún control menor de 44x44 px; teclas de 109x64 a 375 y 91x64 a 320.
+- **Un solo botón principal** por pantalla y etiquetas con verbo; textos de P-01 y banners sin cambios.
+- **Estados** vacío, cargando, error y éxito siguen presentes en P-01; "Acceso denegado" y pantallas vacías intactas (`V-denegado-m375.png`).
+- **Etiqueta del botón "Gestión":** `aria-label="Menú de gestión"` contiene el texto visible "Gestión" (WCAG 2.5.3 cumplido).
+- **CA-N06 en WebKit (fallo intermitente de `HU-01-iniciar-sesion.e2e.ts:396`):** el arnés solo corre Chromium, así que no se pudo reproducir. Desde UX no hay un problema visible: el banner se monta con la página y recibe el foco (H-2.3-10). Si el fallo apareciera por esa corrección (el foco programático sobre un `div` en WebKit), sería una condición de carrera del test (T-46), no del diseño; sigue asignado a testing (2.8).
+
+### Limitaciones
+(a) API simulada, igual que en la 2.3. (b) Lighthouse no se ejecutó (sin red); carga local sin red: FCP 60 ms, 3 recursos estáticos más 2 llamadas a la API. (c) Teclado virtual del sistema y lector de pantalla reales: pendientes de la tablet y de la demo (Etapa 4). (d) Arnés: `docs/ux/arnes-2.3/harness.mjs` con una sección nueva de verificación 2.6 (menú, foco, etiquetas) que quedó en el scratchpad; capturas en `docs/ux/capturas-2.6/`.
