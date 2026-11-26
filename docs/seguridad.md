@@ -59,6 +59,18 @@
 > SEC-044 y SEC-045 verificados; aplazamiento de SEC-043 aceptado con
 > condiciones. Hallazgos nuevos SEC-047 (baja) y **SEC-048, SEC-049 y SEC-050
 > (alta, imágenes de `app`, `db` y `proxy`; bloquean)**.
+> Revisión 2.9, 2026-11-26 (Etapa 2, HU-01): entrega 2.7/2.1n de
+> infrastructure (commit `0af1331`): imágenes de `app`, `db` y `proxy`,
+> excepciones propuestas de `gosu` y Caddy, `deploy/scan/escanear.sh` y
+> controles de `construir.sh` y de los `Containerfile`, con pruebas propias
+> en Podman rootless (build limpio, Trivy 0.76.2 con BD nueva y sin
+> excepciones, pruebas negativas del escaneo y del build en un clon del
+> repositorio, `nm` de `gosu` y `caddy`, secdb/APKINDEX/APKBUILD de Alpine,
+> suite `containers`) (§6.10). **SEC-048 verificado**; SEC-034..SEC-037
+> verificados; **EXC-02 (`gosu`) y EXC-03 (Caddy) aprobadas con
+> condiciones**; EXC-01 sigue vigente. **SEC-049 sigue abierto (alta,
+> bloquea)**: `alpine3.23` no corrige `libxml2`, solo lo oculta al escáner.
+> Hallazgos nuevos SEC-051, SEC-052 y SEC-054 (media) y SEC-053 (baja).
 > Entradas: `docs/historias/` (README + HU-01..HU-09, IDs estables `CA-`),
 > `docs/arquitectura.md`, `docs/decisiones/ADR-001..008`, `docs/ux/`,
 > `docs/infraestructura.md`, `compose.dev.yaml`, `compose.test.yaml`,
@@ -93,7 +105,7 @@
 3. Actores de amenaza
 4. Superficies de ataque y fronteras de confianza
 5. Amenazas (STRIDE)
-6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c; §6.5, revisión 2.1f; §6.6, revisión 2.1k; §6.7, revisión 2.1m; §6.8, revisión 2.3; §6.9, revisión 2.6)
+6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c; §6.5, revisión 2.1f; §6.6, revisión 2.1k; §6.7, revisión 2.1m; §6.8, revisión 2.3; §6.9, revisión 2.6; §6.10, revisión 2.9)
 7. Requisitos de seguridad verificables (para Testing)
 8. Revisión de la arquitectura frente a la política de contenedores (§3)
 9. Hallazgos (SEC-xxx)
@@ -1663,6 +1675,196 @@ vulnerabilidades críticas/altas, hasta actualizar los digests o, solo para lo
 que no tenga corrección, aprobar una excepción fechada. El código de HU-01 no
 tiene altos ni críticos abiertos.
 
+### 6.10 Revisión 2.9 (2026-11-26): imágenes y escaneo de la 2.7/2.1n (commit `0af1331`)
+
+Entradas: commit `0af1331` (`deploy/app/Containerfile`, `deploy/app/construir.sh`,
+`deploy/app/trivyignore.yaml`, `deploy/dev/Containerfile`,
+`deploy/scan/escanear.sh`, `deploy/scan/trivyignore-db.yaml`,
+`deploy/scan/trivyignore-proxy.yaml`, `compose.dev.yaml`, `compose.test.yaml`,
+`docs/infraestructura.md` §8, §8.2 y §14.1).
+
+**Pruebas propias (Podman 5.7.0 rootless, sin `sudo`).** (1) `sh
+deploy/app/construir.sh` sobre el árbol limpio de `0af1331` →
+`localhost/mi-app:0af133152b01`,
+`APP_IMAGE=localhost/mi-app@sha256:72766f8e58dc1ffcf127e047dc0831d79f93dd77a7f1b256538f5de5a5acb40b`
+(código 0). (2) Trivy 0.76.2 (mismo digest que §8 de infraestructura) con una
+caché nueva en el scratchpad (BD del 2026-11-26 13:14 UTC), **sin
+excepciones** y con todas las severidades, sobre `podman save` de las tres
+imágenes. (3) Pruebas negativas de `escanear.sh` y de `construir.sh` (este en
+un clon del repositorio en el scratchpad, con etiqueta propia). (4) `nm` y
+`strings` de `/usr/local/bin/gosu` y `/usr/bin/caddy` extraídos con `podman
+cp`. (5) secdb, APKINDEX y APKBUILD de Alpine 3.23 y 3.24, Debian Security
+Tracker, avisos de OpenSSL, releases y `go.mod` de Caddy, política de CVE de
+`gosu`, versiones de Node. (6) `APP_IMAGE=… sh tests/run.sh containers` con
+la imagen limpia: TX-CONT-01 y TX-CMD-01 **PASAN**. `govulncheck
+-mode=binary` no se pudo ejecutar (permiso denegado en esta sesión): la
+prueba de que el código vulnerable no está es la tabla de símbolos (punto 4).
+Contenedores, imágenes de prueba y clon borrados o limitados al scratchpad.
+
+**1. Escaneo real (Trivy, sin excepciones, `HIGH,CRITICAL`).**
+
+| Imagen | Referencia | SO | Críticas / altas | Cubiertas por |
+|---|---|---|---|---|
+| app | `localhost/mi-app@sha256:72766f8e…` (base `nodejs26-debian13@sha256:13e3ac17…`) | Debian 13.8 | 0 / 2: `libssl3t64` 3.5.9-1~deb13u1, CVE-2026-107494 y CVE-2026-124709, sin corrección | EXC-01 |
+| db | `postgres:19.0-alpine3.23@sha256:40ad7e45…` | Alpine 3.23.8 | 1 / 25, todas en `usr/local/bin/gosu` (`stdlib` v1.24.6) | EXC-02, **pero `libxml2` vulnerable no aparece (punto 3)** |
+| proxy | `caddy:2.11.9-alpine@sha256:003a9780…` | Alpine 3.24.4 | 0 / 2 en `usr/bin/caddy`: `go-jose/v3` v3.0.5 (CVE-2026-116587, sin corrección) y `x/net` v0.60.0 (CVE-2026-78661, corregida en 0.62.0) | EXC-03 |
+
+Medias y bajas (informativo, no bloquean): app 41/18, db 37/7, proxy 14/4.
+Con los ficheros de excepciones las tres dan **0 sin excepción**, igual que
+el build. Los 26 CVE de `trivyignore-db.yaml` coinciden exactamente con los
+que da Trivy.
+
+**2. SEC-048: VERIFICADO.** La imagen lleva `libzstd1`
+1.5.7+dfsg-1+deb13u1 (`/var/lib/dpkg/status.d`). CVE-2026-124851 ya no sale.
+`libssl3t64` sigue en 3.5.9-1~deb13u1 y Debian 13.8, así que el `purl` de
+EXC-01 no cambia.
+
+**3. `alpine3.23` en `db`: NO ACEPTABLE. No corrige `libxml2`, solo lo oculta
+al escáner (SEC-049 sigue abierto; SEC-051).** En la imagen, `libxml2` está en
+**2.13.9-r1**, más antigua que la 2.13.9-r2 vulnerable de 3.24, no en la r3
+corregida. El repositorio de Alpine 3.23 no tiene nada más nuevo (APKINDEX
+de `v3.23/main`: 2.13.9-r1). Su APKBUILD solo lleva el parche de
+CVE-2026-6732, mientras que 3.24-stable está en **2.13.9-r5** con
+CVE-2026-86144 (r3), CVE-2026-0990, -0992, -86137…-86143 (r4) y
+CVE-2026-0989, -11979, -1757 (r5). Para Alpine, Trivy solo conoce lo que la
+secdb de la rama da por **corregido**: Alpine no registra "afectado sin
+corrección", así que una rama que no ha portado el parche sale limpia. Con
+la BD de hoy, la imagen 3.24 anterior (`8b0ff4cd…`) da CVE-2026-86144 HIGH
+(revelación de información, SSRF o DoS por un análisis incorrecto), corregida
+en r3; la 3.23 tiene el mismo código sin parche y da 0. El riesgo real sigue
+siendo bajo: solo se llega con SQL arbitrario como `app_rw` a las funciones
+XML (la app no las usa y no construye SQL a mano, RS-35). Pero es una alta
+con corrección publicada en la rama actual: no admite excepción. Como
+Alpine 3.23 sigue con soporte (EOL 2027-11-01), el problema no es la
+caducidad sino que la rama va por detrás en las correcciones.
+
+**4. EXC-02 (`gosu`, SEC-049): APROBADA como puente hasta el 2026-12-26, NO
+PRORROGABLE. La solución definitiva es la imagen derivada sin `gosu`, y la
+recomiendo ya.** La imagen derivada también resuelve `libxml2` (punto 3) en
+el mismo paso.
+- **Alcance:** solo los 26 CVE listados, solo la ruta `usr/local/bin/gosu` y
+  solo `pkg:golang/stdlib@v1.24.6`. Probado: con `expired_at` pasado, con
+  otra ruta o sin fichero, el escaneo falla (código 1).
+- **Justificación: el código vulnerable no está en el binario.** `gosu`
+  (1.20, Go 1.24.6, sin *strip*) enlaza solo `runtime`, `os`, `os/exec`,
+  `syscall`, `fmt`, `reflect`, `strconv`, `time`, `io/fs`, `path/filepath`,
+  `github.com/moby/sys/user` y `golang.org/x/sys/unix`. Tiene **0 símbolos**
+  de `crypto/tls`, `crypto/x509`, `net`, `net/http`, `net/url`, `net/mail`,
+  `mime`, `encoding/xml`, `encoding/asn1`, `html/template`, `x/net/idna` y
+  `os.Root`, que son los paquetes de los 26 CVE (la crítica, CVE-2025-68121,
+  está en `crypto/tls`). Trivy marca por versión de Go, no por código
+  enlazado. Además, `gosu` no se ejecuta: `docker-entrypoint.sh:341-343` solo
+  hace `exec gosu` si `id -u` = 0, y todos los `db` corren con `1000:1000`
+  (TX-CONT-01 PASA hoy). No es *setuid* (`-rwxr-xr-x root:root`) y la imagen
+  no tiene ningún binario *setuid*/*setgid*. Con `cap_drop: ALL` y
+  `no-new-privileges` tampoco podría cambiar de usuario.
+- **Por qué no se prorroga:** `gosu` 1.20 (2026-10-25) se compiló con Go
+  1.24.6, y su `SECURITY.md` dice que no recompila por CVE de Go que no
+  afectan al binario. Estas CVE no van a desaparecer al actualizar la imagen
+  oficial, y una excepción que se renueva cada mes indefinidamente, con una
+  crítica dentro, no es aceptable.
+- **Condiciones (si falla una, la excepción decae):** (1) ningún `db` de
+  DEV/TESTING/DEMO/PROD arranca como root ni con capacidades (`user:
+  1000:1000`, `cap_drop: ALL`, `no-new-privileges`; en Quadlet `User=`,
+  `DropCapability=ALL`, `NoNewPrivileges=true`); (2) ningún compose o Quadlet
+  llama a `gosu` (`construir.sh` ya lo comprueba en los compose); (3) si
+  cambia el digest de `db`, Infrastructure repite `nm` sobre `gosu` y lo deja
+  en `docs/infraestructura.md` §8.2: si aparece un paquete afectado, decae su
+  entrada; (4) no cubre nada del sistema operativo de la imagen.
+- **Imagen derivada (antes del 2026-12-26 y en todo caso antes de DEMO):**
+  `FROM postgres:19.0-alpine3.24@sha256:<actual>`, `apk upgrade --no-cache
+  libxml2` (comprobar que queda ≥ 2.13.9-r3), `rm -f /usr/local/bin/gosu`,
+  `USER 1000:1000` y `HEALTHCHECK`, construida en rootless por un script que
+  la escanea con la misma política que la app y referenciada por digest en
+  todos los compose y en Quadlet. Con ella EXC-02 se retira y SEC-049 se
+  cierra.
+
+**5. EXC-03 (Caddy, SEC-050): APROBADA hasta el 2026-12-26 o 7 días después
+de que salga un Caddy corregido, lo que llegue antes. `xcaddy` no hace falta.**
+- **No hay versión corregida publicada:** la última versión en GitHub es
+  v2.11.9 (2026-11-05). En Docker Hub no hay 2.11.10, 2.12 ni beta (`latest`
+  = 2.11.9, 2026-11-16). El `go.mod` de v2.11.9 lleva `x/net` v0.60.0 y
+  `go-jose/v3` v3.0.5 (indirecta, por `smallstep/certificates` v0.30.2). El
+  de `master` ya lleva `x/net` v0.62.0 y **no** lleva `go-jose/v3`, así que la
+  próxima versión debería corregir las dos.
+- **Alcance:** CVE-2026-116587 solo con
+  `pkg:golang/github.com/go-jose/go-jose/v3@v3.0.5` y CVE-2026-78661 solo con
+  `pkg:golang/golang.org/x/net@v0.60.0`, las dos solo en `usr/bin/caddy`.
+  Probado: con otro `purl` o sin fichero, el escaneo falla.
+- **Justificación:** el binario sí enlaza `go-jose/v3` (442 funciones, vía
+  `smallstep/certificates`: `acmeserver`, provisioners) y `x/net/html` (129,
+  usado por el módulo `templates`, p. ej. `funcStripHTML`). Pero la DoS de
+  `go-jose` exige que Caddy analice un JWK del atacante. Eso solo pasa con
+  `acme_server` (JWS de clientes ACME) o con provisioners configurados, y
+  aquí no hay ninguno de los dos. El cliente ACME de PROD (`acmez`) tiene su
+  propio JWS y no recibe JWK de la CA. `x/net/html` solo se usa con
+  `templates`. El Caddyfile solo usa `tls`, `header`, `log`,
+  `request_header`, `respond`, `reverse_proxy` y `redir`, y `reverse_proxy`
+  no analiza cuerpos. La configuración es inmutable (`admin off`, Caddyfile
+  montado `ro`).
+- **Por qué no `xcaddy`:** supone una cadena de construcción propia (Go,
+  resolución de módulos) que habría que mantener y escanear, y perder la
+  imagen oficial. No compensa para una DoS que no es alcanzable con esta
+  configuración y cuya corrección ya está en `master`.
+- **Condiciones:** (1) el Caddyfile tiene `admin off` y no tiene
+  `acme_server`, `templates` ni `markdown`; se usa la imagen oficial por
+  digest, sin módulos añadidos; DEMO y PROD usan el mismo Caddyfile; (2)
+  **comprobación automática en el build antes de la puerta de la Etapa 2
+  (SEC-054)**. El fichero y §8.2 dicen que la hace `tests/run.sh containers`,
+  y no es así. Hasta entonces Cybersecurity revisa cada cambio del Caddyfile
+  (hoy cumple); (3) decae si un aviso amplía el alcance (p. ej. al cliente
+  ACME o a TLS), si hay *exploit* público o si entra en KEV; (4) al salir el
+  Caddy corregido, se actualiza el digest en ≤ 7 días y se retira la entrada.
+  Solo se puede prorrogar una vez, 30 días, si en la caducidad no hay versión
+  corregida y con una nueva revisión de Cybersecurity.
+
+**6. EXC-01: SIGUE VIGENTE.** El Debian Security Tracker da las dos CVE como
+`vulnerable` en trixie (3.5.9-1~deb13u1) y sin corrección en sid. OpenSSL
+las clasifica **Low** (avisos del 2026-11-17 y del 2026-11-24) y las corrige en
+3.5.10, que aún no ha salido (la última es 3.5.9, de 2026-09-29). Node
+26.13.1 (2026-11-10, OpenSSL 3.5.9) sigue siendo la última de la rama 26. El
+`purl` no cambia (`debian-13.8`). Las condiciones 3 y 4 las comprueba
+`construir.sh` en cada build (`node_use_quic=false`, `dist` sin
+`node:quic`/`dgram`, 10 `.node` sin `libssl`/`libcrypto` ni símbolos QUIC).
+Cuando salga OpenSSL 3.5.10, hay que vigilar Debian y Node (condiciones 1 y
+2). Siguen pendientes la revisión del 2026-12-08 y la ratificación humana.
+
+**7. Escaneo en el build y controles (SEC-033..SEC-037).**
+
+| Control | Prueba | Resultado |
+|---|---|---|
+| SEC-034: escaneo de app, db y proxy en `construir.sh` | build limpio: 3 escaneos y 3 informes JSON, `APP_IMAGE` impreso. Clon sin `deploy/app/trivyignore.yaml`: código 1, "La imagen NO se acepta", **sin `APP_IMAGE`**. `escanear.sh`: sin excepciones (db, proxy), con excepción caducada, con otra ruta o con otro `purl` → código 1; un fallo de Trivy da código 2. `--ignore-unfixed` no se usa. db y proxy se leen por digest de `compose.test.yaml` (si no son únicas, falla) y se comparan con DEV | **Verificado** (huecos en SEC-052 y SEC-053) |
+| Contenedor de Trivy | `podman inspect` durante el escaneo: `User=1000:1000` (en el host, el usuario sin privilegios), `EffectiveCaps=[]`, `CapAdd=[]`, `no-new-privileges`, raíz `ro`, `Privileged=false`, red `pasta`; montajes: caché (rw), `.tar` (ro), excepciones (ro), informe (rw); **sin socket** de Podman/Docker; Trivy fijado por digest | **Cumple §3.4** |
+| SEC-033 condiciones 3 y 4 | salida del build: `node_use_quic=false`, 10 `.node` sin `libssl`/`libcrypto` ni QUIC | Cumple (falla abierta sin binutils: SEC-053) |
+| `pnpm audit --prod --audit-level high` | en el `Containerfile`; en el build limpio su capa vino de caché, así que **no se ejecutó**. Trivy analiza en cada build los `package.json` de `node_modules` (`node-pkg`): 0 | Cumple con matiz (SEC-053) |
+| SEC-035 | `PNPM_INTEGRITY` = `dist.integrity` de `pnpm@12.21.0` en el registro; build con `--build-arg PNPM_INTEGRITY=sha512-AAAA` → falla en ese paso con el mensaje de SEC-035; mismo valor en `deploy/dev/Containerfile` | **Verificado** |
+| SEC-036 | `.npmrc` señuelo con `_authToken` en `apps/api/` → el build falla con el mensaje de SEC-036 y el valor no aparece en el log (0 coincidencias); la comprobación final mira `.npmrc`, `.env*`, `*.pem` y `*.key` en `/app` | **Verificado** |
+| SEC-037 | clon limpio → `0af133152b01`; `tsconfig` nuevo, `tests/package.json` cambiado, fichero nuevo en `apps/`, `.npmrc` en `apps/api/` y fichero en `packages/` → `-sucio`; el script sigue sin aceptar `--build-arg` | **Verificado** |
+| ¿Se puede saltar el escaneo? | `TRIVY_IMAGE` se puede sobrescribir por entorno; `tests/run.sh` acepta cualquier `APP_IMAGE`; la app se escanea por etiqueta | SEC-052 (media) |
+| Rechazo | `podman untag` sin nombre quita **todos** los nombres: la etiqueta `-rechazada` no existe (probado) | SEC-053 (baja) |
+
+Notas sin hallazgo: la imagen buena es `localhost/mi-app:0af133152b01`
+(`sha256:72766f8e…`), construida desde el commit, sin `-sucio`, y es la que
+debe usarse para la puerta. En esta máquina las suites `integration` y `e2e`
+las ejecutó infrastructure con la imagen `-sucio` (`377daf74…`), que tiene
+otro ID; aquí solo se repitió `containers`. Para la puerta, testing debe
+repetir `integration` y `e2e` con `sha256:72766f8e…`. Mientras probaba la lógica `-sucio`, por un fallo mío al
+crear el clon, se ejecutaron en el repositorio real comandos de crear y
+borrar ficheros temporales (`tsconfig.prueba.json`, `apps/api/src/zz.log`,
+`apps/api/.env.local`) y un cambio de `tests/package.json` que se deshizo con
+`git checkout`. `git status` quedó limpio y ningún fichero del proyecto hace
+referencia a `apps/api/.env.local`.
+
+**Altos o críticos en esta revisión:** SEC-048 **verificado**. SEC-050 queda
+con riesgo aceptado (EXC-03, con la condición de SEC-054 antes de la puerta).
+**SEC-049 sigue abierto (alta) y bloquea la puerta de la Etapa 2**: `gosu`
+está cubierto por EXC-02, pero `libxml2` sigue vulnerable en `alpine3.23`
+(punto 3). La salida es la imagen derivada sobre `alpine3.24` (punto 4), o
+un `postgres:19.x-alpine3.24` oficial con `libxml2` ≥ 2.13.9-r3 cuando
+exista. Las tres excepciones (EXC-01, EXC-02 y EXC-03) son excepciones a
+`docs/reglas-equipo.md` §3.3: el Orquestador debe comunicárselas al humano
+para que las ratifique en la puerta.
+
 ## 7. Requisitos de seguridad verificables (para Testing)
 
 Formato: requisito → cómo se verifica. Tipos: **U** unitario, **I**
@@ -1798,7 +2000,7 @@ aprobar los ficheros de `deploy/` cuando existan.
 | Containerfile de DEV | base por digest, `USER 1000:1000`, root solo en construcción, sin secretos | — | Cumple |
 | `10-roles.sh` | sin contraseñas en el log (SEC-015); roles `NOSUPERUSER…`, límites de conexión, `app_backup` | igual | Cumple; **SEC-020 (media)** por `pg_stat_statements`. [1.4c] Corregido y verificado: `SET pg_stat_statements.track_utility = off` en cada bloque y `pg_stat_statements_reset()` al final |
 | `Caddyfile` | — | `admin off`, 8080/8443, RS-26 completo, `-Server`, sin `log_credentials`, `X-Request-Id` propio, 404 a internos, sin `trusted_proxies` | Cumple |
-| Escaneo Trivy/Grype | imagen de herramientas no desplegable | imagen final aún no existe | Pendiente (Etapa 2, RS-39). [2.1m] Base distroless: 0 críticas, 2 altas con EXC-01 (SEC-033); escaneo dentro del build pendiente (SEC-034). [2.6] `app`: 1 alta nueva con corrección (SEC-048); primer escaneo de `db` (1 crítica, 26 altas, SEC-049) y `proxy` (2 altas, SEC-050): **bloquea** hasta actualizar los digests |
+| Escaneo Trivy/Grype | imagen de herramientas no desplegable | imagen final aún no existe | Pendiente (Etapa 2, RS-39). [2.1m] Base distroless: 0 críticas, 2 altas con EXC-01 (SEC-033); escaneo dentro del build pendiente (SEC-034). [2.6] `app`: 1 alta nueva con corrección (SEC-048); primer escaneo de `db` (1 crítica, 26 altas, SEC-049) y `proxy` (2 altas, SEC-050): **bloquea** hasta actualizar los digests [2.9] Escaneo de app, db y proxy dentro de `construir.sh` (SEC-034 verificado; Trivy rootless, sin socket). app: SEC-048 verificado, solo EXC-01; proxy: EXC-03; db: `gosu` con EXC-02, pero `libxml2` sin corregir en `alpine3.23` (SEC-049, SEC-051): **bloquea** |
 
 **Veredicto (1.4b):** ningún contenedor corre como root, usa `--privileged`,
 monta el socket ni la red del host. No hay motivo de bloqueo por la regla de
@@ -1824,6 +2026,13 @@ usa `--privileged`, monta el socket ni la red del host. Las 2 altas de la base
 quedan con EXC-01 (SEC-033, ratificación humana pendiente); SEC-034 (media)
 pide el escaneo dentro de `construir.sh`. Ningún motivo de bloqueo por la
 regla de contenedores.
+
+**Veredicto (2.9):** el contenedor de Trivy de `deploy/scan/escanear.sh`
+corre con UID 1000, sin capacidades, con `no-new-privileges` y raíz `ro`,
+sin `--privileged`, sin socket y sin la red del host; TX-CONT-01 PASA con la
+imagen limpia `sha256:72766f8e…`. Ninguno corre como root. **Bloqueo por
+imágenes:** `db` tiene una alta con corrección sin aplicar (`libxml2`,
+SEC-049), que Trivy no ve en `alpine3.23` (SEC-051).
 
 ---
 
@@ -2170,7 +2379,7 @@ regla de contenedores.
     Se usa con `--ignorefile deploy/app/trivyignore.yaml --show-suppressed --severity HIGH,CRITICAL --exit-code 1` (SEC-034). **Prohibido** `--ignore-unfixed`, ignorar por paquete entero o un `.trivyignore` sin `expired_at`: ocultarían futuras altas sin corrección. Cambiar el fichero requiere una entrada nueva o actualizada de Cybersecurity en este documento.
   - Comprobaciones de las condiciones 3 y 4 en cada build (las añade Infrastructure a `construir.sh` o a la suite `containers`): `node -p 'process.config.variables.node_use_quic'` en la imagen → `false`; `grep -rE "node:quic|experimental-quic|require\(['\"](node:)?dgram|from ['\"](node:)?dgram" /app/dist` sin resultados; ningún `.node` en `/app` con `NEEDED` de `libssl`/`libcrypto` ni símbolos `OSSL_QUIC_`/`SSL_new_listener`/`SSL_set_quic_tls_cbs` sin definir (`readelf -d`, `nm -D --undefined-only`, ejecutados fuera de la imagen sobre `podman export`, porque la distroless no tiene shell).
 - Cómo verificar: (a) `construir.sh` con el fichero → escaneo `0` y 2 *suppressed* con el `statement`; sin el fichero → falla; (b) las comprobaciones de las condiciones 3 y 4 pasan sobre la imagen real; (c) el 2026-12-08 Cybersecurity revisa Trivy (DB actualizada), los avisos de Debian (`openssl`) y las versiones de seguridad de Node, y deja constancia aquí.
-- Estado: abierto (riesgo aceptado con EXC-01 hasta el 2026-12-24; no bloquea; ratificación humana pendiente) **[2.3]** Imagen real `localhost/mi-app:69e823f40ad7-sucio` (`sha256:42df4724…`): Trivy 0.76.2 con el fichero de EXC-01 → 0 críticas/altas y 2 *suppressed*; condiciones 3 y 4 cumplidas (ningún `.node` de `argon2` con `NEEDED libssl`/`libcrypto` ni símbolos QUIC; `dist` sin `node:quic` ni `dgram`). **[2.6]** Imagen `0b3c9f111c63` (`sha256:66fcdf09…`): las 2 de EXC-01 siguen *suppressed* y las condiciones 3 y 4 se cumplen; aparece otra alta, con corrección, fuera de EXC-01 (`libzstd1`, SEC-048). Al actualizar el digest de la base para SEC-048, revisar si `libssl3t64` ya está corregido (condición 1).
+- Estado: abierto (riesgo aceptado con EXC-01 hasta el 2026-12-24; no bloquea; ratificación humana pendiente) **[2.3]** Imagen real `localhost/mi-app:69e823f40ad7-sucio` (`sha256:42df4724…`): Trivy 0.76.2 con el fichero de EXC-01 → 0 críticas/altas y 2 *suppressed*; condiciones 3 y 4 cumplidas (ningún `.node` de `argon2` con `NEEDED libssl`/`libcrypto` ni símbolos QUIC; `dist` sin `node:quic` ni `dgram`). **[2.6]** Imagen `0b3c9f111c63` (`sha256:66fcdf09…`): las 2 de EXC-01 siguen *suppressed* y las condiciones 3 y 4 se cumplen; aparece otra alta, con corrección, fuera de EXC-01 (`libzstd1`, SEC-048). Al actualizar el digest de la base para SEC-048, revisar si `libssl3t64` ya está corregido (condición 1). **[2.9]** Imagen `0af133152b01` (`sha256:72766f8e…`, base `13e3ac17…`, Debian 13.8, mismo `purl`): las 2 siguen *suppressed*. `construir.sh` comprueba las condiciones 3 y 4 en cada build (10 `.node`; falla abierta sin binutils, SEC-053). Condición 1: Debian sigue sin corrección (trixie `vulnerable`, sid sin corregir). OpenSSL las clasifica **Low** y las corrige en 3.5.10, que aún no ha salido. Condición 2: Node 26.13.1 sigue siendo la última. **EXC-01 vigente** (§6.10, punto 6). Revisión del 2026-12-08 y ratificación humana pendientes.
 
 ## SEC-034: El escaneo de la imagen no forma parte del build
 - Severidad: media
@@ -2179,7 +2388,7 @@ regla de contenedores.
 - Responsable: infrastructure
 - Cómo corregir: tras `podman build`, en `construir.sh`: (1) `podman save` a un fichero temporal en `$XDG_RUNTIME_DIR` (o el scratch del usuario) y Trivy por digest (el de §8) en contenedor rootless (`--user 1000:1000`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--read-only`, el `.tar` montado `ro`, caché de la DB en un directorio del usuario), **nunca** con el socket de Podman (§8 de este documento); `--severity HIGH,CRITICAL --exit-code 1 --ignorefile deploy/app/trivyignore.yaml --show-suppressed`, con el informe JSON guardado junto a la etiqueta; (2) `pnpm audit --prod --audit-level high` sobre el lockfile (en la etapa de construcción, que ya tiene red en `pnpm deploy`, o en el script); (3) las comprobaciones de las condiciones 3 y 4 de SEC-033; (4) si algo falla, el script sale con código ≠ 0, **no imprime `APP_IMAGE`** y borra la etiqueta (o la marca como `-rechazada`). Documentarlo en §8.1 y en `docs/infraestructura.md` §14.
 - Cómo verificar: `sh deploy/app/construir.sh` con la imagen real → escaneo en la salida, 2 *suppressed* (EXC-01) y `APP_IMAGE`; con `deploy/app/trivyignore.yaml` renombrado → sale ≠ 0 y sin `APP_IMAGE`; `podman ps` durante el escaneo no muestra montajes del socket.
-- Estado: abierto (media, no bloquea; debe estar hecho antes de usar la primera imagen real para la puerta de la Etapa 2). **[2.6]** Sigue sin estar en `construir.sh` (2.1n en cola) y la imagen del escaneo manual tiene una alta nueva (SEC-048). Ampliación: el escaneo debe cubrir **todas las imágenes desplegables** de los compose (`app`, `db`, `proxy`), no solo la de la app: el primer escaneo de `db` y `proxy` (2.6) da SEC-049 y SEC-050.
+- Estado: verificado (2.9): `construir.sh` escanea app, db y proxy con `deploy/scan/escanear.sh` (Trivy por digest, rootless, sin socket) y, si algo falla, sale ≠ 0 sin `APP_IMAGE`. Probado sin el fichero de EXC-01 y con excepciones caducadas, con otra ruta o con otro `purl` (§6.10, punto 7). Quedan huecos en SEC-052 (media: `TRIVY_IMAGE` por entorno, nada después del build) y SEC-053 (baja). **[Estado anterior]** abierto (media, no bloquea; debe estar hecho antes de usar la primera imagen real para la puerta de la Etapa 2). **[2.6]** Sigue sin estar en `construir.sh` (2.1n en cola) y la imagen del escaneo manual tiene una alta nueva (SEC-048). Ampliación: el escaneo debe cubrir **todas las imágenes desplegables** de los compose (`app`, `db`, `proxy`), no solo la de la app: el primer escaneo de `db` y `proxy` (2.6) da SEC-049 y SEC-050.
 
 ## SEC-035: pnpm se instala en la etapa de construcción sin integridad fijada
 - Severidad: baja
@@ -2188,7 +2397,7 @@ regla de contenedores.
 - Responsable: infrastructure
 - Cómo corregir: `ARG PNPM_INTEGRITY=sha512-…` (el `dist.integrity` de `pnpm@12.21.0`, obtenido una vez y revisado en el commit) y en el `RUN`: `npm pack "pnpm@${PNPM_VERSION}"`, comprobar el `sha512` del `.tgz` contra `PNPM_INTEGRITY` (falla el build si no coincide) e instalar desde el fichero con `npm install --global --ignore-scripts ./pnpm-*.tgz`. Mismo cambio en la imagen de herramientas de DEV (`deploy/dev/`), que también fija `PNPM_VERSION`. Al actualizar pnpm se actualizan los dos `ARG` juntos.
 - Cómo verificar: build con `--build-arg PNPM_INTEGRITY=sha512-AAAA…` (valor erróneo) → falla en ese paso; con el valor correcto → construye y `pnpm --version` = 12.21.0.
-- Estado: abierto (baja, no bloquea)
+- Estado: verificado (2.9): `PNPM_INTEGRITY` coincide con `dist.integrity` del registro; con un valor erróneo el build falla en ese paso; mismo cambio en `deploy/dev/Containerfile`. **[Estado anterior]** abierto (baja, no bloquea)
 
 ## SEC-036: `.npmrc` entra en el contexto de construcción sin comprobar que no lleva credenciales
 - Severidad: baja
@@ -2197,7 +2406,7 @@ regla de contenedores.
 - Responsable: infrastructure (Containerfile) y developer (contenido de `.npmrc`)
 - Cómo corregir: (1) el `.npmrc` del repositorio solo lleva ajustes, nunca credenciales; (2) en la etapa `build`, justo después del `COPY`, fallar si algún `.npmrc` del contexto contiene `_authToken`, `_auth`, `_password`, `username` o `certfile`/`keyfile`; (3) ampliar la comprobación final a todo `/out/app` (no solo `dist` y `public`) y añadir `.npmrc` y `.env*` en cualquier nivel; (4) si algún día hace falta un registro privado, el *token* va con `podman build --secret id=npmrc,src=…` y `RUN --mount=type=secret,id=npmrc,target=/home/node/.npmrc`, nunca en el contexto ni en un *build arg*.
 - Cómo verificar: build con un `.npmrc` señuelo que contenga `//registry.npmjs.org/:_authToken=FALSO` → falla con un mensaje que **no** muestra el valor; sin él → construye; `find` sobre `podman export` de la imagen final sin `.npmrc` ni `.env*`.
-- Estado: abierto (baja, no bloquea)
+- Estado: verificado (2.9): `.npmrc` señuelo con `_authToken` → el build falla sin mostrar el valor; la comprobación final mira `.npmrc`, `.env*`, `*.pem` y `*.key` en `/app` (fuera de `node_modules`). **[Estado anterior]** abierto (baja, no bloquea)
 
 ## SEC-037: La etiqueta `-sucio` no cubre todo lo que entra en la imagen
 - Severidad: baja
@@ -2206,7 +2415,7 @@ regla de contenedores.
 - Responsable: infrastructure
 - Cómo corregir: usar la misma lista que `containerignore` (`apps packages package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc 'tsconfig*.json' tests/package.json`) y añadir `--ignored=matching` para detectar ignorados dentro de esas rutas que no excluye el containerignore (o marcar `-sucio` si `git ls-files --others --ignored --exclude-standard -- apps packages` devuelve algo fuera de `node_modules`/`dist`/`.env*`). Mantener que el script no acepta `--build-arg` (las bases solo cambian editando el digest en el Containerfile).
 - Cómo verificar: con un cambio sin commit en un `tsconfig*.json` de la raíz o en `tests/package.json` → etiqueta `<commit>-sucio`; sin cambios → `<commit>`.
-- Estado: abierto (baja, no bloquea) **[2.3]** Ocurrió en la práctica: la imagen usada en las suites de la 2.2 es `69e823f40ad7-sucio` (etiqueta `revision` = `69e823f`), construida antes del commit `4460e09` desde un árbol con cambios. La imagen que se use para la puerta debe reconstruirse desde el commit final y sin `-sucio`.
+- Estado: verificado (2.9): en un clon, con cambios en `tsconfig*`, `tests/package.json`, ficheros nuevos en `apps/` o `packages/` y `.npmrc` en `apps/api/` → `-sucio`; árbol limpio → `<commit>`. **[Estado anterior]** abierto (baja, no bloquea) **[2.3]** Ocurrió en la práctica: la imagen usada en las suites de la 2.2 es `69e823f40ad7-sucio` (etiqueta `revision` = `69e823f`), construida antes del commit `4460e09` desde un árbol con cambios. La imagen que se use para la puerta debe reconstruirse desde el commit final y sin `-sucio`.
 
 ## SEC-038: `verifyPin` no resiste peticiones simultáneas: se saltan el límite por IP y el bloqueo, y un acierto entra en una cuenta ya bloqueada
 - Severidad: alta
@@ -2305,7 +2514,7 @@ regla de contenedores.
 - Responsable: infrastructure
 - Cómo corregir: actualizar `RUNTIME_IMAGE` al digest actual de `gcr.io/distroless/nodejs26-debian13` con `libzstd1` ≥ 1.5.7+dfsg-1+deb13u1 (y comprobar si ya trae `libssl3t64` corregido: en ese caso, retirar EXC-01 por su condición 1); actualizar `docs/infraestructura.md` §8; reconstruir desde el commit y repetir las comprobaciones 3 y 4 de SEC-033. Si el digest nuevo cambia la versión de Debian o el `purl` de `libssl3t64`, EXC-01 deja de aplicarse sola y la revisa Cybersecurity.
 - Cómo verificar: Trivy con el fichero de EXC-01 sobre la imagen reconstruida → 0 críticas/altas (como mucho las 2 *suppressed*); suites `containers`, `integration` y `e2e` en verde con esa imagen.
-- Estado: abierto (**alta, bloquea la puerta de la Etapa 2**)
+- Estado: verificado (2.9): `libzstd1` 1.5.7+dfsg-1+deb13u1 en la base `13e3ac17…`; Trivy sobre `localhost/mi-app:0af133152b01` (`sha256:72766f8e…`): 0 críticas/altas salvo las 2 de EXC-01; condiciones 3 y 4 de SEC-033 cumplidas; TX-CONT-01 PASA. Falta que testing repita `integration` y `e2e` con esta imagen para la puerta. **[Estado anterior]** abierto (**alta, bloquea la puerta de la Etapa 2**)
 
 ## SEC-049: La imagen de PostgreSQL tiene una crítica y 26 altas (`gosu` y `libxml2`)
 - Severidad: alta (el escáner: 1 crítica y 26 altas, todas con corrección; riesgo real bajo)
@@ -2314,7 +2523,7 @@ regla de contenedores.
 - Responsable: infrastructure
 - Cómo corregir: (1) actualizar a un digest actual de `postgres:19.x-alpine` (misma versión mayor, ADR-003) con `libxml2` ≥ 2.13.9-r3 en los dos compose y en `docs/infraestructura.md`, y volver a escanear; (2) si el `gosu` del digest nuevo sigue marcado, dos opciones: imagen derivada sin `/usr/local/bin/gosu` (el *entrypoint* no lo usa con UID no root; comprobar `initdb` y los scripts de `docker-entrypoint-initdb.d`), o pedir a Cybersecurity una excepción fechada **solo** para ese binario por versión, que se concedería si: ningún servicio `db` de DEV/TESTING/DEMO/PROD arranca como root, todos tienen `no-new-privileges` y `cap_drop: ALL` (comprobado con `podman-compose config`), ningún `command`/`entrypoint` llama a `gosu`, y revisión a los 30 días. Lo que tiene corrección (`libxml2`) no admite excepción.
 - Cómo verificar: Trivy sobre `podman save` del digest nuevo → 0 críticas/altas (o solo las de `gosu` como *suppressed* con la excepción); `sh tests/run.sh integration` y `e2e` en verde con el digest nuevo.
-- Estado: abierto (**alta, bloquea la puerta de la Etapa 2**)
+- Estado: abierto (**alta, bloquea la puerta de la Etapa 2**) **[2.9] Sigue abierto (alta, bloquea la puerta de la Etapa 2).** (a) `gosu`: riesgo aceptado con **EXC-02** hasta el 2026-12-26, no prorrogable (§6.10, punto 4): ninguno de los 26 CVE está en código que `gosu` enlace (`nm`) y `gosu` no se ejecuta. (b) `libxml2`: **no corregido**. `alpine3.23` trae 2.13.9-r1 sin los parches de CVE-2026-86144 y otras; Trivy da 0 solo porque la secdb de 3.23 no las registra (SEC-051). Corrección: imagen derivada de `postgres:19.0-alpine3.24@sha256:…` con `libxml2` ≥ 2.13.9-r3 (hoy r5 en el repositorio) y sin `/usr/local/bin/gosu`, `USER 1000:1000`, construida en rootless, escaneada y referenciada por digest en todos los entornos; con ella se retira EXC-02. Alternativa: un `postgres:19.x-alpine3.24` oficial que traiga `libxml2` ≥ r3 (hoy no existe), con EXC-02 como mucho hasta el 2026-12-26.
 
 ## SEC-050: La imagen de Caddy tiene dos vulnerabilidades altas (`go-jose` sin corrección y `x/net` con corrección)
 - Severidad: alta (el escáner: 2 altas; riesgo real bajo con el Caddyfile actual)
@@ -2323,11 +2532,96 @@ regla de contenedores.
 - Responsable: infrastructure
 - Cómo corregir: (1) actualizar, por digest, a la última versión 2.x de Caddy cuyo binario lleve `x/net` ≥ 0.62.0 (y `go-jose` corregido, si ya existe), en `compose.test.yaml` y `docs/infraestructura.md`, y repetir los e2e (cabeceras de RS-26, SSE sin búfer, CA interna); (2) para lo que siga sin corrección (`go-jose`), pedir a Cybersecurity una excepción fechada por `purl` y versión; se concedería si el Caddyfile sigue sin `acme_server`, con `admin off` y sin módulos que analicen JWK de clientes, con caducidad a los 30 días o al salir la corrección, lo que llegue antes.
 - Cómo verificar: Trivy sobre `podman save` del digest nuevo → 0 críticas/altas salvo las cubiertas por la excepción (*suppressed*); `sh tests/run.sh e2e` en verde.
-- Estado: abierto (**alta, bloquea la puerta de la Etapa 2**)
+- Estado: abierto (**riesgo aceptado con EXC-03** hasta el 2026-12-26 o 7 días después de que salga un Caddy 2.x con `x/net` ≥ 0.62.0 y sin `go-jose/v3` vulnerable; no bloquea mientras se cumplan sus condiciones; **SEC-054 antes de la puerta de la Etapa 2**; ratificación humana pendiente). **[2.9]** No hay Caddy corregido publicado (v2.11.9 es la última; `master` ya lleva `x/net` v0.62.0 y no lleva `go-jose/v3`); `xcaddy` no hace falta (§6.10, punto 5). **[Estado anterior]** abierto (**alta, bloquea la puerta de la Etapa 2**)
+
+## SEC-051: La variante `alpine3.23` de PostgreSQL oculta al escáner las CVE de `libxml2` que no ha portado
+- Severidad: media (la vulnerabilidad en sí cuenta en SEC-049, alta)
+- Ubicación: compose.dev.yaml:95 y compose.test.yaml:108 (`postgres:19.0-alpine3.23@sha256:40ad7e45…`); docs/infraestructura.md §8 ("trae `libxml2` corregido: 0 altas en el sistema") y §8.2
+- Descripción: para Alpine, Trivy solo conoce las CVE que la secdb de la rama da por **corregidas**. Alpine no registra "afectado sin corrección", así que una rama que no ha portado un parche sale limpia. Alpine 3.23 no ha portado ninguna corrección de `libxml2` de 2026 salvo CVE-2026-6732: su repositorio está en 2.13.9-r1, y 3.24 en 2.13.9-r5 (CVE-2026-86144 en r3; CVE-2026-0990, -0992, -86137…-86143 en r4; CVE-2026-0989, -11979, -1757 en r5). El 0 de Trivy en `alpine3.23` no significa que esté corregido. El cambio de la 2.7 no cierra el `libxml2` de SEC-049: lo esconde. Es una debilidad del método que afecta a cualquier imagen Alpine que no esté en la rama más reciente (§6.10, punto 3).
+- Responsable: infrastructure
+- Cómo corregir: (1) volver a la rama Alpine más reciente con soporte (hoy 3.24) en las imágenes Alpine desplegables y resolver SEC-049 sobre ella (imagen derivada con `libxml2` ≥ 2.13.9-r3, §6.10 punto 4); (2) añadir la regla a `docs/infraestructura.md` §8: imágenes Alpine desplegables solo sobre la rama más reciente. Bajar de rama exige aprobación de Cybersecurity con la comparación de `secfixes`/APKBUILD de los paquetes afectados entre ramas; (3) corregir §8 y §8.2 ("`libxml2` corregido").
+- Cómo verificar: en la imagen de `db`, `cat /etc/alpine-release` = 3.24.x (o la rama más reciente) y `apk info -v | grep '^libxml2-'` ≥ 2.13.9-r3; Trivy con 0 HIGH/CRITICAL en el SO.
+- Estado: abierto (media)
+
+## SEC-052: El escaneo se puede sustituir o saltar: escáner configurable por entorno y ninguna comprobación después del build
+- Severidad: media
+- Ubicación: deploy/scan/escanear.sh:16 (`TRIVY_IMAGE=${TRIVY_IMAGE:-…}`); deploy/app/construir.sh:144 (`escanear app "$REPO:$ETIQUETA"`, por etiqueta); tests/run.sh (acepta cualquier `APP_IMAGE`)
+- Descripción: (1) basta `TRIVY_IMAGE=<otra imagen>` en el entorno para que `construir.sh` "escanee" con otra imagen, por ejemplo una que siempre salga con 0, e imprima `APP_IMAGE` sin avisar. La variable no está documentada (§14.1 dice "Trivy fijado por digest") y no se valida. (2) El escaneo solo existe dentro de `construir.sh`. Una imagen hecha con `podman build` directo, o una rechazada (sigue en el almacén y se puede usar por digest), se acepta en `tests/run.sh` y llegaría igual a DEMO/PROD: ni las suites ni el despliegue comprueban que el digest tenga un escaneo aprobado y reciente. (3) La app se escanea por etiqueta y no por el digest que luego se imprime, así que un `podman tag` simultáneo haría escanear otra imagen. La probabilidad es baja (hace falta una acción del propio equipo o de un agente), pero es justo el control que sostiene la regla de imágenes sin críticas/altas en DEMO/PROD.
+- Responsable: infrastructure (testing, para `tests/run.sh`)
+- Cómo corregir: (1) quitar la variable o aceptarla solo si es `docker.io/aquasec/trivy@sha256:<64 hex>`, y mostrar en la salida la imagen usada; (2) escanear `"$REPO@$DIGEST"`; (3) al aprobar, guardar un registro (`$SCAN_DIR/aprobadas/<digest>` con la fecha, los digests de db/proxy y el sha256 de los ficheros de excepciones), y que el despliegue de DEMO/PROD y `tests/run.sh` (al menos en la ejecución de la puerta) rechacen un `APP_IMAGE` sin registro o con un escaneo de más de 7 días.
+- Cómo verificar: `TRIVY_IMAGE=docker.io/library/alpine:3.24 sh deploy/app/construir.sh x` → falla; `APP_IMAGE=<digest sin registro> sh tests/run.sh containers` → falla con un mensaje claro; lo mismo en el despliegue de DEMO.
+- Plazo: (1) y (2) en la próxima entrega de infrastructure; (3) antes del despliegue de DEMO (Etapa 4).
+- Estado: abierto (media, no bloquea la puerta de la Etapa 2)
+
+## SEC-053: Comprobaciones del build que fallan abiertas, no se repiten o informan mal
+- Severidad: baja
+- Ubicación: deploy/app/construir.sh:107-115 (`readelf`/`nm`), :70-76 (`rechazar`; `untag` en :73); deploy/app/Containerfile:87-91 (`pnpm audit` en un `RUN` que se guarda en caché)
+- Descripción: (1) si `readelf` o `nm` no están en el host, `readelf … 2>/dev/null | grep -Eq` no encuentra nada y la condición 4 de EXC-01 **pasa sin comprobarse**. Lo mismo con rutas con espacios (`for f in $(find …)`). (2) `rechazar()` hace `podman untag "$REPO:$ETIQUETA"` sin nombre, y entonces Podman quita **todos** los nombres de la imagen. La etiqueta `-rechazada` no llega a existir (probado: la imagen queda como `<none>`), al contrario de lo que dicen el mensaje y §14.1. Si la imagen rechazada tiene el mismo ID que otra etiqueta (p. ej. al reconstruir el mismo commit después de que salga una alta nueva), también le quita esa. No deja nada aceptado, pero se pierde la trazabilidad. (3) `pnpm audit --prod` va en el mismo `RUN` que la instalación. Si esa capa está en caché (mismo lockfile y mismo código), no se ejecuta, así que no es "en cada build" (en el build limpio de la 2.9 vino de caché). Trivy lo cubre en parte, porque analiza en cada build los `package.json` de `node_modules`.
+- Responsable: infrastructure
+- Cómo corregir: (1) `command -v readelf >/dev/null && command -v nm >/dev/null || rechazar "faltan readelf/nm (binutils)"`, y recorrer los ficheros con `find … -exec` o `while IFS= read -r`; (2) crear `-rechazada` y luego quitar solo ese nombre: `podman untag "$REPO:$ETIQUETA" "$REPO:$ETIQUETA"`; (3) ejecutar `pnpm audit --prod --audit-level high` fuera de la caché: en `construir.sh` (contenedor endurecido con red, sobre el lockfile) o en un `RUN` propio con un `ARG` que cambie en cada build.
+- Cómo verificar: con un `PATH` sin binutils → rechaza; tras un rechazo existe `localhost/mi-app:<etiqueta>-rechazada` y las demás etiquetas del mismo ID siguen; en dos builds seguidos, `pnpm audit` aparece ejecutado en los dos.
+- Estado: abierto (baja)
+
+## SEC-054: Las condiciones de EXC-03 (Caddyfile) no se comprueban de forma automática, aunque la excepción dice que sí
+- Severidad: media
+- Ubicación: deploy/scan/trivyignore-proxy.yaml (comentario original: "comprobado por tests/run.sh containers", corregido en la 2.9); docs/infraestructura.md §8.2 ("el `Caddyfile` tiene `admin off`…; lo comprueba…"); tests/containers/tx-cont-01.sh (no lee el Caddyfile)
+- Descripción: según la excepción propuesta y §8.2, `tests/run.sh containers` comprueba que el Caddyfile tiene `admin off` y no tiene `acme_server`, `templates` ni `markdown`. No es así: TX-CONT-01 solo mira el endurecimiento de los contenedores y TX-CMD-01 los comandos. Hoy el Caddyfile cumple (revisado a mano en la 2.9). Pero un cambio futuro (p. ej. `templates` para una página de error, o `acme_server`) haría alcanzables `x/net/html` o `go-jose` sin que falle nada, y EXC-03 seguiría ocultando las dos altas. Para EXC-02 sí hay comprobación: `construir.sh` verifica que ningún compose llama a `gosu`, y TX-CONT-01 que `db` corre sin root, sin capacidades y con `no-new-privileges` (PASA). Falta lo mismo para DEMO y PROD cuando existan.
+- Responsable: infrastructure
+- Cómo corregir: en `construir.sh`, antes de escanear `proxy`, sobre `deploy/proxy/Caddyfile` sin comentarios: fallar si aparece `acme_server`, `templates` o `markdown`, si falta `admin off` o si hay otro `admin`. Fallar también si algún compose (y más adelante Quadlet) monta otro Caddyfile o arranca Caddy con otro `--config`, `--adapter` o `--resume`. Hacer lo mismo para EXC-02 en `compose.demo.yaml` y Quadlet cuando existan. Corregir §8.2.
+- Cómo verificar: en un clon, un Caddyfile con `templates` → `construir.sh` rechaza; sin cambios → pasa.
+- Plazo: **antes de la puerta de la Etapa 2**. Si para entonces no está, EXC-03 se considera no vigente y SEC-050 vuelve a bloquear.
+- Estado: abierto (media)
 
 ---
 
-### Resumen de la revisión 2.6 (Etapa 2, HU-01, 2026-11-26)
+### Resumen de la revisión 2.9 (Etapa 2, HU-01, 2026-11-26)
+- **SEC-048 (alta): VERIFICADO.** La base distroless `13e3ac17…` trae
+  `libzstd1` 1.5.7+dfsg-1+deb13u1. La imagen de la app
+  (`localhost/mi-app:0af133152b01`, `sha256:72766f8e…`, construida desde el
+  commit y sin `-sucio`) solo tiene las 2 altas de EXC-01.
+- **SEC-049 (alta): SIGUE ABIERTO Y BLOQUEA LA PUERTA DE LA ETAPA 2.**
+  `gosu` queda cubierto por **EXC-02**, aprobada como puente hasta el
+  2026-12-26 y no prorrogable: el código vulnerable no está enlazado y
+  `gosu` no se ejecuta. Pero `alpine3.23` **no corrige `libxml2`**: tiene
+  2.13.9-r1 sin parches y Trivy no lo ve (SEC-051). Solución recomendada:
+  imagen derivada de `postgres:19.0-alpine3.24` con `libxml2` ≥ 2.13.9-r3 y
+  sin `gosu`, que cierra SEC-049 entero y retira EXC-02.
+- **SEC-050 (alta): riesgo aceptado con EXC-03** hasta el 2026-12-26 o 7
+  días después de que salga un Caddy corregido (`master` ya lleva `x/net`
+  0.62.0 y no lleva `go-jose/v3`). Hoy no hay versión corregida publicada;
+  `xcaddy` no hace falta. Condición: la comprobación automática del
+  Caddyfile (SEC-054) debe estar antes de la puerta.
+- **EXC-01 sigue vigente** (Debian sin corrección; OpenSSL lo corrige en
+  3.5.10, sin publicar, y lo clasifica Low; Node 26.13.1 es la última).
+  Revisión el 2026-12-08.
+- **SEC-034, SEC-035, SEC-036 y SEC-037: VERIFICADOS** con pruebas
+  negativas: el build rechaza la imagen y no imprime `APP_IMAGE`; la
+  excepción caducada, con otra ruta o con otro `purl` falla; integridad de
+  pnpm errónea y `.npmrc` señuelo fallan; la lógica `-sucio` cubre 5 casos.
+  El contenedor de Trivy es rootless (UID 1000, sin capacidades,
+  `no-new-privileges`, raíz `ro`, sin socket).
+- Nuevos: **SEC-051** (media, `alpine3.23` oculta CVE al escáner),
+  **SEC-052** (media, el escaneo se puede sustituir con `TRIVY_IMAGE` y nada
+  después del build exige un escaneo aprobado; (3) antes de DEMO),
+  **SEC-053** (baja, `readelf`/`nm` fallan abiertos, la etiqueta
+  `-rechazada` no se crea y `pnpm audit` se queda en caché) y **SEC-054**
+  (media, las condiciones de EXC-03 no se comprueban; antes de la puerta).
+- Escaneo propio (Trivy 0.76.2, BD del 2026-11-26, sin excepciones):
+  app 0 críticas / 2 altas (EXC-01); db 1 / 25 (`gosu`, EXC-02) más el
+  `libxml2` que Trivy no ve; proxy 0 / 2 (EXC-03). Con los ficheros de
+  excepciones: 0 sin excepción en las tres.
+- Abiertos que no bloquean: SEC-003 (media), SEC-025 (baja), SEC-033 (baja,
+  EXC-01), SEC-043, SEC-046, SEC-047 y SEC-053 (baja), SEC-051 y SEC-052
+  (media), SEC-054 (media, condición de EXC-03 antes de la puerta).
+- Para la puerta: el humano debe ratificar EXC-01, EXC-02 y EXC-03
+  (excepciones a `docs/reglas-equipo.md` §3.3), y testing debe repetir
+  `integration` y `e2e` con la imagen limpia `sha256:72766f8e…`, o con la
+  que salga tras resolver SEC-049.
+- Contenedores: ninguno corre como root, usa `--privileged` ni monta el
+  socket o la red del host (TX-CONT-01 PASA con la imagen limpia). Todas las
+  pruebas se hicieron en Podman rootless.
+
+### Resumen de la revisión 2.6 (Etapa 2, HU-01, 2026-11-26; histórico, sustituido por el de 2.9)
 - **SEC-038 (alta): VERIFICADO.** RS-05b 4/4 en verde y prueba propia de la
   2.3 repetida: 5 verificaciones de 300 desde una IP (antes 300), 10 de 3000
   (antes 516), el acierto al final de la ráfaga `429`/`423` con 0 sesiones y

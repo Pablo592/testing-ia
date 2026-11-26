@@ -1,19 +1,26 @@
-# PROPUESTA de excepcion (SEC-050), PENDIENTE de validacion de Cybersecurity.
+# EXC-03 (SEC-050): APROBADA por Cybersecurity el 2026-11-26 (docs/seguridad.md
+# §6.10 y SEC-050), pendiente de ratificacion humana en la puerta de la Etapa 2.
 # /usr/bin/caddy de caddy:2.11.9-alpine (la ultima 2.x publicada a 2026-11-26):
-#  - CVE-2026-116587 go-jose/v3 v3.0.5: sin correccion publicada.
-#  - CVE-2026-78661 x/net v0.60.0: corregida en x/net 0.62.0, pero ningun Caddy
-#    publicado la lleva todavia.
-# Condiciones: Caddyfile sin acme_server, con `admin off` y sin templates ni
-# markdown (comprobado por tests/run.sh containers); caduca a los 30 dias o al
-# salir la correccion, lo que llegue antes (retirar la entrada).
+#  - CVE-2026-116587 go-jose/v3 v3.0.5: sin correccion publicada. Solo se alcanza
+#    si Caddy analiza un JWK del atacante (acme_server); no se usa.
+#  - CVE-2026-78661 x/net v0.60.0 (x/net/html): corregida en x/net 0.62.0, pero
+#    ningun Caddy publicado la lleva. Solo la usa el modulo templates; no se usa.
+# Condiciones: Caddyfile con `admin off` y sin acme_server, templates ni
+# markdown; imagen oficial por digest, sin modulos anadidos; el mismo Caddyfile
+# en DEMO y PROD. La comprobacion automatica esta PENDIENTE (SEC-054, antes de la
+# puerta de la Etapa 2): tests/run.sh containers NO la hace. Hasta entonces,
+# cada cambio del Caddyfile lo revisa Cybersecurity.
+# Caduca 2026-12-26, o 7 dias despues de publicarse un Caddy 2.x con x/net >= 0.62.0
+# y sin go-jose/v3 vulnerable (el go.mod de master ya lo cumple), lo que llegue
+# antes: entonces se actualiza el digest y se retira la entrada.
 vulnerabilities:
   - id: CVE-2026-116587
     paths: ["usr/bin/caddy"]
     purls: ["pkg:golang/github.com/go-jose/go-jose/v3@v3.0.5"]
     expired_at: 2026-12-26
-    statement: "SEC-050 (propuesta): Caddy no analiza JWK de clientes (admin off, sin acme_server)"
+    statement: "SEC-050 / EXC-03: Caddy no analiza JWK de clientes (admin off, sin acme_server)"
   - id: CVE-2026-78661
     paths: ["usr/bin/caddy"]
     purls: ["pkg:golang/golang.org/x/net@v0.60.0"]
     expired_at: 2026-12-26
-    statement: "SEC-050 (propuesta): Caddy no analiza HTML (sin templates ni markdown)"
+    statement: "SEC-050 / EXC-03: Caddy no analiza HTML (sin templates ni markdown)"
