@@ -1,6 +1,6 @@
 # Estado del proyecto
 
-**Etapa actual:** 2 — Desarrollo (desde 2026-11-24). Etapa 1 aprobada por el humano el 2026-11-24.
+**Etapa actual:** 2 — Desarrollo (desde 2026-11-24). HU-01 aprobada el 2026-11-26; siguiente historia: HU-05. Etapa 1 aprobada por el humano el 2026-11-24.
 
 **Proyecto:** software de toma de pedidos para una cafetería (simulación; las
 historias las propone el Product Owner sin entrevista al cliente real).
@@ -30,7 +30,8 @@ Una historia a la vez, en el orden de `docs/historias/README.md`: HU-01, HU-05, 
 | 2.2b | testing | D-2.2-01 (`--configLoader runner`), D-2.2-02 (Playwright desde `tests/node_modules`, digests), D-2.2-03 (límite de workers), D-2.2-04 (RS-06 espera `401` con cuenta bloqueada → `423`) y D-2.2-05 (bloqueos 15/60 min sin actividad → `401 idle`), SEC-044 y SEC-045 | Hecho (`sh tests/run.sh <suite>` vuelve a ejecutar de verdad todas las suites: Vitest 4.1.12 exacto (`pnpm audit` y `--prod`: 0 vulnerabilidades; `tinypool` ya no está) con `--configLoader runner` (sigue haciendo falta), Playwright por `node tests/node_modules/@playwright/test/cli.js` con 3 workers, digests por defecto de Playwright/Toxiproxy/k6, filtro por suite y artefactos por parte de e2e; D-2.2-04 y D-2.2-05 eran **errores del test** (CA-F06 y CA-F09/§7 son inequívocos, no hace falta consultar al software-engineer) y se corrigieron sin cambiar aserciones; SEC-045: RS-05b (4 tests, **fallan a propósito hasta la 2.5 por SEC-038**), casos extra de SEC-029 (unitario y `buildApp`), e2e de SEC-032 con respuesta retrasada, estático de RS-16c/RS-25/RS-35 (34 tests, sin hallazgos en el código actual) y vigilante de CSP en todos los e2e. Resultados: unit 177/177, security 73/73, integration 250 pasan + 4 RS-05b a propósito, containers y trazabilidad PASAN, visual 11/11, perf PASA (login p95 175 ms), a11y intermitente (T-46), **e2e en rojo por una sola causa: violación de CSP `eval` de zod en cada carga (T-45)**; detalle en `docs/testing.md` §12–§14.7) |
 | 2.2c | software-engineer | D-2.2-06: documentar en la arquitectura las desviaciones de la 2.2 (columnas `revoked_reason`/`expired_reason`, `role` `text`+`CHECK`, guarda en un solo hook, límite de 2 flujos SSE, `/healthz` 503, etc.) | Hecho (§18.1 registro de desviaciones D-2.2-06 a–e, D-2.2-07 y resto de la 2.2; §7 SEC-038 como requisito, SEC-047, SEC-039/040/041, SEC-031/032, T-48, `X-Activity`; ADR-003/005/007 con secciones de revisión, sin ADR nuevo; IMG-02 ratificado; **decisiones §18.2 pendientes de implementar y de confirmar por cybersecurity**: SEC-043 (clave IPv4 / IPv6 /64, poda que falla cerrado, proxy solo IPv4 en DEMO/PROD), cola del semáforo argon2 máx. 32 → `503` + `Retry-After: 5`, regla de texto `apiText`/`apiName` con HU-05; pendiente menor: ADR en "Propuesto" y fila T-40 de §17.1) |
 | 2.14 | cybersecurity | Confirmar las decisiones de §18.2 (SEC-043, cola del semáforo, `apiText`/`apiName`) | Hecho (§6.14: las tres decisiones confirmadas con condiciones C1–C11; SEC-043 sigue abierto hasta implementarlo, plazo sin cambios (antes de HU-06, con C1, C2, C4, C5, C7, C8); antes de DEMO: C3, proxy solo IPv4 (infrastructure), C6 (monitoring); con HU-05: C10, C11; nuevo SEC-059 (baja, con HU-06); 7 desviaciones de §18.1 aprobadas expresamente; **sin críticos ni altos**) |
-| 2.15 | testing → developer | SEC-043 y la cola del semáforo argon2 (toca código de HU-01; antes de HU-06). **El humano decide si cuenta como ciclo de HU-01 (ya en 3/3) o como tarea aparte** | En cola |
+| 2.15 | testing → developer | SEC-043 y la cola del semáforo argon2 (toca código de HU-01; antes de HU-06). Tarea aparte, no es ciclo de HU-01 (decisión del humano 2026-11-26); condiciones C1, C2, C4, C5, C7, C8 de seguridad §6.14 | En cola |
+| 2.17 | testing / infrastructure / developer | T-46 (`ERR_NETWORK_CHANGED` / página en blanco en la primera carga de cada proyecto e2e) y fallo intermitente de T-48 en WebKit (`HU-01-caducidad-carrera.e2e.ts:82`, se queda en `/cola`); objetivo: e2e completo estable antes de la puerta de la Etapa 3 | En cola |
 | 2.16 | monitoring | Catálogo: `auth.verify.busy`, `result="busy"`, `cause: 'capacity'` (§18.3) | En cola |
 | 2.2d | infrastructure | D-2.2-07: variables `APP_ENV` y `APP_VERSION` en los entornos (junto con la 2.1n) | Hecho (D-2.2-07 resuelta: `APP_ENV` dev/test en los compose; `APP_VERSION` horneada en la imagen con la etiqueta de `construir.sh` (`--build-arg`), mismo valor en TESTING/DEMO/PROD por digest, `-sucio` visible en logs; containers PASA con `"env":"test","version":"ec09e9e3d3a7-sucio"`; DEMO/PROD pondrán `APP_ENV` demo/prod al crearse) |
 | 2.4 | ux-designer | H-2.3-01: añadir "Pedidos" al menú del encargado en `docs/ux/flujos.md` y wireframes | Hecho (menú "Gestión" con 5 opciones, "Pedidos" primero, "Estás aquí"; barra de 2 filas y panel a ancho completo a ≤ 767 px; flujos.md, wireframes 02/06/10, design-system §5.11). Cambio visual aprobado por el humano (2026-11-25) |
@@ -95,6 +96,12 @@ Una historia a la vez, en el orden de `docs/historias/README.md`: HU-01, HU-05, 
 | 1.2b | ux-designer | Actualizar wireframes con los cambios del PO (ronda 1.1c) + SEC-007 y mensajes de bloqueo | Hecho (reconfirmación de PIN en cobro y Personal, desbloqueo, estados de bloqueo en login, "Activar sonido"/Wake Lock y 409 en la cola, "AÑADIDO hh:mm"; P-12 Ajustes condicionada a HU-09) |
 
 ## Decisiones del humano
+**2026-11-26. Puerta de la Etapa 2 para HU-01 aprobada.** Además:
+- **EXC-01** (OpenSSL QUIC en la app, hasta 2026-12-24, revisión 2026-12-08) y **EXC-03** (Caddy `go-jose`/`x/net`, hasta 2026-12-26 o 7 días tras un Caddy corregido) **ratificadas**, con la condición de que DEMO y PROD reciban las mismas imágenes por digest, sin reconstruir.
+- **SEC-043** se trata como tarea aparte (2.15), no como ciclo de HU-01; antes de HU-06.
+- **H-2.8c-01:** corregir antes de la puerta (3.er ciclo de HU-01), hecho en la 2.13.
+- La intermitencia de e2e (T-46 y T-48 en WebKit) no bloquea; se investiga en la 2.17.
+
 **2026-11-24. Puerta de la Etapa 1 aprobada** (historias, wireframes y arquitectura). Además:
 - **H-1.7g-01:** no se separa el efectivo de los "Cobros tras el cierre"; se anota como supuesto (PO, tarea 2.0).
 - **T-27:** se resuelve en la Etapa 2: el SE fija `BEGIN ISOLATION LEVEL READ COMMITTED` explícito antes de implementar HU-08 y el developer lo implementa con esa historia.
@@ -294,3 +301,4 @@ Orquestador lo aplica así (el humano puede corregir cualquier punto):
 ## Puertas aprobadas por el humano
 | Etapa | Fecha | Notas |
 |---|---|---|
+| 2 — HU-01 | 2026-11-26 | Aprobada con las imágenes de `cd2abd9`: app `sha256:614abfa0f70dc226df8cafaf71324c06ce0b84035690bd316521e3989b3fb4ee`, db `sha256:8e73b5720961524b3efa3aba3c9a4cbfd022e7899ae690544b7ece56d24a7140`, proxy `sha256:36a4821e22ec6b9679a490aae98270dcf57363fd4c899ec1046e417cd89cd576`. Intermitencia de e2e aceptada sin bloquear (2.17) |
