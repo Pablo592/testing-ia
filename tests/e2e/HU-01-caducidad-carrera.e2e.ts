@@ -18,9 +18,10 @@
 // el orden de las respuestas (HU-01/CA-N06; `wireframes/01-login.md` "Vuelta al
 // inicio de sesión"). FALLA con el código actual (tarea 2.8b, `developer`);
 // no vale una solución que suba el tiempo de espera del test.
+import type { Page } from '@playwright/test';
 import { expect, test } from '../support/e2e/base.ts';
 import { caducarSesiones, cerrarSemilla, sembrarUsuario } from '../support/e2e/semilla.ts';
-import { entrarComo, PantallaLogin, TEXTOS } from '../support/e2e/pantallas.ts';
+import { BANNER_POR_MOTIVO, entrarComo, PantallaLogin, TEXTOS } from '../support/e2e/pantallas.ts';
 
 test.afterAll(async () => {
   await cerrarSemilla();
@@ -50,4 +51,41 @@ test('[HU-01/CA-N06][T-46] barra: si el flujo SSE recibe el 401 antes que GET /a
 
   await expect(page.getByRole('heading', { name: TEXTOS.quienEres })).toBeVisible();
   await expect(new PantallaLogin(page).banner(TEXTOS.caducidadBanner), 'banner de caducidad tras volver a P-01').toBeVisible();
+});
+
+// T-48, decisión de la 2.8d (tests/README.md §5, "Banner de P-01 por motivo"): un `401`
+// SIN `details` (la petición salió sin cookie porque el `401` del flujo SSE ya la borró y
+// su cuerpo no se puede leer) decide el banner según lo que el cliente sabe:
+//   - la caducidad absoluta de su sesión (`me.session.expiresAt`, con la hora del servidor)
+//     ya ha pasado  -> banner "caducado por duración máxima" (el motivo es esa caducidad);
+//   - la sesión sigue vigente -> SIN banner (no hay motivo que afirmar).
+// Las dos pruebas son idénticas salvo el tiempo que avanza el reloj del navegador; el
+// servidor real no interviene en el 401 (se simula sin `details` ni `Set-Cookie`).
+async function sesionConAuthMeYEventosRechazados(page: Page, u: Awaited<ReturnType<typeof sembrarUsuario>>) {
+  await page.clock.install();
+  let rechazar = false;
+  const sinDetalles = { status: 401, contentType: 'application/json', body: '{"error":{"code":"UNAUTHENTICATED","message":"Sesión no válida","requestId":"e2e"}}' };
+  await page.route('**/api/v1/auth/me', (ruta) => (rechazar ? ruta.fulfill(sinDetalles) : ruta.continue()));
+  await page.route('**/api/v1/events', (ruta) => (rechazar ? ruta.fulfill({ status: 401, body: '' }) : ruta.continue()));
+  await entrarComo(page, u);
+  rechazar = true;
+}
+
+test('[HU-01/CA-N06][T-48] 401 sin details con la caducidad absoluta ya pasada: banner de caducidad por duración máxima', { tag: ['@HU-01', '@CA-N06'] }, async ({ page }) => {
+  const u = await sembrarUsuario({ rol: 'kitchen' });
+  await sesionConAuthMeYEventosRechazados(page, u);
+  await page.clock.fastForward('12:01:00'); // > 12 h desde el inicio de la sesión
+  await expect(page.getByRole('heading', { name: TEXTOS.quienEres })).toBeVisible();
+  await expect(new PantallaLogin(page).banner(TEXTOS.caducidadBanner), 'banner de caducidad').toBeVisible();
+});
+
+test('[HU-01/CA-N06][T-48] 401 sin details con la sesión aún vigente: vuelve a P-01 sin ningún banner de motivo', { tag: ['@HU-01', '@CA-N06'] }, async ({ page }) => {
+  const u = await sembrarUsuario({ rol: 'kitchen' });
+  await sesionConAuthMeYEventosRechazados(page, u);
+  await page.clock.fastForward('00:30'); // el flujo se reabre (vigilante) y recibe el 401; faltan ~11 h 59 min
+  await expect(page.getByRole('heading', { name: TEXTOS.quienEres })).toBeVisible();
+  const login = new PantallaLogin(page);
+  for (const [motivo, texto] of Object.entries(BANNER_POR_MOTIVO)) {
+    if (texto) await expect(login.banner(texto), `sin banner "${motivo}"`).toHaveCount(0);
+  }
 });

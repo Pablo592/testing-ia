@@ -3,7 +3,7 @@
 // Los bloqueos largos se fabrican en BD (docs/testing.md §5.3).
 import { expect, test } from '../support/e2e/base.ts';
 import { cerrarSemilla, fabricarBloqueo, fabricarFallos, sembrarUsuario } from '../support/e2e/semilla.ts';
-import { BarraSuperior, CambioPin, entrarComo, PantallaLogin, TEXTOS } from '../support/e2e/pantallas.ts';
+import { BarraSuperior, CambioPin, entrarComo, ETIQUETAS_CAMBIO_PIN, PantallaLogin, TEXTOS } from '../support/e2e/pantallas.ts';
 import { junto } from '../support/e2e/medidas.ts';
 import { pinAleatorio, pinIncorrecto } from '../support/datos.ts';
 
@@ -77,7 +77,11 @@ test('[HU-01/CA-F12] (c) bloqueo temporal fabricado con la sesión abierta: "Cue
   // T-30 (docs/ux/wireframes/01-login.md, 2.1d): "No se ha cambiado el PIN.",
   // los tres PIN vaciados y teclado y "Guardar PIN" deshabilitados durante la cuenta atrás.
   await expect(alerta).toContainText(TEXTOS.noSeHaCambiado);
-  await expect(login.campoPin()).toHaveValue('');
+  // La pantalla se queda en el paso del "Guardar PIN" (paso 3): el campo de ese paso (D-2.5-01)
+  // está vacío. Los de los pasos 1 y 2 no se muestran en esta pantalla, así que se comprueba
+  // además que ningún campo de PIN de la pantalla conserva valor (RS-29b: los tres PIN se vacían).
+  await expect(cambio.campo(ETIQUETAS_CAMBIO_PIN.paso3)).toHaveValue('');
+  for (const campo of await page.locator('input[type="password"]').all()) await expect(campo).toHaveValue('');
   await expect(page.getByRole('button', { name: 'Guardar PIN' })).toBeDisabled();
   for (const d of ['0', '5', '9']) await expect(login.tecla(d)).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Cerrar sesión' })).toBeEnabled();

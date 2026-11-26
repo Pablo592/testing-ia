@@ -12,7 +12,7 @@
 //  - al llegar la respuesta desaparecen el esqueleto y el texto de carga.
 import { expect, test } from '../support/e2e/base.ts';
 import { cerrarSemilla, sembrarUsuario } from '../support/e2e/semilla.ts';
-import { ESQUELETO_USUARIO, TEXTOS } from '../support/e2e/pantallas.ts';
+import { ESQUELETO_USUARIO, PantallaLogin, TEXTOS } from '../support/e2e/pantallas.ts';
 import type { Page } from '@playwright/test';
 
 test.afterAll(async () => {
@@ -35,7 +35,10 @@ async function retenerRejilla(page: Page): Promise<() => void> {
 }
 
 async function comprobarEsqueleto(page: Page): Promise<void> {
-  await sembrarUsuario({ rol: 'waiter' });
+  // Nombre corto (cabe en 1 línea de la tarjeta a 375 px): el alto de una tarjeta real depende de
+  // cuántas líneas ocupa el nombre y el esqueleto es de la tarjeta de 1 línea. La tarjeta que se
+  // compara es la de este usuario (no la primera de la rejilla: otros tests siembran nombres largos).
+  const u = await sembrarUsuario({ rol: 'waiter', nombre: `S${Math.random().toString(36).slice(2, 6)}` });
   const liberar = await retenerRejilla(page);
   await page.goto('/');
   await expect(page.getByRole('heading', { name: TEXTOS.quienEres })).toBeVisible();
@@ -58,16 +61,20 @@ async function comprobarEsqueleto(page: Page): Promise<void> {
   expect(cajaEsqueleto, 'el esqueleto tiene caja').not.toBeNull();
 
   liberar();
-  const tarjeta = page.getByRole('button', { name: /Camarero|Barra|Encargado/ }).first();
+  const tarjeta = page.getByRole('button', { name: /Camarero|Barra|Encargado/ }).first(); // 1.ª columna
+  const tarjetaCorta = new PantallaLogin(page).tarjeta(u); // nombre de 1 línea: su alto es el del esqueleto
   await expect(tarjeta).toBeVisible();
+  await expect(tarjetaCorta).toBeVisible();
   await expect(esqueletos, 'el esqueleto desaparece al cargar').toHaveCount(0);
   await expect(page.getByRole('status').filter({ hasText: 'Cargando usuarios…' })).toHaveCount(0);
 
   // "Forma del contenido final": mismo ancho y alto que una tarjeta real y misma columna de inicio.
   const real = await tarjeta.boundingBox();
+  const realCorta = await tarjetaCorta.boundingBox();
   expect(real, 'la tarjeta real tiene caja').not.toBeNull();
+  expect(realCorta, 'la tarjeta real de nombre corto tiene caja').not.toBeNull();
   expect(Math.abs(cajaEsqueleto!.width - real!.width), `ancho: esqueleto ${cajaEsqueleto!.width} vs tarjeta ${real!.width}`).toBeLessThanOrEqual(TOLERANCIA_PX);
-  expect(Math.abs(cajaEsqueleto!.height - real!.height), `alto: esqueleto ${cajaEsqueleto!.height} vs tarjeta ${real!.height}`).toBeLessThanOrEqual(TOLERANCIA_PX);
+  expect(Math.abs(cajaEsqueleto!.height - realCorta!.height), `alto: esqueleto ${cajaEsqueleto!.height} vs tarjeta ${realCorta!.height}`).toBeLessThanOrEqual(TOLERANCIA_PX);
   expect(Math.abs(cajaEsqueleto!.x - real!.x), `columna: esqueleto x=${cajaEsqueleto!.x} vs tarjeta x=${real!.x}`).toBeLessThanOrEqual(TOLERANCIA_PX);
 }
 
