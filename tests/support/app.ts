@@ -25,6 +25,12 @@ export interface HasherEspia extends PinHasher {
   verificaciones: number;
   /** Número de hashes nuevos calculados (hashNewPin, docs/arquitectura.md §2.1). */
   hashes: number;
+  /** Verificaciones argon2id en curso ahora mismo (SEC-047). */
+  enCurso: number;
+  /** Máximo de verificaciones en curso a la vez desde el último `reiniciarSimultaneas()` (SEC-047). */
+  maxSimultaneas: number;
+  /** Pone a 0 el máximo de simultáneas (no toca `verificaciones`). */
+  reiniciarSimultaneas(): void;
 }
 
 interface RespuestaInject {
@@ -82,13 +88,24 @@ function espiar(h: PinHasher): HasherEspia {
   const e: HasherEspia = {
     verificaciones: 0,
     hashes: 0,
+    enCurso: 0,
+    maxSimultaneas: 0,
+    reiniciarSimultaneas: () => {
+      e.maxSimultaneas = e.enCurso;
+    },
     hash: (pin) => {
       e.hashes += 1;
       return h.hash(pin);
     },
     verify: async (hash, pin) => {
       e.verificaciones += 1;
-      return h.verify(hash, pin);
+      e.enCurso += 1;
+      e.maxSimultaneas = Math.max(e.maxSimultaneas, e.enCurso);
+      try {
+        return await h.verify(hash, pin);
+      } finally {
+        e.enCurso -= 1;
+      }
     },
   };
   return e;

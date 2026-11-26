@@ -6,7 +6,8 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { cerrarSemilla, fabricarBloqueo, sembrarUsuario } from '../support/e2e/semilla.ts';
-import { BarraSuperior, CambioPin, entrarComo, PantallaLogin } from '../support/e2e/pantallas.ts';
+import { BarraSuperior, CambioPin, entrarComo, ETIQUETAS_CAMBIO_PIN, PantallaLogin } from '../support/e2e/pantallas.ts';
+import { pinAleatorio } from '../support/datos.ts';
 
 test.afterAll(async () => {
   await cerrarSemilla();
@@ -92,6 +93,42 @@ test('[HU-01/CA-N04] cambio obligatorio del PIN sin violaciones', { tag: ['@HU-0
   await new CambioPin(page).visible();
   await auditar(page, info, 'P-01-cambio-pin');
 });
+
+// H-2.3-04 / D-2.5-01 (2.8a): el campo de PIN tiene una etiqueta accesible PROPIA
+// en cada paso del cambio obligatorio. Con "PIN (6 dígitos)" en los tres pasos,
+// un lector de pantalla lee primero lo mismo en los tres (WCAG 2.4.6, 3.3.2).
+// Textos: ETIQUETAS_CAMBIO_PIN en tests/support/e2e/pantallas.ts y tests/README.md §5.
+for (const rol of ['manager', 'waiter'] as const) {
+  test(`[HU-01/CA-N04][H-2.3-04] cambio de PIN (${rol}): el campo tiene una etiqueta accesible distinta en cada uno de los 3 pasos`, { tag: ['@HU-01', '@CA-N04'] }, async ({ page }) => {
+    const u = await sembrarUsuario({ rol, pinProvisional: true });
+    const nuevo = pinAleatorio(rol);
+    await new PantallaLogin(page).iniciarSesion(u);
+    const cambio = new CambioPin(page);
+    await cambio.visible();
+
+    const etiquetas = [ETIQUETAS_CAMBIO_PIN.paso1, ETIQUETAS_CAMBIO_PIN.paso2(rol), ETIQUETAS_CAMBIO_PIN.paso3];
+    expect(new Set(etiquetas).size, 'las tres etiquetas son distintas').toBe(3);
+    const genericas = page.getByLabel(/^PIN \((4 a 6|6) dígitos\)$/);
+
+    for (const [i, esperada] of etiquetas.entries()) {
+      await test.step(`paso ${i + 1}: «${esperada}»`, async () => {
+        await expect(cambio.campo(esperada), 'campo con su etiqueta propia').toBeVisible();
+        await expect(cambio.campo(esperada)).toHaveCount(1);
+        // Ninguna de las otras etiquetas, ni la genérica de P-01, nombra el campo en este paso.
+        for (const otra of etiquetas.filter((_, j) => j !== i)) await expect(cambio.campo(otra), `«${otra}» no es del paso ${i + 1}`).toHaveCount(0);
+        await expect(genericas, 'la etiqueta genérica "PIN (… dígitos)" ya no aparece').toHaveCount(0);
+        await expect(page.getByRole('status').filter({ hasText: `Paso ${i + 1} de 3` }), 'el texto del paso sigue anunciándose').toBeVisible();
+        if (i === 0) {
+          for (const d of u.pin) await new PantallaLogin(page).tecla(d).click();
+          await cambio.siguiente();
+        } else if (i === 1) {
+          for (const d of nuevo) await new PantallaLogin(page).tecla(d).click();
+          await cambio.siguiente();
+        }
+      });
+    }
+  });
+}
 
 test('[HU-01/CA-N04][HU-01/CA-U04] barra superior de "Pedidos" y "Cola" sin violaciones', { tag: ['@HU-01', '@CA-N04'] }, async ({ browser }, info) => {
   for (const rol of ['waiter', 'kitchen'] as const) {

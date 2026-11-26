@@ -96,6 +96,23 @@ violación `script-src` (`eval`) por la sonda de JIT de zod 4. Corrección:
 CSP). Se comprueba con `sh tests/run.sh e2e HU-01-csp`; sin esa violación el
 resto de los e2e pasa (medido con el vigilante solo anotando: 70 + 5 + 1).
 
+## Tests que fallan a propósito (tarea 2.8a, para el Developer en la 2.8b)
+
+Escritos antes de la corrección (hallazgos bajos que quedan de HU-01). **No se
+relajan ni se omiten**; si hace falta otra forma de cumplirlos, se avisa a
+Testing. Con el código actual **fallan** (y deben pasar tras la 2.8b):
+
+| Hallazgo | Test | Debe cumplirse |
+|---|---|---|
+| SEC-047 (baja, `developer`) | `integration/api/HU-01-concurrencia-nombres.int.test.ts` (4 tests) | 16 variantes `i`/`İ` (y `i`/`İ` + sigma final `σ`/`Σ`) de un nombre en paralelo desde IP distintas: como mucho 5 llamadas al hasher y el resto `423`, contador ≤ 5; con 19 fallos, una ráfaga de variantes lleva a `locked_manual` con contador ≤ 20 y el acierto da `423` sin sesión; un login (variante del nombre) y un `POST /auth/pin` de la misma cuenta nunca verifican a la vez (`maxSimultaneas` del hasher espía = 1). Corrección propuesta en `docs/seguridad.md` SEC-047: clave del cerrojo = `user:<id>` resuelto con `lower(name) = lower($1)` de PostgreSQL |
+| H-2.3-04 / D-2.5-01 (baja, `developer`) | `a11y/HU-01-login.a11y.ts` › "cambio de PIN (manager\|waiter): el campo tiene una etiqueta accesible distinta en cada uno de los 3 pasos" | etiqueta del campo de PIN por paso, ver §5 (tabla "Cambio obligatorio del PIN") |
+| H-2.3-07 / H-2.6-02 (baja, `developer`) | `e2e/HU-01-estados-carga.e2e.ts` (1280 px y 375 px) | esqueleto de 4 tarjetas mientras carga la rejilla, ver §5 (fila "Estado de carga de P-01") |
+| H-2.6-01 (baja, `developer`) | `e2e/HU-01-barra-superior-375.e2e.ts` | a 375 px, barra del encargado de la misma altura en las 5 pantallas y `h1` en 1 línea, ver §5 (fila "Barra superior a 375 px") |
+
+Regresiones automáticas de SEC-039..SEC-042 (D-2.5-02): **pasan** con el código
+actual y deben seguir pasando (`integration/realtime/HU-01-sse-limites.int.test.ts`,
+`integration/api/HU-01-no-store.int.test.ts`, `integration/api/HU-01-nombre-control.int.test.ts`).
+
 ## Contrato con el código (HU-01)
 
 ### 1. Workspace
@@ -246,7 +263,9 @@ usuarios de prueba se insertan en `users` con el hash de `createPinHasher`.
 | P-01 paso 1 | encabezado "¿Quién eres?"; una tarjeta por usuario, `button` cuyo nombre accesible contiene el nombre y el rol ("Camarero", "Barra", "Encargado"); botón "Escribir mi usuario" que abre un campo con etiqueta "Usuario" y un botón "Continuar" |
 | P-01 paso 2 | texto "Hola, <nombre> (<rol>)"; campo con etiqueta visible "PIN (4 a 6 dígitos)" o "PIN (6 dígitos)" (encargado): un `input type="password" inputmode="numeric"` (los puntos son su representación); teclas `button` "0".."9", "Borrar", "Entrar"; "Cambiar de usuario" |
 | Mensajes | dentro de un elemento `role="alert"`, con los textos exactos de `docs/ux/wireframes/01-login.md` |
-| Cambio obligatorio del PIN | encabezado "Cambia tu PIN"; mismo campo y teclado; botones "Siguiente" y "Guardar PIN" |
+| Cambio obligatorio del PIN | encabezado "Cambia tu PIN"; mismo campo y teclado; botones "Siguiente" y "Guardar PIN". **Etiqueta accesible propia del campo de PIN en cada paso** (H-2.3-04, D-2.5-01; texto fijado en la 2.8a a partir de `docs/ux/revision.md` §2.3; `getByLabel(texto, { exact: true })` devuelve un único elemento visible): paso 1 **"PIN actual (provisional)"**; paso 2 **"PIN nuevo (4 a 6 dígitos)"** (camarero y barra) o **"PIN nuevo (6 dígitos)"** (encargado); paso 3 **"Repite el PIN nuevo"**. Ya no existe en estas pantallas la etiqueta genérica "PIN (4 a 6 dígitos)" / "PIN (6 dígitos)" (sigue siendo la de P-01 paso 2). El texto del paso ("Paso 2 de 3 · PIN nuevo") se mantiene en `role="status"` y en `aria-describedby`. Constantes: `ETIQUETAS_CAMBIO_PIN` en `tests/support/e2e/pantallas.ts` |
+| Estado de carga de P-01 (H-2.3-07, H-2.6-02; `design-system.md` §5.12, wireframe 01) | mientras `GET /auth/login-options` está pendiente: **4 elementos `data-testid="esqueleto-usuario"`** con `aria-hidden="true"`, visibles, en la misma rejilla que las tarjetas reales y con el mismo ancho, alto y columna de inicio que una tarjeta real (tolerancia 2 px, a 1280 y a 375 px); el texto "Cargando usuarios…" sigue en un `role="status"` (visible si la espera pasa de 1 s); sin `role="alert"` ni tarjetas reales. Al llegar la respuesta desaparecen el esqueleto y el texto de carga |
+| Barra superior a 375 px (H-2.6-01; `design-system.md` §5.11) | encargado a 375 px: la barra (`header`, rol `banner`) mide lo mismo (±1 px) en `/pedidos`, `/cola`, `/menu`, `/personal` y `/resumen`, y el `h1` ocupa **1 línea** en todas (se mide el número de líneas con `Range.getClientRects()`, no el texto: sirven `white-space: nowrap` + elipsis o un título visible más corto a <= 767 px); sin desplazamiento horizontal |
 | Barra superior | título de la pantalla en el único `h1`: "Pedidos", "Cola" (el contador de la cola va fuera del `h1`), "Menú", "Personal", "Resumen del día"; texto "<nombre> · <rol>"; botón "Cerrar sesión"; para el encargado, botón "Gestión" con las opciones "Cola de barra", "Menú", "Personal", "Resumen del día" (`menuitem` o `link`) |
 | Pantallas vacías de HU-01 (`/menu`, `/personal`, `/resumen`) | su `h1` y el texto "Esta pantalla todavía no está disponible." hasta que llegue su historia |
 | Aviso de inactividad | "Tu sesión se cerrará en 60 s por inactividad" con botón "Seguir conectado" |

@@ -9,6 +9,8 @@ export interface EventoSse {
 
 export interface ClienteSse {
   status: number;
+  /** Cabeceras de la respuesta (SEC-040/SEC-041: Retry-After, Cache-Control). */
+  headers: Headers;
   eventos: EventoSse[];
   esperar(nombre: string, ms: number): Promise<EventoSse>;
   /** Resuelve con el instante (performance.now()) en que el servidor cierra el flujo. */
@@ -77,6 +79,7 @@ export async function abrirSse(base: string, cookie: string | undefined, ruta = 
 
   return {
     status: res.status,
+    headers: res.headers,
     eventos,
     esperar(nombre, ms) {
       const ya = eventos.find((e) => e.event === nombre);

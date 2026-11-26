@@ -158,9 +158,34 @@ export class AccesoDenegado {
   }
 }
 
+/**
+ * Etiqueta accesible propia del campo de PIN en cada paso del cambio obligatorio
+ * (H-2.3-04, D-2.5-01; propuesta de docs/ux/revision.md §2.3 fijada en la 2.8a).
+ * El texto del paso ("Paso 2 de 3 · PIN nuevo") sigue en `role="status"` y en
+ * `aria-describedby`; la etiqueta es lo primero que lee el lector de pantalla.
+ */
+export const ETIQUETAS_CAMBIO_PIN = {
+  paso1: 'PIN actual (provisional)',
+  paso2: (rol: 'waiter' | 'kitchen' | 'manager') => (rol === 'manager' ? 'PIN nuevo (6 dígitos)' : 'PIN nuevo (4 a 6 dígitos)'),
+  paso3: 'Repite el PIN nuevo',
+} as const;
+
+/** Esqueleto de la rejilla de P-01 (H-2.3-07, H-2.6-02; design-system §5.12 y wireframe 01). */
+export const ESQUELETO_USUARIO = 'esqueleto-usuario';
+
 export class CambioPin {
   constructor(readonly page: Page) {}
   private login = (p: Page) => new PantallaLogin(p);
+
+  /** Campo de PIN por su etiqueta accesible exacta (un único elemento). */
+  campo(etiqueta: string): Locator {
+    return this.page.getByLabel(etiqueta, { exact: true });
+  }
+
+  /** "Siguiente" (pasos 1 y 2). */
+  async siguiente(): Promise<void> {
+    await this.page.getByRole('button', { name: 'Siguiente' }).click();
+  }
 
   async visible(): Promise<void> {
     await expect(this.page.getByRole('heading', { name: 'Cambia tu PIN' })).toBeVisible();
