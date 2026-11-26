@@ -86,3 +86,19 @@ b. `net.ipv4.ip_unprivileged_port_start=80` en el host: URLs limpias; es un
 - Si la imagen oficial de Caddy no arranca con `cap-drop=ALL` por su capacidad
   de fichero (SEC-009), se usa una imagen derivada mínima sin capacidades
   (Infrastructure); "sin modificar" deja de aplicarse en ese caso.
+
+## Revisión 2026-11-26 (tarea 2.2c)
+
+La decisión (Caddy como único servicio publicado, TLS y puertos) **no
+cambia**. Dos ajustes:
+- **Imagen derivada mínima** (`localhost/mi-app-proxy`, SEC-055): no por
+  SEC-009 (la oficial arranca sin capacidades), sino para aplicar `apk
+  upgrade` a paquetes Alpine con CVE corregida. Lleva el **mismo** binario
+  `/usr/bin/caddy` que la oficial (sha256 comprobado en el build) y `USER
+  1000:1000`. Detalle en `docs/infraestructura.md` §8.
+- **Publicación solo por IPv4 en DEMO y PROD** (SEC-043): los puertos de
+  Caddy (o el `.socket` de la activación por socket, SEC-003) se publican en
+  direcciones IPv4 y el nombre que usan los dispositivos resuelve solo a
+  IPv4. El límite por IP de ADR-005 agrupa las IPv6 por /64, y en una Wi-Fi
+  IPv6 todo el personal compartiría el mismo cupo. Si el local solo tuviera
+  IPv6, se decide con Cybersecurity antes de DEMO.

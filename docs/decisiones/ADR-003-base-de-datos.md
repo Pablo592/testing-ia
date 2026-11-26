@@ -85,3 +85,22 @@ variables de entorno con rangos 1–99 y 1–60 (supuesto 20,
 `docs/arquitectura.md` §4.1). Mantener una tabla de una fila sin ninguna ruta
 que la escriba sería YAGNI. `orders.table_number` conserva un `CHECK` de 1–99;
 el límite real (≤ `TABLE_COUNT`) lo valida el servicio.
+
+## Revisión 2026-11-26 (tarea 2.2c): lo que cambió al implementar HU-01
+
+La elección (PostgreSQL + Kysely, consultas parametrizadas) **no cambia**.
+Ajustes de forma, ya implementados y revisados (`docs/arquitectura.md` §3,
+§4, §18):
+- **Migrador propio en lugar del de Kysely:** `apps/api/src/db/migrator.ts`
+  aplica los módulos de `db/migrations/` en orden, cada uno en su
+  transacción, con un cerrojo consultivo y la tabla `schema_migrations`
+  (que lee `/readyz`). Motivo: el `Migrator` de Kysely carga ficheros con
+  `import()` dinámico, que no encaja con el `dist/` empaquetado. Sigue siendo
+  solo hacia delante y lo ejecuta el contenedor `migrate` con `app_owner`.
+- **Enumerados como `text` + `CHECK`**, no tipos `enum` de PostgreSQL (más
+  fácil añadir valores en una migración; mismo efecto).
+- **Imagen:** la desplegable es una derivada de la oficial alpine
+  (`localhost/mi-app-db`: `apk upgrade`, sin `gosu`, `USER 1000:1000`;
+  SEC-049, SEC-055, `docs/infraestructura.md` §8), en la rama Alpine más
+  reciente con soporte. La consecuencia "arranca como root por defecto" ya no
+  aplica a la derivada.

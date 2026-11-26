@@ -230,3 +230,51 @@ reglas sustituyen a las equivalentes de las secciones anteriores:
   - (−) Los contadores por IP y por sesión viven en memoria: un reinicio de
     `app` los vacía (aceptado; el contador de la cuenta está en BD y no se
     pierde).
+
+## Revisión 2026-11-26 (d): `verifyPin` con peticiones simultáneas (SEC-038, SEC-047, SEC-043; tarea 2.2c)
+
+La decisión (sesión opaca + argon2id con pepper + RBAC + `verifyPin` única)
+**no cambia**. Se fija cómo resiste la concurrencia.
+
+- **Contexto (SEC-038, alta, ya corregido):** los pasos de la revisión (c)
+  eran "comprobar y luego actuar". Con 300 logins simultáneos desde una IP se
+  hacían 300 verificaciones y el PIN correcto entraba en una cuenta ya en
+  `locked_manual`; con `currentPin`, el PIN provisional se cambiaba en una
+  cuenta bloqueada.
+- **Opciones evaluadas:**
+  1. **Todo en BD:** sumar el intento con `UPDATE users SET failed_attempts =
+     failed_attempts + 1 WHERE … AND NOT locked_manual AND (locked_until IS
+     NULL OR locked_until <= $now) RETURNING` **antes** del hash y restarlo
+     si acierta. Vale con varias instancias, pero cada intento son dos
+     escrituras, y el "fallo anotado antes de saber si falla" complica los
+     logs, las métricas y la escala 5/10/15/20.
+  2. **Cerrojo por cuenta en memoria + acierto condicionado en BD** (la
+     alternativa que admite SEC-038): las verificaciones de una cuenta se
+     serializan (FIFO) y cada una lee la fila en su turno; el acierto y su
+     efecto (crear la sesión, cambiar el PIN) van en una transacción con
+     `UPDATE … WHERE NOT locked_manual AND (locked_until IS NULL OR
+     locked_until <= $now)`. Los cupos de IP y sesión se reservan de forma
+     síncrona antes del primer `await`.
+- **Decisión: opción 2**, implementada en la 2.5 y la 2.8b y verificada por
+  Cybersecurity (2.6, 2.8c). Es la más simple con **una sola instancia**,
+  que ya es un supuesto de la arquitectura (bus SSE y cupos por IP en
+  memoria, `docs/arquitectura.md` §1, §10), y deja el código del fallo como
+  estaba. Detalles obligatorios (`docs/arquitectura.md` §7): clave del cerrojo
+  `user:<id>` resuelta por PostgreSQL con la misma condición que el índice
+  único (`lower(name)`, SEC-047), nunca con `toLowerCase()` de JavaScript;
+  semáforo de 4 operaciones argon2 con cola acotada a 32 (llena → `503`);
+  clave del cupo por IP = IPv4 o prefijo /64 de IPv6 y poda que nunca borra
+  entradas bloqueadas (SEC-043, pendiente de implementar antes de HU-06).
+- **Consecuencias:**
+  - (+) RS-05b se cumple: una IP nunca tiene más verificaciones en curso que
+    los fallos que le quedan; una cuenta no supera el umbral siguiente; un
+    acierto con la cuenta ya bloqueada no crea sesión ni cambia el PIN.
+  - (+) Una sola función que probar; las rutas de HU-04, HU-06 y HU-07 la
+    heredan.
+  - (−) Refuerza el supuesto de **una sola instancia** de `app`: con varias,
+    hay que pasar a la opción 1 (o a un cerrojo consultivo de PostgreSQL por
+    cuenta) en un ADR nuevo. Hoy no hay ninguna historia que lo pida (YAGNI).
+  - (−) Todos los dispositivos de un mismo /64 IPv6 comparten el cupo por IP;
+    por eso el despliegue publica `proxy` solo por IPv4 (ADR-007).
+  - (−) Con muchas verificaciones a la vez (solo en un ataque) algunas
+    reciben `503` en vez de esperar sin límite.

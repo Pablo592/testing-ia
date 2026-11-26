@@ -52,6 +52,17 @@
 > `parseSettings` (T-38), `403` de `POST /auth/pin` antes de zod (T-39),
 > envoltorios de comandos (T-41), `@mi-app/web/pin-messages` (T-42) e
 > intervalo del *hub* en `AppDeps` (T-43). Registro en la §17.
+>
+> Revisión 2026-11-26 (tarea 2.2c, Etapa 2, D-2.2-06): se documenta lo que la
+> implementación de HU-01 (tareas 2.2, 2.5 y 2.8b) hace de forma distinta o más
+> concreta que este documento, ya probado por Testing y revisado por
+> Cybersecurity: columnas `revoked_reason`/`expired_reason`, enumerados como
+> `text` + `CHECK`, guarda en un solo hook, 2 flujos SSE por sesión y 50 en
+> total, `/healthz` con `503`, `Cache-Control: no-store` en `/api`, atomicidad
+> de `verifyPin` (SEC-038, SEC-047), regla del banner de T-48, imágenes
+> derivadas y etapa de construcción Debian (IMG-02). Se deciden además SEC-043
+> (clave del límite por IP y capacidad), el tope de la cola del semáforo
+> argon2 y la regla general de texto (D-2.5-03). Registro en la §18.
 
 ## 1. Visión general
 
@@ -64,9 +75,9 @@ contenedores en ejecución:
 
 | Servicio | Imagen | Función |
 |---|---|---|
-| `proxy` | Caddy (oficial, sin modificar) | TLS, HTTP/2, proxy inverso hacia `app`, genera `X-Request-Id` |
+| `proxy` | Caddy (derivada mínima de la oficial, mismo binario; §10) | TLS, HTTP/2, proxy inverso hacia `app`, genera `X-Request-Id` |
 | `app` | Imagen propia (Node.js distroless) | API REST + flujo SSE de tiempo real + archivos estáticos de la SPA (puerto 3000); métricas Prometheus en puerto interno 9464 |
-| `db` | PostgreSQL (oficial, alpine) | Persistencia |
+| `db` | PostgreSQL (derivada de la oficial alpine; §10) | Persistencia |
 
 Más un contenedor efímero `migrate` (misma imagen que `app`, otro comando) que
 aplica las migraciones antes de arrancar `app`.
@@ -218,6 +229,22 @@ export function buildApp(deps: AppDeps): Promise<FastifyInstance>;
   permiso de negocio (`/auth/me`, `/auth/logout`, `/auth/pin`,
   `/session/activity`) usan `session:self`; `/events` usa
   `events:subscribe`; `/telemetry`, `telemetry:write`.
+  - **Implementado [2.2c]** (tipo `RouteAuthConfig` en
+    `apps/api/src/http/context.ts`): un hook `onRoute` propio, registrado
+    justo después del de los tests, **lanza al arrancar** si una ruta declara
+    más de uno de `permission`/`public`/`internal`. Además de esa
+    declaración, `config` admite tres marcas, nunca otra cosa:
+    `allowProvisional: true` (ruta permitida con PIN provisional: solo
+    `GET /auth/me`, `POST /auth/pin` y `POST /auth/logout`, RS-15),
+    `provisionalPinOnly: true` (solo `POST /auth/pin`, T-39) y
+    `activity: false` (la petición no cuenta como actividad: `GET /events`
+    y, cuando exista, `POST /telemetry`; §7). Una ruta nueva sin
+    `allowProvisional` recibe `403 PIN_CHANGE_REQUIRED` con PIN provisional
+    (denegación por defecto también aquí).
+  - Fastify con `bodyLimit` de 64 KiB (`413 PAYLOAD_TOO_LARGE`, RS-23),
+    solo el analizador `application/json` (cuerpo vacío = sin cuerpo; resto
+    `415`) y `return503OnClosing: true` (durante el cierre ordenado responde
+    `503`).
 - **Hasher**: `PinHasher = { hash(pin): Promise<string>; verify(hash, pin): Promise<boolean> }`,
   creado con `createPinHasher({ pepper })` (export `@mi-app/api/auth/hasher`,
   argon2id + *pepper*). `buildApp` lo entrega **solo al módulo `auth`**, que
@@ -343,6 +370,29 @@ Gestor de paquetes: **pnpm workspaces** (un único lockfile, versiones fijadas).
 Los tests **no** viven dentro de `apps/*` (T-11): así se ejecutan como imagen de
 pruebas independiente sin tocar las imágenes de producción.
 
+**Cómo quedó en HU-01 [2.2c]** (sin cambiar las capas de la §2):
+- `apps/api/src/`: `clock.ts` (`Clock`, `systemClock`), `session-policy.ts`
+  (`IDLE_TIMEOUT_MS`, compartido por la guarda y el *hub*, D-2.5-03 e),
+  `migrate.ts` (punto de entrada del servicio `migrate`), `bin/` (envoltorios
+  de los comandos, §2.1), `commands/` (`index.ts`, `cli.ts`), `logging/`
+  (pino con la redacción de la §11), `http/` (`guard.ts` con la guarda única
+  de la §5, `errors.ts`, `cookies.ts`, `validate.ts`, `spa.ts`,
+  `context.ts`, `routes/`), `modules/auth/` (`verify-pin.ts`,
+  `rate-limit.ts`, `serialize.ts`, `hasher.ts`, `tokens.ts`).
+- **Migraciones:** módulos TypeScript en `apps/api/src/db/migrations/`
+  (`0001_hu01_auth.ts` exporta `name` y el SQL; `index.ts` las lista en
+  orden). Las aplica un migrador propio (`db/migrator.ts`, ~50 líneas, no el
+  `Migrator` de Kysely): cerrojo consultivo `pg_advisory_lock` para que no
+  corran dos `migrate` a la vez, una transacción por migración y tabla
+  `schema_migrations (name PK, applied_at)` con `SELECT` para `app_rw`, que
+  lee `/readyz`. Motivo: el `Migrator` de Kysely carga ficheros con
+  `import()` dinámico, que no encaja con el `dist/` empaquetado por esbuild.
+  Solo hacia delante (§12).
+- `pnpm-workspace.yaml`: `allowBuilds` solo para `argon2` y `esbuild`
+  (scripts de instalación) y `hoistWorkspacePackages: false` (SEC-026: sin
+  enlace a `tests/` en `node_modules/.pnpm/node_modules`). Aprobados por
+  Cybersecurity (2.3).
+
 ### 3.1 Paquetes y subrutas de import [2.1c, T-32]
 
 | Paquete | Carpeta |
@@ -363,7 +413,11 @@ estructura interna).
 | `@mi-app/shared/pin` | `validatePin(pin: string, role: Role): { ok: true } \| { ok: false; rule: PinRule }`, tipos `Role`, `PinRule` (§7) |
 | `@mi-app/shared/permissions` | `PERMISSIONS_BY_ROLE: Readonly<Record<Role, readonly Permission[]>>`, `hasPermission(role, permission): boolean`, tipo `Permission` |
 | `@mi-app/shared/lockout` | `lockoutForFailures(failedAttempts): { kind: 'none' } \| { kind: 'temporary'; minutes: 5 \| 15 \| 60 } \| { kind: 'manual' }` (efecto de **llegar** a ese número de fallos consecutivos: 5, 10, 15 → temporal de 5, 15 y 60 min; ≥ 20 → manual; el resto, incluidos los fallos entre escalones, → `none`) |
-| `@mi-app/shared/retry` | `retryMinutes(retryAfterSeconds): number` (minutos redondeados hacia arriba, mínimo 1; I-03) |
+| `@mi-app/shared/retry` | `retryMinutes(retryAfterSeconds): number` (minutos redondeados hacia arriba, mínimo 1; I-03); `secondsUntil(untilMs, nowMs): number` (segundos restantes redondeados hacia arriba, mínimo 1; lo usa el servidor para `retryAfterSeconds`) [2.2c] |
+| `@mi-app/shared/business-date` | `businessDate(instant: Date): string` (`YYYY-MM-DD` en `Europe/Madrid`), `BUSINESS_TIME_ZONE` (§4) [2.2c] |
+| `@mi-app/shared/api` | esquemas zod y DTOs de la API (`LoginBody`, `ChangePinBody`, `EmptyBody`, `UnauthenticatedDetails`, `apiText`, `PIN_FIELD_MAX`, tipos `ApiError`, `MeResponse`…); reexporta `api-constants` [2.2c] |
+| `@mi-app/shared/api-constants` | constantes sin dependencias: `API_PREFIX`, `SESSION_COOKIE`, `REVOKED_REASONS`, tipo `RevokedReason` [2.2c, H-2.3-11] |
+| `@mi-app/shared/zod-csp` | efecto: `config({ jitless: true })` de zod; **primer** import de `apps/web/src/main.tsx` (T-45). El servidor no lo usa [2.2c] |
 | `@mi-app/api/app` | `buildApp`, tipos `AppDeps`, `Clock`, `DatabaseDeps` (§2.1) |
 | `@mi-app/api/auth/hasher` | `createPinHasher({ pepper: Buffer \| string }): PinHasher`, tipo `PinHasher` |
 | `@mi-app/api/commands` | `createInitialManager`, `unlockUser`, tipos `CommandDeps`, `InvalidPinError` (§2.1) |
@@ -376,12 +430,29 @@ se añaden como subrutas de `@mi-app/shared` cuando los pida cada historia
 (p. ej. `@mi-app/shared/money`, `/business-date`), siguiendo esta misma
 regla.
 
+**zod en el cliente [2.2c, T-45, H-2.3-11].** `apps/web` importa de
+`@mi-app/shared/api` **solo tipos** (`import type`) y los valores, de
+subrutas sin zod (`api-constants`, `pin`, `permissions`, `retry`,
+`business-date`…). Así zod no entra en el *bundle* (370 → 287 kB) y la CSP
+estricta no ve su sonda `new Function("")`. Si una historia necesita validar
+con un esquema zod en el cliente, puede importarlo: `zod-csp` ya desactiva el
+JIT (sin `unsafe-eval` en la CSP, RS-26), a cambio del tamaño del *bundle*.
+El servidor sigue siendo quien valida.
+
 ## 4. Modelo de datos
 
 Convenciones:
 - Claves `uuid` (las de pedidos, líneas y cobros las **genera el cliente**,
   ver ADR-008). Nombres de tabla en inglés, `snake_case`.
 - Fechas `timestamptz` en UTC; importes `integer` en céntimos con `CHECK`.
+- **Enumerados [2.2c]:** columna `text NOT NULL CHECK (col IN (…))`, no un
+  tipo `enum` de PostgreSQL. Donde las tablas de abajo dicen "enum", se
+  implementa así. Mismo efecto (la BD rechaza otro valor y el servidor valida
+  con zod), y añadir o quitar un valor es un `ALTER TABLE … DROP/ADD
+  CONSTRAINT` en una migración normal, sin las limitaciones de `ALTER TYPE …
+  ADD VALUE` dentro de transacciones. Lo usa `users.role` desde HU-01
+  (aprobado por Cybersecurity en la 2.3); las tablas de HU-02..HU-08 siguen la
+  misma regla.
 - **Fecha de negocio** (`business_date`) = día natural en `Europe/Madrid`
   (supuesto 15), de 00:00:00 a 23:59:59. **Se calcula en la aplicación** con la
   función pura `businessDate(instant)` de `packages/shared` sobre el instante
@@ -413,8 +484,8 @@ erDiagram
 | Columna | Tipo | Notas |
 |---|---|---|
 | id | uuid PK | |
-| name | varchar(30) | nombre visible y de inicio de sesión; único sin distinguir mayúsculas (`UNIQUE (lower(name))`) |
-| role | enum `waiter` \| `kitchen` \| `manager` | camarero/cajero, barra/cocina, encargado |
+| name | varchar(30) `CHECK (char_length(btrim(name)) BETWEEN 1 AND 30)` | nombre visible y de inicio de sesión; único sin distinguir mayúsculas (índice único `users_name_lower_key` sobre `lower(name)`); normalización al crearlo en la §5 (`apiName`) |
+| role | `text CHECK (role IN ('waiter','kitchen','manager'))` [2.2c] | camarero/cajero, barra/cocina, encargado; índice `users_role_idx` (comprobación "existe algún encargado" de `create-initial-manager`) |
 | pin_hash | text | argon2id con pepper (ADR-005) |
 | pin_digits | smallint `CHECK (pin_digits BETWEEN 4 AND 6)` | longitud del PIN; al promocionar a encargado con < 6 → `must_change_pin` (SEC-001) |
 | must_change_pin | boolean | true tras alta, restablecimiento o promoción a encargado con PIN corto |
@@ -434,7 +505,12 @@ erDiagram
 | last_activity_at | timestamptz | hora (del `Clock`) de la última petición que cuenta como actividad; se escribe en **cada** una (sin intervalo mínimo, T-37, §7) |
 | expires_at | timestamptz | `created_at + SESSION_MAX_HOURS` (12 h por defecto, 1–12, solo a la baja; SEC-004, §10.1). Se fija al crear la sesión: cambiar la variable no alarga ni acorta las sesiones ya abiertas |
 | revoked_at | timestamptz null | logout, desactivación, restablecimiento de PIN, cambio de PIN propio (las demás), bloqueo indefinido (todas) |
-| user_agent | varchar(200) | solo diagnóstico |
+| revoked_reason [2.2c] | `text null CHECK (IN ('logout','user_disabled','pin_reset','pin_changed','account_locked_manual'))` | se escribe junto con `revoked_at`; es el `details.revokedReason` del `401` (§5) y el `reason` de `session.revoked` (§6) |
+| expired_reason [2.2c] | `text null CHECK (IN ('idle','absolute'))` | lo escribe la guarda la **primera** vez que detecta la caducidad (`UPDATE … WHERE expired_reason IS NULL AND revoked_at IS NULL`); a partir de ahí el `401` repite ese motivo aunque después venza también el otro, y `auth.session.expired` se registra una sola vez (D-2.2-06 a) |
+| user_agent | varchar(200) null | solo diagnóstico (recortado a 200) |
+
+Índice: `sessions_user_open_idx (user_id) WHERE revoked_at IS NULL`
+(revocar todas las sesiones abiertas de un usuario) [2.2c].
 
 **Configuración de instalación (sin tabla; HU-09 fuera del MVP, supuesto 20).**
 Número de mesas y umbral de retraso son valores **de solo lectura** para la
@@ -562,7 +638,15 @@ aparte "Cambios tras el cierre" (§4.4).
 `details jsonb` (p. ej. valor anterior y nuevo). `actor_id` nulo = actor
 `system` (comandos `create-initial-manager` y `unlock-user`). **Nunca contiene
 PIN ni hashes.** Inmutable a dos niveles: el rol de BD de la aplicación solo tiene
-`INSERT, SELECT` y un trigger rechaza `UPDATE/DELETE`. Las mismas restricciones
+`INSERT, SELECT` y un trigger rechaza `UPDATE/DELETE`. **Implementado [2.2c]:**
+`id bigint GENERATED ALWAYS AS IDENTITY` (equivale a `bigserial`);
+`entity_id` es **`text` null** (no solo UUID: admite identificadores de otras
+entidades, p. ej. una fecha de negocio de `cash_closings`; D-2.2-06 b);
+`details jsonb NOT NULL DEFAULT '{}'`; índices `(entity_type, entity_id)` y
+`(at)`; un segundo trigger rechaza también `TRUNCATE`. `user.unlocked`
+guarda `details.was_lock_kind` ∈ `manual` \| `temporary` \| `none` (`none`
+si `unlock-user` desbloquea a alguien sin bloqueo vigente, D-2.2-06 c; el log
+`staff.unlocked` lleva el mismo valor). Las mismas restricciones
 (sin `DELETE`) aplican a `payments`, `payment_orders` y `cash_closings`
 (en `payments` y `payment_orders` solo se permite `UPDATE` de las columnas de
 anulación).
@@ -907,6 +991,22 @@ HU-05/HU-07), `401` sin sesión o caducada, `403` sin permiso, `404`,
 negocio sobre datos válidos, `423` usuario bloqueado (con `retryAfterSeconds`),
 `429` límite de peticiones.
 
+**Códigos fijados en la implementación [2.2c]:** `413 PAYLOAD_TOO_LARGE`
+(cuerpo > 64 KiB), `415 UNSUPPORTED_MEDIA_TYPE`, `500 INTERNAL` (mensaje fijo,
+sin traza ni texto interno, RS-27; log `http.request.unhandled_error`) y
+**`503 SERVICE_UNAVAILABLE`** con cabecera `Retry-After: 5` y **sin**
+`details`: capacidad agotada que no depende de quién pide (tope global de
+flujos SSE, SEC-040, §6; cola del semáforo argon2 llena, SEC-043, §7,
+pendiente de implementar) y
+cierre ordenado de `app`. El cliente lo trata como un fallo de red
+transitorio (P-01 ya muestra el aviso de conexión ante cualquier `5xx`).
+
+**`Cache-Control: no-store` en toda respuesta bajo `/api/` [2.2c, SEC-041,
+RS-27]**, con cualquier estado (`200`, `204`, `4xx`, `503`): un solo hook
+`onSend` en `app.ts`, no ruta a ruta. El flujo SSE no pasa por él (*hijack*) y
+lleva `Cache-Control: no-cache, no-transform`. Fuera de `/api/`, la caché de
+la §5.2.
+
 **Contrato del formato de error [2.1c, T-32]** (un único plugin de errores
 en `apps/api/src/http/`; esquema zod `ApiError` en `packages/shared`):
 
@@ -937,7 +1037,44 @@ interface ApiError {
     `min_length`, `max_length`, `not_allowed` (campo no admitido, p. ej.
     `tableNumber` con `type = "counter"`, o clave desconocida en un esquema
     `.strict()`), `invalid_json` (cuerpo que no es JSON, con `path: []`).
-  El traductor de issues de zod a estas reglas vive en un solo sitio.
+  El traductor de issues de zod a estas reglas vive en un solo sitio
+  (`issuesFromZod`, `apps/api/src/http/errors.ts`; se valida en
+  `preValidation`, después de la guarda y del analizador de cuerpo).
+- **Campos de PIN recibidos [2.2c, D-2.2-06 d]:** `pin` del login y
+  `currentPin` admiten 1–64 caracteres (`PIN_FIELD_MAX`); fuera →
+  `400 VALIDATION_FAILED` con `min_length`/`max_length`, **antes** de
+  cualquier hash y sin contar como intento. No se les aplican las reglas de
+  composición (§7: solo al crear un PIN). `newPin` admite hasta 64 y después
+  pasa por `validatePin`. Los campos de PIN **nunca** se normalizan ni se
+  recortan (ni NFC ni `trim`).
+- **Texto recibido: regla general [2.2c, D-2.5-03 c, SEC-042].** Todo campo de
+  texto de la API que no sea un PIN se valida con uno de dos esquemas de
+  `@mi-app/shared/api` (no con `z.string()` directo):
+
+  | Esquema | Campos | Proceso, en este orden |
+  |---|---|---|
+  | `apiText(min, max)` | texto libre: `customerRef`, `note`, `reasonText`, `reason` de la anulación; y el `name` del login (que solo se compara) | 1. normaliza a **NFC**; 2. rechaza con `rule: 'format'` si contiene un carácter `\p{Cc}` (C0 U+0000–U+001F, DEL U+007F y **C1 U+0080–U+009F**), U+2028/U+2029, un control bidireccional (U+202A–U+202E, U+2066–U+2069) o un sustituto UTF-16 suelto (`!s.isWellFormed()`); 3. longitud `min`/`max` (`min_length`/`max_length`) sobre el texto ya normalizado |
+  | `apiName(min, max)` | nombres que se muestran a otras personas y son únicos: `users.name` al crear o renombrar (HU-07, encargado inicial), `categories.name`, `products.name` (HU-05) | 1. NFC; 2. `trim()` y cada tramo de espacios U+0020 seguidos → uno; 3. las reglas de `apiText` **más**: rechaza `\p{Cf}` (invisibles: U+00AD, U+200B–U+200F, U+2060–U+2064, U+FEFF…), `\p{Co}`, `\p{Cn}` y cualquier `\p{Z}` distinto de U+0020 (NBSP, U+2000–U+200A, U+202F, U+3000…); 4. longitud |
+
+  - Lo que se guarda es el valor **ya normalizado**; la unicidad
+    (`lower(name)`) se calcula sobre él, así "José" compuesto y descompuesto,
+    o "Ana" y "Ana␣", son el mismo nombre (`409` de la historia
+    correspondiente). Las longitudes son las de `String.length` (unidades
+    UTF-16): nunca superan el `varchar(n)` de PostgreSQL, que cuenta
+    caracteres.
+  - Hoy (HU-01) `apiText` solo rechaza C0 y DEL y no normaliza. La regla
+    completa se implementa con **HU-05**, la primera historia que crea
+    nombres; el `name` del login la hereda (un C1 en el login pasará de `401`
+    a `400 format`, sin cambio de seguridad: el `400` solo depende del
+    formato, no de la cuenta). No se añaden `CHECK` en la BD: la regla vive
+    en el servidor (`NUL` ya no puede llegar a PostgreSQL).
+  - Todos los campos de texto de los wireframes son de una línea: el
+    tabulador y el salto de línea (`\p{Cc}`) se rechazan también en notas y
+    motivos. Si UX pide un campo multilínea, se admite `\n` solo en ese
+    esquema.
+  - No es una lista de caracteres permitidos (YAGNI y riesgo de rechazar
+    nombres reales de productos como "Tostada c/ tomate" o "Té"); si el PO
+    pide restringir más, se cambia solo `apiName`.
 - **Nunca** se repite en `message` ni en `details` el valor recibido de
   ningún campo (en particular de los que casan con `/pin/i`, RS-31).
 - **`401`**: `code = 'UNAUTHENTICATED'` para toda petición sin sesión válida.
@@ -954,6 +1091,15 @@ interface ApiError {
     `.strict()` en `packages/shared` (`UnauthenticatedDetails`), sin
     `userId`, nombre, fechas ni quién revocó. Si la fila de la sesión ya se
     purgó (30 días), el token es desconocido.
+  - **Cómo se elige `details` [2.2c, D-2.2-06 a]** (guarda,
+    `resolveSession`, en este orden sobre la fila leída): `revoked_at` no nulo
+    → `revoked` con `revokedReason = revoked_reason` (si la columna fuera nula,
+    sin `details`); usuario `active = false` → `revoked` / `user_disabled`
+    aunque la sesión no esté revocada (defensa en profundidad: HU-07 debe
+    revocar igualmente al desactivar); `expired_reason` no nulo → ese motivo;
+    `now >= expires_at` → `absolute`; inactividad (§7) → `idle`. Las dos
+    últimas escriben `expired_reason` (una vez) y cierran los flujos SSE de la
+    sesión (SEC-039, §6).
   - Sin cookie, con un token desconocido o con un valor de cookie mal
     formado: cuerpo idéntico salvo `requestId` (`code`, `message` fijo, sin
     `details`). **Tiempo:** si hay cookie, siempre se calcula el SHA-256 y se
@@ -970,6 +1116,34 @@ interface ApiError {
     peticiones en curso (`AbortController` del cliente HTTP) antes de mostrar
     P-01, para que ninguna respuesta tardía de la sesión vieja borre la cookie
     de un login nuevo.
+  - **Fin de sesión en el cliente [2.2c, SEC-032]** (`apps/web/src/session/store.ts`,
+    `api/client.ts`, `realtime/events.ts`). Ante el primer `401
+    UNAUTHENTICATED`, `session.revoked`, la inactividad del cliente o el
+    *logout*, `end()` cierra **todos** los canales antes de pintar P-01:
+    `abortAll()` (aborta lo que está en curso y sube un número de generación
+    que descarta cualquier respuesta tardía), `events.stop()` (cierra el
+    `EventSource`, el vigilante de 5 s y el reintento de 3 s) y el
+    temporizador de 1 s. No se usan `sendBeacon` ni `fetch({ keepalive })`.
+    El *logout* por inactividad espera la respuesta de `POST /auth/logout`
+    antes de mostrar P-01 con el banner `idle`. La cola de telemetría (M-03),
+    cuando exista, se vacía también en `end()`.
+  - **Banner de un `401` sin `details` [2.2c, T-48, decisión de Testing en la
+    2.8d]:** con `details`, el banner lo decide el servidor (§5, `reason` /
+    `revokedReason`; `logout` → sin banner). Un `401` **sin** `details` (la
+    petición salió sin cookie porque el `401` del flujo SSE, cuyo cuerpo un
+    `EventSource` no puede leer, ya la borró) da el banner **`absolute` solo
+    si `me.session.expiresAt` ya ha pasado** según la hora del servidor
+    (desfase fijado al iniciar la sesión); si la sesión sigue vigente, ningún
+    banner. Para que esa carrera no ocurra en el caso normal: (a) hay **una
+    sola** recarga pasiva de `GET /auth/me` a la vez (otra petición de
+    recarga espera a la que está en curso y, si esta confirma la sesión, se
+    repite una vez); (b) el flujo SSE **no se reabre** (vigilante o
+    reintento) mientras haya una comprobación de sesión en curso, y con la
+    caducidad absoluta ya pasada primero se hace `GET /auth/me` (su `401`
+    trae `reason: absolute`), como mucho una vez cada 30 s; si el servidor
+    dice que la sesión sigue viva, el flujo se reabre en el acto. La
+    inferencia solo elige el texto: cualquier `401` cierra igualmente todos
+    los canales. Revisado por Cybersecurity (2.8c, sin impacto).
 - **`404 NOT_FOUND` [2.1i, T-40]:** toda ruta bajo `/api/` que no existe
   (ruta o método no declarados, p. ej. `GET`/`PATCH /api/v1/settings`)
   responde `404` con `code = 'NOT_FOUND'`, sin `details`, **igual para
@@ -986,7 +1160,18 @@ interface ApiError {
   mismo código): hooks `onRequest` en este orden: `request_id` → `Origin`
   (`403 ORIGIN_NOT_ALLOWED`, solo `POST/PUT/PATCH/DELETE`) → sesión
   (`401 UNAUTHENTICATED`, salvo rutas `public`/`internal`) → PIN provisional
-  (`403 PIN_CHANGE_REQUIRED`) → permiso (`403 FORBIDDEN`). Después, ya en el
+  (`403 PIN_CHANGE_REQUIRED`) → permiso (`403 FORBIDDEN`).
+  **Implementado [2.2c]:** dos hooks `onRequest` del contexto raíz:
+  `request_id` (cabecera `X-Request-Id`; el de Caddy solo si es un UUID
+  válido, guardado en minúsculas) y **una única guarda** (`createGuard`,
+  `apps/api/src/http/guard.ts`) que hace, en este orden: ruta inexistente →
+  `404` (abajo) → `internal` (sigue sin más) → `Origin` → `public` (sigue) →
+  sesión (`401`) → PIN provisional (`403 PIN_CHANGE_REQUIRED`, salvo
+  `allowProvisional`) → permiso (`403 FORBIDDEN`) → `provisionalPinOnly`
+  (`403 FORBIDDEN`, T-39) → actividad (`last_activity_at`, salvo
+  `activity: false` o `X-Activity: passive`, §7). Un solo hook en vez de
+  cuatro: el orden queda en una función y no hay huecos entre hooks
+  (aprobado por Cybersecurity, 2.3). Después, ya en el
   ciclo de Fastify, el analizador de cuerpo (`415`, `400 invalid_json`) y la
   validación zod (`400 VALIDATION_FAILED`) y, por último, el *handler*. Así un
   rol sin permiso recibe `403` aunque el cuerpo sea inválido, y nada de lo
@@ -1003,6 +1188,14 @@ interface ApiError {
     declarada nunca tiene `is404 = true`, así que no abre una vía para
     saltarse las guardas; la denegación por defecto de rutas sin `config`
     (RS-17) se mantiene.
+    **Implementado [2.2c, SEC-031]:** el `404` no lo da el *not-found
+    handler* sino la propia guarda, como primer paso: con `request.is404`,
+    bajo `/api/` (o `/api` exacto) **y en cualquier método que no sea
+    `GET`/`HEAD`** (también fuera de `/api/`, p. ej. `POST /pedidos`)
+    responde `404 NOT_FOUND` JSON **antes del analizador de cuerpo** (un
+    cuerpo inválido, de otro tipo o de más de 64 KiB da igualmente `404`, no
+    `400`/`413`/`415`), sin BD ni `Set-Cookie`. Solo `GET`/`HEAD` fuera de
+    `/api/` siguen al *not-found handler*, que sirve la SPA.
   - **`403 FORBIDDEN` de `POST /auth/pin` sin PIN provisional (T-39):** es
     parte del hook de permiso (`onRequest`), no del *handler*: la ruta
     declara `config: { permission: 'session:self', provisionalPinOnly: true }`
@@ -1097,13 +1290,13 @@ Permisos: **W** = camarero/cajero, **K** = barra/cocina, **M** = encargado
 
 | Método y ruta | Permiso | Historia | Descripción |
 |---|---|---|---|
-| `GET /auth/login-options` | público | HU-01 | rejilla de P-01 (SEC-005): solo `[{name, role}]` de usuarios **activos**, sin `id`, bloqueo ni `mustChangePin`; `Cache-Control: no-store`; mismo límite por IP que el login |
-| `POST /auth/login` | público | HU-01 | `{name, pin}` → `200 {user:{id,name,role,mustChangePin}}` + cookie; `401 INVALID_CREDENTIALS`; `423 LOCKED {retryAfterSeconds}`; `423 ACCOUNT_LOCKED_MANUAL`; `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}` (por IP, antes del hash); `403 USER_DISABLED` (solo si el PIN es correcto) |
+| `GET /auth/login-options` | público | HU-01 | rejilla de P-01 (SEC-005): solo `[{name, role}]` de usuarios **activos**, sin `id`, bloqueo ni `mustChangePin`; `Cache-Control: no-store`; mismo límite por IP que el login. [2.2c] Orden por `lower(name)`, como mucho 500 filas |
+| `POST /auth/login` | público | HU-01 | `{name, pin}` → `200 {user:{id,name,role,mustChangePin}}` + cookie; `401 INVALID_CREDENTIALS`; `423 LOCKED {retryAfterSeconds}`; `423 ACCOUNT_LOCKED_MANUAL`; `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}` (por IP, antes del hash); `403 USER_DISABLED` (solo si el PIN es correcto). [2.2c] `name` con `apiText(1, 30)` y `pin` de 1–64 (§5); `503 SERVICE_UNAVAILABLE` si la cola de argon2 está llena (§7, pendiente de implementar con SEC-043). El acierto con un usuario desactivado pone igualmente su contador a 0 (es un acierto) y no crea sesión |
 | `POST /auth/logout` | sesión | HU-01 | revoca la sesión; `204` con el mismo `Set-Cookie` de borrado que el `401` (§5) [2.1i] |
 | `GET /auth/me` | sesión (permitida con `mustChangePin`) | HU-01, HU-07 | `{user:{id, name, role, mustChangePin}, permissions:[…], session:{expiresAt}, serverTime, businessDate, localConfig}`. `session.expiresAt` = `sessions.expires_at` (caducidad absoluta de 12 h, ISO 8601 UTC): la app avisa 15 min antes (HU-01/CA-N06, aviso de barra) calculando con su desfase respecto a `serverTime`, no con el reloj de la tablet. No se expone la caducidad por inactividad (la lleva el cliente con su temporizador de 15 min). `localConfig` (configuración de instalación, §4.1) filtrado por rol: W `{tableCount}`, K `{delayThresholdMinutes}`, M ambos |
-| `POST /auth/pin` | sesión **con `mustChangePin = true`** | HU-07/CA-F04, CA-F09 | **Solo el cambio obligatorio del PIN provisional** (ronda 1.1f: ninguna historia pide el cambio voluntario; un PIN que se sospecha visto lo restablece el encargado con `reset-pin`). Con `mustChangePin = false` → `403 FORBIDDEN` sin verificar nada (no suma a ningún contador). `{currentPin, newPin}` → `204`; pone `must_change_pin = false`; revoca las demás sesiones del usuario; única ruta (con `/auth/me` y logout) permitida con `mustChangePin`. `currentPin` pasa por `verifyPin` (SEC-016): `403 PIN_INVALID` (incorrecto; no `401`, la sesión sigue válida); `423 LOCKED {retryAfterSeconds}`; `423 ACCOUNT_LOCKED_MANUAL` (al llegar a 20 fallos: todas las sesiones del usuario, incluida esta, quedan revocadas); `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}` (solo por IP, antes del hash; sin límite por sesión, T-20); `400` si `newPin` incumple las reglas de PIN. El resto de rutas con `mustChangePin` → `403 PIN_CHANGE_REQUIRED` (§5) |
+| `POST /auth/pin` | sesión **con `mustChangePin = true`** | HU-07/CA-F04, CA-F09 | **Solo el cambio obligatorio del PIN provisional** (ronda 1.1f: ninguna historia pide el cambio voluntario; un PIN que se sospecha visto lo restablece el encargado con `reset-pin`). Con `mustChangePin = false` → `403 FORBIDDEN` sin verificar nada (no suma a ningún contador). `{currentPin, newPin}` → `204`; pone `must_change_pin = false`; revoca las demás sesiones del usuario; única ruta (con `/auth/me` y logout) permitida con `mustChangePin`. `currentPin` pasa por `verifyPin` (SEC-016): `403 PIN_INVALID` (incorrecto; no `401`, la sesión sigue válida); `423 LOCKED {retryAfterSeconds}`; `423 ACCOUNT_LOCKED_MANUAL` (al llegar a 20 fallos: todas las sesiones del usuario, incluida esta, quedan revocadas); `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}` (solo por IP, antes del hash; sin límite por sesión, T-20); `400` si `newPin` incumple las reglas de PIN. El resto de rutas con `mustChangePin` → `403 PIN_CHANGE_REQUIRED` (§5). **[2.2c] Orden:** `403 FORBIDDEN` sin PIN provisional (guarda) → zod → `validatePin(newPin, rol)` (`400` **sin** verificar `currentPin` ni contar intento: las reglas son públicas) → `verifyPin(currentPin)` → solo si acierta, hash del PIN nuevo → en la transacción condicionada del acierto (§7), `pin_hash`, `pin_digits`, `must_change_pin = false` y revocación de las demás sesiones (`revoked_reason = 'pin_changed'`); `503` si la cola de argon2 está llena (pendiente, SEC-043) |
 | `POST /session/activity` | sesión | HU-01 | latido de interacción (como mucho 1/min si hay toques sin otras peticiones); `204`. El cliente nunca lo marca pasivo; si no pudo enviarse por falta de red y hubo toques, lo envía al recibir `hello`, antes de los *snapshots* (§7, SEC-030) |
-| `GET /events` | sesión | HU-02..HU-06 | flujo SSE (§6) |
+| `GET /events` | sesión | HU-02..HU-06 | flujo SSE (§6). [2.2c] No cuenta como actividad (`activity: false`); `503 SERVICE_UNAVAILABLE` + `Retry-After: 5` antes de abrir el flujo si se pasaría del tope global (§6) |
 | `GET /menu` | W, K, M | HU-02, HU-05 | categorías y productos activos ordenados, con `available` (K sin precio) |
 | `PATCH /products/:id/availability` | W, M | HU-05 | `{available}` |
 | `POST /categories` · `PATCH /categories/:id` · `DELETE /categories/:id` | M | HU-05 | `DELETE` archiva; `409 CATEGORY_HAS_ACTIVE_PRODUCTS {count}` |
@@ -1133,8 +1326,8 @@ Permisos: **W** = camarero/cajero, **K** = barra/cocina, **M** = encargado
 | `GET /reports/daily?date=YYYY-MM-DD` | M | HU-08 | fecha en `[today − 90, today]` (fuera → `422 DATE_OUT_OF_RANGE`); cálculo en §4.4. Respuesta: ver "Forma de `GET /reports/daily`" bajo esta tabla |
 | `POST /reports/daily/:date/closing` | M (`reports:close`) | HU-08 | `{countedCashCents}` → `201` con la misma forma que `GET /reports/daily` (ya cerrado); misma ventana de fechas que la lectura (`422 DATE_OUT_OF_RANGE`); calcula y guarda la instantánea bajo el cerrojo de cierre (§4.4); `409 DAY_ALREADY_CLOSED` si ya está cerrado |
 | `POST /telemetry` | sesión (`telemetry:write`) | M-03 | lote de métricas del cliente (§11); `204`; `413` si supera el tamaño, `429` si supera la frecuencia |
-| `GET /healthz` | interno | — | **liveness** (M-01): proceso y bucle de eventos; no consulta la BD. Lo usa el `HEALTHCHECK` |
-| `GET /readyz` | interno | — | **readiness**: `SELECT 1` (timeout 1 s), migraciones al día, secretos cargados. Sin versiones ni mensajes de error |
+| `GET /healthz` | interno | — | **liveness** (M-01): proceso y bucle de eventos; no consulta la BD. Lo usa el `HEALTHCHECK`. [2.2c, D-2.2-06 e] `200 {"status":"ok"}`, o `503 {"status":"fail"}` si el p99 del retraso del bucle de eventos (`monitorEventLoopDelay`, resolución 20 ms) desde la consulta anterior supera 1 s (`docs/logging.md` §8.1); cada consulta reinicia el histograma |
+| `GET /readyz` | interno | — | **readiness**: `SELECT 1` (timeout 1 s), migraciones al día, secretos cargados. Sin versiones ni mensajes de error. [2.2c] `200`/`503` con `{status, checks: {db, migrations}}` (`ok`/`fail`); "al día" = la última migración de `index.ts` está en `schema_migrations` |
 | `GET /metrics` (puerto 9464) | interno | — | Prometheus (M-02); no es parte de `/api/v1` |
 
 **Forma de `GET /reports/daily` [1.7h]** (esquema zod en `packages/shared`;
@@ -1244,6 +1437,11 @@ las ve el usuario. Se acepta la propuesta de Testing (`tests/README.md` §5):
   `GET` que no empiece por `/api/` ni sea un fichero estático existente, con
   `Cache-Control: no-cache`; los *assets* con *hash* en el nombre, caché
   larga. `/healthz` y `/readyz` no son rutas de la SPA.
+  **[2.2c]** Lo mismo con `HEAD`. Cualquier otro método fuera de `/api/` →
+  `404 NOT_FOUND` JSON (SEC-031, §5), nunca `index.html`. Los ficheros de
+  `/app/public` se cargan en memoria al arrancar (sin enlaces simbólicos ni
+  recorridos de directorio, `apps/api/src/http/spa.ts`): solo se sirve lo que
+  está en ese mapa; caché larga (`immutable`) solo bajo `/assets/`.
 
 ## 6. Tiempo real (ADR-004)
 
@@ -1296,6 +1494,37 @@ las ve el usuario. Se acepta la propuesta de Testing (`tests/README.md` §5):
   más un `payment.*`.
 - **Capacidad:** ~10 conexiones SSE abiertas; trivial para Node. Con HTTP/2
   (Caddy) no aplica el límite de 6 conexiones por origen de HTTP/1.1.
+- **Límites y cierre del flujo [2.2c; RS-23, SEC-039, SEC-040]**
+  (`apps/api/src/realtime/hub.ts`, `routes/system.ts`):
+  - **2 flujos por sesión** (`MAX_STREAMS_PER_SESSION`): "un flujo por
+    dispositivo" es lo normal; el segundo cubre el solape de una reconexión.
+    Al abrir el tercero se cierra el más antiguo de esa sesión (motivo
+    `replaced`), sin error.
+  - **50 flujos en total** (`MAX_STREAMS_TOTAL`): la ruta llama a
+    `hub.canAccept(sesión)` **antes** del `hijack` (sin `await` entre la
+    comprobación y la apertura): si, tras sustituir el más antiguo de la misma
+    sesión, quedarían más de 50 → `503 SERVICE_UNAVAILABLE` con
+    `Retry-After: 5` y `no-store`, log `sse.rejected` (`reason:
+    global_limit`) y métrica `sse_rejected_total{reason}` (a 0 desde el
+    arranque). El cliente reintenta con su reintento normal.
+  - Al abrir: `200` con `Content-Type: text/event-stream`,
+    `Cache-Control: no-cache, no-transform` y `X-Accel-Buffering: no`; el
+    primer mensaje es `hello`. El flujo no cuenta como actividad.
+  - **Caducidad con el flujo abierto:** en cada `ping` (2 s) el *hub* cierra
+    con motivo `expired` los flujos cuya sesión pasó `expires_at` y, para
+    roles distintos de `kitchen`, los que llevan ≥ 15 min sin actividad
+    (`IDLE_TIMEOUT_MS` de `session-policy.ts`, el mismo valor que usa la
+    guarda). El *hub* guarda la última actividad de cada sesión con flujo
+    (al abrir, `last_activity_at`; después, cada petición que cuenta).
+    Además, cuando la guarda detecta una caducidad (`expired_reason`), cierra
+    en el acto los flujos de esa sesión. Así una sesión caducada nunca sigue
+    recibiendo eventos (SEC-039); la barra con la cola abierta sigue exenta
+    (§7). El cierre por caducidad **no** envía `session.revoked`: la SPA ya
+    cierra por su propio temporizador de 15 min y por `expiresAt`; si no, lo
+    detecta al reconectar (`401`, banner según la regla de T-48, §5).
+  - Motivos de cierre en `sse.disconnected`: `client_closed`,
+    `session_revoked`, `role_changed`, `write_error`, `server_shutdown`,
+    `expired`, `replaced`.
 - **Presupuesto de latencia** (HU-02/HU-03/HU-06 ≤ 2 s p95, HU-05 ≤ 5 s,
   umbral de retraso ≤ 60 s): transacción (< 50 ms) + publicación en memoria +
   entrega SSE en LAN (< 100 ms). Margen amplio.
@@ -1379,6 +1608,18 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
     usuario navega y los reintentos automáticos de una acción suya, §9) y
     `POST /session/activity`. El login crea la sesión con
     `last_activity_at = now`.
+  - **Implementado en HU-01 [2.2c]:** la guarda omite la escritura solo con
+    `x-activity === 'passive'` exacto (una cabecera repetida o con otro
+    valor cuenta como activa) y siempre **después** de todas las
+    comprobaciones de sesión; las rutas con `activity: false` (§2.1) no la
+    escriben nunca. En la SPA, hoy solo `GET /auth/me` va con
+    `{ passive: true }` (arranque, `hello` de reconexión, `session.updated`,
+    `403 FORBIDDEN`, `403 PIN_CHANGE_REQUIRED`, comprobación de la caducidad
+    absoluta); los *snapshots* de HU-02..HU-06 seguirán la lista de arriba.
+    El cliente lleva aparte la hora de su última petición **activa**: el
+    latido `POST /session/activity` solo se envía tras un toque si no hubo
+    ninguna en el último minuto, y se reenvía al reconectar si quedó
+    pendiente por falta de red. Verificado por Cybersecurity (SEC-030, 2.3).
   - **Regla exacta**: con `now = clock.now()`, la sesión está caducada por
     inactividad si `now >= last_activity_at + 15 min` (a los 14 min 59 s
     sigue viva; a los 15 min 0 s, `401 UNAUTHENTICATED` con
@@ -1417,6 +1658,7 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
     WHERE s.id = ANY($ids) AND u.id = s.user_id
       AND u.role = 'kitchen' AND u.active
       AND s.revoked_at IS NULL AND s.expires_at > $now
+      AND s.expired_reason IS NULL          -- [2.2c] tampoco resucita una caducada ya marcada
     ```
 
     (a) **Al cerrarse un flujo** de una sesión de la lista: `$ids = [id]`;
@@ -1525,6 +1767,81 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
      cuenta, porque el PIN era correcto) y no necesita espera: ya ha pasado
      por el hash, así que su tiempo es el de una verificación (SEC-025).
 
+  **Atomicidad con peticiones simultáneas [2.2c; SEC-038, SEC-047, RS-05b;
+  ADR-005 revisión (d)].** Los pasos de arriba son "comprobar y luego
+  actuar": en secuencia bastan, pero con peticiones a la vez todas pasarían
+  las comprobaciones antes de que se anote el primer fallo. Es **obligatorio**
+  que `verifyPin` cumpla RS-05b: una IP nunca tiene más verificaciones en
+  curso que los fallos que le quedan; una cuenta nunca supera el umbral del
+  bloqueo siguiente por verificaciones simultáneas; y un acierto con la cuenta
+  bloqueada en el momento de anotarlo no crea sesión ni cambia el PIN. Se
+  consigue así (`apps/api/src/modules/auth/verify-pin.ts`, `rate-limit.ts`,
+  `serialize.ts`); cualquier ruta nueva que verifique un PIN (HU-04, HU-06,
+  HU-07) usa la misma función y no puede saltarse nada. Para ello la firma
+  real sustituye a la de arriba: la ruta no pasa el usuario ya leído, sino
+  cómo leerlo y qué hacer si acierta.
+
+  ```ts
+  verifyPin<U extends PinTarget, P, T>(attempt: {
+    accountKey: string | (() => Promise<string>); // carril del cerrojo (punto 2)
+    load(): Promise<U | null>;                      // lee la fila EN su turno
+    pin: string;
+    ctx: { ip: string; sessionId?: string; purpose: 'login' | 'approval' | 'confirm' | 'change'; log?; uaFamily? };
+    prepare?(user: U): Promise<P>;                  // tras acertar, fuera de la transacción (p. ej. hash del PIN nuevo)
+    onSuccess(trx, user: U, prepared?: P): Promise<T>; // dentro de la transacción del acierto (punto 3)
+  }): Promise<{ ok: true; user: U; value: T } | (VerifyFailure & { user: U | null })>
+  // VerifyFailure = { ok: false; reason: 'invalid' | 'locked' | 'locked_manual' | 'rate_limited' (| 'busy', SEC-043);
+  //                   retryAfterSeconds?; scope?: 'ip' | 'session'; failedAttempts?; lockedManualNow? }
+  ```
+
+  1. **Reserva síncrona del cupo de IP antes del primer `await`**
+     (`FailureWindow.tryReserve`): rechaza con `429` si `fallos en la ventana
+     + verificaciones en curso ≥ 10`; si no, anota una más en curso. En
+     `approval`, lo mismo con el cupo de la sesión (5). Cada reserva se
+     cierra **exactamente una vez**: como fallo (`commitFailure`) o liberada
+     (`release`: acierto, cuenta bloqueada que no cuenta, error inesperado en
+     un `finally`). Las reservas en curso van en un mapa aparte que la poda
+     de la ventana no toca. Si el cupo está ocupado solo por verificaciones en
+     curso (aún no hay bloqueo), el `429` lleva `retryAfterSeconds: 1`.
+  2. **Cerrojo por cuenta en memoria** (`KeyedSerializer`, FIFO por clave):
+     las verificaciones de una misma cuenta se hacen de una en una, y la fila
+     del usuario se lee **dentro del turno** (`load()`), no la que leyó la ruta
+     antes de esperar: cada intento ve el bloqueo y el contador que dejó el
+     anterior. **Clave del cerrojo (SEC-047):** `user:<id>`, con el `id`
+     resuelto por PostgreSQL con la **misma** condición que la búsqueda y el
+     índice único (`lower(name) = lower($1)`), en una sola sentencia
+     parametrizada, **después** de la reserva de IP; para un nombre que no
+     existe, `unknown:` + el `lower($1)` calculado por PostgreSQL. Nunca
+     `toLowerCase()` de JavaScript (`İ`/`i`, `Σ`/`σ` no coinciden). `POST
+     /auth/pin` usa `user:<sesión.userId>`: login y cambio de PIN de una
+     misma cuenta comparten carril. *(Condición para HU-07, SEC-058: cuando
+     existan el alta y el renombrado, `load()` debe comprobar también que el
+     nombre del `id` resuelto sigue siendo el pedido, o resolver de nuevo.)*
+  3. **Acierto y efecto en una sola transacción condicionada:**
+     `UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = $id
+     AND NOT locked_manual AND (locked_until IS NULL OR locked_until <= $now)
+     RETURNING id` y, **en esa misma transacción**, el efecto del acierto
+     (`onSuccess`: el `INSERT` de la sesión en el login; `pin_hash` nuevo y
+     revocación de las demás sesiones en `POST /auth/pin`). 0 filas →
+     *rollback*, `423` (`LOCKED` o `ACCOUNT_LOCKED_MANUAL` según la fila
+     releída) y log `auth.verify.locked`, sin sesión ni cambio. Como la
+     condición la evalúa PostgreSQL con el bloqueo de fila, también cubre un
+     fallo simultáneo que llegue por otro carril. El hash de un PIN nuevo
+     (`prepare`) se calcula solo **después** de acertar el actual.
+  4. **Semáforo explícito de 4 operaciones argon2** (`ARGON2_CONCURRENCY`),
+     compartido por `verify` y `hash` (`hashNewPin`), en lugar de depender del
+     *threadpool* de libuv, que también usan DNS y `fs` (RS-08). Su cola está
+     acotada (abajo, SEC-043).
+  5. El fallo se anota como en el paso 5 de arriba (contador, escala y
+     revocación en una transacción), todavía dentro del turno de la cuenta.
+
+  Supuesto: **una sola instancia** de `app` (§1, §10). El cerrojo por cuenta y
+  los cupos viven en memoria; con varias instancias haría falta la variante
+  en BD (sumar el intento con un `UPDATE … RETURNING` antes del hash), ver
+  ADR-005 revisión (d). Verificado por Cybersecurity (2.6 y 2.8c: 300 logins
+  simultáneos desde una IP → 5 verificaciones; 3000 → 10; con las variantes
+  del nombre → 5).
+
   **Nota (T-21 (a)).** Hasta la 1.7a el límite por sesión sumaba aprobación,
   reconfirmación y cambio de PIN; por la API cada tipo de sesión solo alcanza
   uno de esos usos (W: aprobaciones; M: reconfirmaciones, porque su
@@ -1544,6 +1861,60 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
   verifica PIN, pero se rechaza con `429` mientras la IP está limitada. Requiere
   la IP real del dispositivo (`trustProxy` solo para `proxy`; red rootless que
   conserva la IP, SEC-003).
+- **Clave del límite por IP y capacidad de los contadores [2.2c, decisión
+  de SEC-043 y D-2.5-03 a/d].** *Pendiente de implementar* (developer, con
+  los tests de Testing primero): **antes de empezar HU-06** y, como tarde,
+  antes de la puerta de la Etapa 3 (condición de Cybersecurity, 2.6).
+  1. **Clave = `ipRateKey(ip)`**, función pura en `rate-limit.ts` sobre
+     `clientIp(request)`: IPv4 → la dirección completa; IPv6 con IPv4
+     incrustada (`::ffff:a.b.c.d` o su forma hexadecimal) → esa IPv4;
+     cualquier otra IPv6 → su **prefijo /64** en forma canónica
+     (`2001:db8:0:1::/64`). La usan el cupo por IP de `verifyPin` y el `429`
+     de `GET /auth/login-options` (`ipBlockedFor`). Los logs siguen llevando
+     la IP completa (`client_ip`). Motivo: un equipo controla todas las
+     direcciones de su /64, así que contar por dirección no limita nada.
+  2. **Consecuencia aceptada:** todos los dispositivos de un mismo /64
+     comparten los 10 fallos / 10 min. En una red local con IPv6 (SLAAC) eso
+     es **toda la Wi-Fi del personal**: unos pocos PIN mal tecleados
+     bloquearían el login de todo el local 10 min. Para que no ocurra, el
+     despliegue publica Caddy **solo por IPv4** en DEMO y PROD (condición
+     para Infrastructure, §10); la regla del /64 queda como red de seguridad
+     que falla cerrada si algún día llega IPv6. En TESTING y DEV las redes son
+     IPv4.
+  3. **Capacidad (`maxKeys`, 10 000 claves por contador, IP y sesión):** la
+     poda solo borra entradas **sin fallos dentro de la ventana y sin bloqueo
+     vigente**; nunca una bloqueada ni una con fallos recientes (si no, quien
+     llena el mapa borraría su propio bloqueo o su cuenta de fallos). Si tras
+     la poda sigue lleno, **falla cerrado**: una clave que aún no tiene
+     entrada recibe `429 TOO_MANY_ATTEMPTS` con `retryAfterSeconds: 60` en
+     `tryReserve` (antes del hash), y el log `auth.verify.rate_limited` lleva
+     `cause: 'capacity'`. Una reserva ya aceptada siempre anota su fallo
+     aunque el mapa pase del tope (el tope es de memoria, no de seguridad).
+     Llenarlo exige ≥ 10 000 claves distintas con fallos en 10 min: con
+     IPv4 privada y la regla del /64 no es alcanzable desde la red del local.
+  4. **Cola del semáforo argon2 acotada** (`ARGON2_MAX_QUEUE = 32`, además
+     de los 4 en curso): con la cola llena, la operación se rechaza **sin
+     esperar** → `verifyPin` libera la reserva (no cuenta como fallo en IP,
+     sesión ni cuenta: el PIN no se ha comprobado) y devuelve `reason:
+     'busy'`; las rutas responden `503 SERVICE_UNAVAILABLE` con
+     `Retry-After: 5` (§5), y `hashNewPin` igual. Log `auth.verify.busy`
+     (`warn`) y `auth_verifications_total{result="busy"}`. Por qué hace falta
+     aunque cada IP tenga como mucho 10 en curso: los carriles `unknown:` de
+     nombres inexistentes no se serializan entre sí, así que muchas IP
+     podrían encolar sin tope. 32 en cola son ≈ 8 turnos de 4: 0,3–2 s de
+     espera con los parámetros de argon2 (§7), dentro de lo que tolera el
+     login (HU-01: ≤ 1 s p95 en carga normal, ~10 dispositivos, que nunca
+     llegan a la cola). No da información: el `503` no depende del PIN ni de
+     la cuenta.
+  - **Cómo verificar** (Testing): unitario de `ipRateKey` (IPv4, mapeada en
+    las dos formas, `2001:db8::1` y `2001:db8::2` → misma clave,
+    `2001:db8:0:1::1` → otra); unitario de `FailureWindow`: 10 fallos desde
+    `2001:db8::1` y el 11.º desde `2001:db8::2` → `429`; con el mapa lleno,
+    una clave bloqueada sigue bloqueada tras 10 000 claves nuevas y una clave
+    nueva recibe `429` con 60 s; unitario del `Semaphore`: con 4 en curso y
+    32 en cola, la 37.ª se rechaza al instante; integración con *hasher*
+    lento: la petición rechazada da `503` + `Retry-After: 5`, no cambia
+    `failed_attempts` y no consume cupo de la IP.
 - **Borrador local (SEC-012):** clave `draft:<userId>` en `localStorage`, solo
   se ofrece al mismo usuario, se descarta a las 12 h, sin importes ni PIN.
 - **CSRF:** `SameSite=Strict` + mismo origen + comprobación de `Origin` en
@@ -1642,10 +2013,30 @@ la arquitectura exige:
 
 | Servicio | Imagen base | Usuario | Puertos (contenedor) | Persistencia | Notas |
 |---|---|---|---|---|---|
-| `app` | multi-stage: `node:<LTS>-alpine` para compilar → **distroless nodejs** (por digest) | **`USER 1000:1000`** numérico (no el `nonroot` 65532 de distroless; ver abajo) | 3000 (API, red interna hacia Caddy) y 9464 (`/metrics`, red interna hacia Prometheus) | ninguna (`--read-only`, `/tmp` tmpfs) | `HEALTHCHECK` en forma exec con `node dist/healthcheck.js` → `GET 127.0.0.1:3000/healthz` (liveness, sin BD). Construir con formato docker para que Podman guarde el `HEALTHCHECK` |
+| `app` | multi-stage: `node:<LTS>-trixie-slim` (Debian, glibc) para compilar → **distroless nodejs** Debian (por digest) [2.2c, IMG-02: no `-alpine`] | **`USER 1000:1000`** numérico (no el `nonroot` 65532 de distroless; ver abajo) | 3000 (API, red interna hacia Caddy) y 9464 (`/metrics`, red interna hacia Prometheus) | ninguna (`--read-only`, `/tmp` tmpfs) | `HEALTHCHECK` en forma exec con `node dist/healthcheck.js` → `GET 127.0.0.1:3000/healthz` (liveness, sin BD). Construir con formato docker para que Podman guarde el `HEALTHCHECK` |
 | `migrate` | misma imagen que `app` | igual (1000:1000) | — | — | efímero, usa el rol de BD propietario |
-| `db` | `postgres:<versión>-alpine` | UID ≥ 1000 (`--user`), datos en volumen con ese dueño | 5432 (solo red interna) | volumen `pgdata` | `--read-only` con tmpfs en `/var/run/postgresql` y `/tmp` |
-| `proxy` | `caddy:<versión>-alpine` | UID ≥ 1000 | 8080 (redirección) y 8443 (TLS) | volumen para `/data` (certificados) | único servicio publicado al host; genera `X-Request-Id`; `404` a `/healthz` y `/readyz` |
+| `db` | `postgres:<versión>-alpine` → imagen **derivada** `localhost/mi-app-db` [2.2c] | UID ≥ 1000 (`--user`), datos en volumen con ese dueño | 5432 (solo red interna) | volumen `pgdata` | `--read-only` con tmpfs en `/var/run/postgresql` y `/tmp` |
+| `proxy` | `caddy:<versión>-alpine` → imagen **derivada mínima** `localhost/mi-app-proxy` [2.2c] | UID ≥ 1000 | 8080 (redirección) y 8443 (TLS) | volumen para `/data` (certificados) | único servicio publicado al host; genera `X-Request-Id`; `404` a `/healthz` y `/readyz` |
+
+**Imágenes tal como quedaron en HU-01 [2.2c]** (detalle, digests y
+excepciones en `docs/infraestructura.md` §8; no cambia ninguna decisión de
+ADR-001, ADR-003 ni ADR-007):
+- **Etapa de construcción de `app` en Debian trixie, no Alpine (IMG-02,
+  ratificado):** el binario precompilado de `argon2` para musl no carga en la
+  distroless, que es glibc; compilar en Debian con la misma glibc (2.41) que
+  la etapa final es lo más simple. Aprobado por Cybersecurity (2.1m).
+- **`db` y `proxy` son derivadas** de las oficiales (por CVE con corrección
+  que las oficiales aún no traían: SEC-049, SEC-055): `apk upgrade`, sin
+  `gosu` en `db`, el mismo binario `/usr/bin/caddy` que la oficial en
+  `proxy`, `USER 1000:1000`. Rama Alpine más reciente con soporte (SEC-051).
+  Se construyen con `deploy/*/construir.sh` y se usan con `pull_policy:
+  never`.
+- **Publicación solo por IPv4 en DEMO y PROD [2.2c, SEC-043]:** los puertos
+  de `proxy` (o el `.socket` de la activación por socket) se publican en
+  direcciones IPv4 (p. ej. `0.0.0.0:8443`), y el nombre del servidor que usan
+  los dispositivos resuelve solo a IPv4. Motivo en la §7 (el límite por IP
+  agrupa las IPv6 por /64). Si el local solo tuviera IPv6, se decide con
+  Cybersecurity antes de DEMO.
 
 - **Requisito previo de red (SEC-002, bloqueante):** login y API solo
   alcanzables desde la red del personal (Wi-Fi separada + cortafuegos del host;
@@ -1707,6 +2098,8 @@ cualquiera de las dos falla. Los nombres coinciden con
 | `PUBLIC_ORIGIN` (nueva) | no | origen URL exacto `esquema://host[:puerto]`, sin ruta ni barra final | **obligatoria** (sin valor por defecto) | `Origin` aceptado (RS-24), p. ej. `https://caja.local:8443`; en DEV, el origen del servidor Vite |
 | `TRUSTED_PROXIES` (nueva) | no | lista separada por comas, 1–4 elementos, cada uno IP literal o CIDR ≥ /24 (IPv4) o ≥ /120 (IPv6); vacía o ausente = ninguna. Reglas exactas abajo (SEC-029) | vacía | `trustProxy` de Fastify (*array* validado, §2.1): solo de esas direcciones se acepta `X-Forwarded-For` (RS-06, SEC-003). En TESTING/DEMO/PROD, **la IP única** de `proxy` (p. ej. `10.89.240.2`); un CIDR solo para una red dedicada `proxy`↔`app`; en DEV, vacía (no hay Caddy) |
 | `LOG_LEVEL` | no | `fatal`…`trace` | `info` | pino |
+| `APP_ENV` [2.2c, D-2.2-07] | no | `dev` \| `test` \| `demo` \| `prod` | si falta o no es válida: `prod` con `NODE_ENV=production`, si no `dev` | campo `env` de cada log (`docs/logging.md` §2.1). No la valida `parseSettings` (no impide arrancar); la añade Infrastructure en cada entorno (tarea 2.2d) |
+| `APP_VERSION` [2.2c, D-2.2-07] | no | texto (versión o commit) | `dev` | campo `version` de cada log |
 | `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_NAME`, `DATABASE_USER` | no | — | obligatorias | conexión (`app_rw` en `app`; `app_owner` en `migrate`) |
 | `DATABASE_PASSWORD_FILE` | **sí** (fichero) | ruta | obligatoria | contraseña del rol |
 | `PIN_PEPPER_FILE` | **sí** (fichero) | ruta; contenido ≥ 32 bytes | obligatoria en `app` y `create-initial-manager` | *pepper* de `createPinHasher` |
@@ -1803,9 +2196,19 @@ El estándar lo define Monitoring (`docs/logging.md`). La arquitectura aporta:
      (PIN centinela también como `confirmPin`; RS-29).
   4. La primera barrera sigue siendo no registrar cuerpos de petición.
 - **Salud:** `/healthz` (liveness) y `/readyz` (BD + migraciones), §5.1 (M-01).
+  [2.2c] `/healthz` da `503` si el bucle de eventos lleva un p99 > 1 s; el
+  `HEALTHCHECK` (`dist/healthcheck.js`, `GET 127.0.0.1:$PORT/healthz`,
+  límite 5 s) falla con cualquier respuesta que no sea `2xx`. Un reinicio por
+  `HealthOnFailure` vacía los contadores en memoria (riesgo ya aceptado,
+  `docs/seguridad.md` §6.1.5). Ni `/healthz` ni `/readyz` generan
+  `http.request` ni métricas HTTP.
+- **Campos comunes de log [2.2c]:** `service`, `env` (`APP_ENV`) y `version`
+  (`APP_VERSION`) en cada línea (§10.1).
 - **Métricas:** `prom-client` en un servidor HTTP aparte dentro del mismo
   proceso, escuchando en 9464 (`/metrics`), sin rutas de la API (M-02). Lo
-  arranca `main.ts` sirviendo `app.metricsText()`; el `Registry` es propio de
+  arranca `main.ts` sirviendo `app.metricsText()` más las métricas por defecto
+  del proceso de `prom-client` (en un `Registry` aparte del de `main.ts`, no
+  el global) [2.2c]; el `Registry` es propio de
   cada instancia de `buildApp` (§2.1). Lista
   de métricas en `docs/logging.md` §6; etiquetas sin cardinalidad ilimitada.
 - **Telemetría del cliente (M-03):** `POST /api/v1/telemetry`, con sesión
@@ -1821,7 +2224,12 @@ El estándar lo define Monitoring (`docs/logging.md`). La arquitectura aporta:
 
 - TypeScript `strict`, ESLint + Prettier; sin `any` salvo justificado.
 - Validación de toda entrada en el borde con zod (esquemas en `packages/shared`,
-  reutilizados para tipos de request/response).
+  reutilizados para tipos de request/response). Texto con `apiText`/`apiName`
+  y PIN con sus esquemas propios, nunca `z.string()` suelto (§5) [2.2c].
+- Enumerados de BD como `text` + `CHECK` (§4) [2.2c].
+- Constantes de política con nombre y en un solo sitio cuando las comparten
+  dos componentes (p. ej. `IDLE_TIMEOUT_MS` en `session-policy.ts`, que usan
+  la guarda y el *hub*) [2.2c].
 - Dominio en inglés en código y BD; textos de UI en español.
 - Servicios con dependencias por constructor (DI manual en `buildApp`, que
   `main.ts` llama con `SystemClock` y la configuración de `loadConfig()`; sin
@@ -1947,3 +2355,82 @@ Sin ADR nuevo.
 | T-41 (baja; también infrastructure) | La lógica del envoltorio pasa a `runCommand(name, argv, io)` (`@mi-app/api/commands/cli`, nunca lanza, devuelve 0/1/2). Scripts `dist/commands/create-initial-manager.js` y `dist/commands/unlock-user.js <nombre>`. Prueba en proceso en integración (códigos y stderr sin PIN) y un humo por comando en la suite `containers` con un servicio efímero que añade Infrastructure a `compose.test.yaml` | §2.1, §3.1 |
 | T-42 (baja) | Subruta `@mi-app/web/pin-messages`: `pinRuleMessage(rule: string): string`, función total (regla desconocida → texto genérico de UX), en `apps/web/src/features/pin/pin-messages.ts` | §3.1 |
 | T-43 (baja) | **Aceptado el intervalo en `AppDeps`:** `kitchenActivityIntervalMs?` (entero 10–60000, por defecto 60000; no es variable de entorno). El valor escrito sigue saliendo del `Clock`, así que el test usa un intervalo corto + `FakeClock`. El reinicio brusco de `app` con la cola abierta se sigue verificando en la Etapa 3 | §2.1, §7 |
+
+## 18. Registro de la tarea 2.2c (Etapa 2, 2026-11-26): desviaciones de HU-01 y D-2.5-03
+
+Fuentes: D-2.2-06 y D-2.2-07 (developer, 2.2), las desviaciones declaradas
+en la entrega 2.2 y su revisión (`docs/seguridad.md` §6.8 puntos 3, 4, 7 y
+8), D-2.5-03 (developer, 2.5), §6.9 y §6.13 de `docs/seguridad.md`, la
+decisión de Testing sobre T-48 (2.8d) e IMG-02. Contrastado con el código de
+`apps/api`, `apps/web` y `packages/shared` del commit `6f7e32f`. Solo
+documenta lo que ya está implementado y probado, salvo las tres decisiones
+marcadas como **pendiente de implementar**. Ninguna desviación se rechaza:
+todas cumplen las historias y RS-xx y ya las aprobó Cybersecurity. Una sola
+toca una decisión de ADR (el cerrojo por cuenta en memoria refuerza el
+supuesto de una sola instancia): se registra como revisión (d) de ADR-005,
+sin ADR nuevo.
+
+### 18.1 Desviaciones aceptadas (ya implementadas y con tests)
+
+| Origen | Qué hace la implementación | Veredicto | Dónde |
+|---|---|---|---|
+| D-2.2-06 a | `sessions.revoked_reason` y `sessions.expired_reason` (`text` + `CHECK`); el `401` repite el primer motivo de caducidad y `auth.session.expired` se registra una vez | **Aceptada** (Cybersecurity 2.3) | §4.1, §5 |
+| D-2.2-06 b | `audit_log.entity_id` es `text` (no solo UUID); `id` como `IDENTITY`; trigger también para `TRUNCATE` | **Aceptada** | §4.1 |
+| D-2.2-06 c | `was_lock_kind = none` si `unlock-user` desbloquea a alguien sin bloqueo | **Aceptada** | §4.1 |
+| D-2.2-06 d | `pin` del login y `currentPin` de 1–64 caracteres (`400 max_length`/`min_length` antes del hash); `newPin` ≤ 64 | **Aceptada** (Cybersecurity 2.3) | §5 |
+| D-2.2-06 e | `GET /healthz` → `503` con p99 del bucle de eventos > 1 s | **Aceptada** (es lo que pide `docs/logging.md` §8.1) | §5.1, §11 |
+| D-2.2-07 | `APP_ENV` y `APP_VERSION` para los campos `env`/`version` de los logs | **Aceptada**; Infrastructure las añade (2.2d) | §10.1, §11 |
+| 2.2: `role` | `text` + `CHECK` en vez de `enum` | **Aceptada y generalizada:** convención para todos los enumerados | §4, §4.1, §12 |
+| 2.2: guarda | Una única guarda `onRequest` con el orden de la §5 (404 → `internal` → `Origin` → `public` → sesión → PIN provisional → permiso → `provisionalPinOnly` → actividad) en vez de cuatro hooks | **Aceptada** (Cybersecurity 2.3) | §5 |
+| 2.2: flujos por sesión | Al abrir el 3.er flujo de una sesión se cierra el más antiguo (`replaced`) | **Aceptada** | §6 |
+| 2.2: `pnpm` | `hoistWorkspacePackages: false` y `allowBuilds` (`argon2`, `esbuild`) | **Aceptada** (SEC-026) | §3 |
+| 2.2: `RouteAuthConfig` | Marcas `allowProvisional`, `provisionalPinOnly`, `activity: false`; `onRoute` que rechaza al arrancar más de una declaración | **Aceptada** | §2.1 |
+| 2.2: migrador | Migrador propio con `schema_migrations` y cerrojo consultivo, no el `Migrator` de Kysely | **Aceptada** (más simple con el `dist/` empaquetado; ADR-003 revisión) | §3, §5.1 |
+| 2.2: usuario desactivado | La guarda responde `401 revoked/user_disabled` aunque la sesión no esté revocada | **Aceptada** (defensa en profundidad); HU-07 debe revocar igualmente | §5 |
+| 2.2: *hub* | La escritura de actividad de barra exige además `expired_reason IS NULL` | **Aceptada** | §7 |
+| 2.2: `POST /auth/pin` | `validatePin(newPin)` antes de verificar `currentPin`; el hash nuevo solo tras acertar | **Aceptada** (el `400` no compara nada) | §5.1 |
+| 2.2: `413`, `500` | Códigos `PAYLOAD_TOO_LARGE` e `INTERNAL` | **Aceptada** | §5 |
+| SEC-031 | `404` en la propia guarda, antes del cuerpo; cualquier método distinto de `GET`/`HEAD` fuera de `/api/` → `404` JSON | **Aceptada** (pendiente de documentar desde la 2.3) | §5, §5.2 |
+| SEC-032 | Cierre de todos los canales del cliente en `end()` con generación de peticiones | **Aceptada** (pendiente de documentar desde la 2.3) | §5 |
+| SEC-038 / D-2.5-03 a | Atomicidad de `verifyPin`: reserva síncrona antes del primer `await`, cerrojo FIFO por cuenta con `load()` en el turno, acierto + efecto en una transacción con `UPDATE` condicionado, semáforo de 4; firma `verifyPin(attempt)` | **Aceptada y exigida en §7**; ADR-005 revisión (d) | §7 |
+| SEC-047 | Clave del cerrojo `user:<id>` (o `unknown:` + `lower()`) resuelta por PostgreSQL tras la reserva de IP; `POST /auth/pin` en el mismo carril | **Aceptada** | §7 |
+| SEC-039 / D-2.5-03 e | `session-policy.ts` (`IDLE_TIMEOUT_MS`) común; el *hub* cierra por inactividad en el `ping` y la guarda cierra los flujos al marcar la caducidad | **Aceptada** | §3, §6, §12 |
+| SEC-040 / D-2.5-03 b | Tope global de 50 flujos → `503 SERVICE_UNAVAILABLE` + `Retry-After: 5` antes del `hijack` | **Aceptada**; código `SERVICE_UNAVAILABLE` confirmado | §5, §6 |
+| SEC-041 | `Cache-Control: no-store` en todo `/api/` con un `onSend` | **Aceptada** | §5 |
+| SEC-042 | `apiText` rechaza C0 y DEL en el `name` del login | **Aceptada**; se amplía con la regla general (18.2) | §5 |
+| SEC-030 | `X-Activity: passive` exacto; en la SPA solo `GET /auth/me` | **Aceptada** (ya decidida en la 2.1i; detalle de implementación) | §7 |
+| T-48 | Una sola recarga pasiva de `/auth/me`; el flujo no se reabre durante una comprobación de sesión; banner `absolute` en un `401` sin `details` solo si `expiresAt` ya pasó | **Aceptada** (Testing 2.8d, Cybersecurity 2.8c) | §5 |
+| T-45 / H-2.3-11 | `@mi-app/shared/zod-csp` como primer import; el cliente no importa valores de `@mi-app/shared/api` | **Aceptada** | §3.1 |
+| 2.2: subrutas | `@mi-app/shared/business-date`, `/api`, `/api-constants`, `/zod-csp`; `secondsUntil` en `/retry` | **Aceptada** (siguen la regla de §3.1) | §3.1 |
+| IMG-02 | Etapa de construcción Debian trixie (glibc) en vez de Alpine | **Ratificada** | §10 |
+| SEC-049, SEC-055 | Imágenes derivadas de `db` y `proxy` | **Aceptada** (ADR-003 y ADR-007 revisiones) | §1, §10 |
+
+### 18.2 Decisiones nuevas (D-2.5-03 c y d, SEC-043)
+
+| Origen | Decisión | Estado | Dónde |
+|---|---|---|---|
+| SEC-043 / D-2.5-03 d | Clave del límite por IP: IPv4 completa (también la incrustada en IPv6) y **/64** para IPv6. Despliegue publicado solo por IPv4 en DEMO/PROD para que una Wi-Fi IPv6 no comparta cupo. La poda nunca borra entradas bloqueadas ni con fallos en la ventana; con el mapa lleno, **falla cerrado** (`429`, 60 s) para claves nuevas | **Pendiente de implementar**: antes de HU-06 y como tarde antes de la puerta de la Etapa 3 | §7, §10 |
+| SEC-038 punto 4 / D-2.5-03 a | Cola del semáforo argon2 acotada a **32**; llena → `503 SERVICE_UNAVAILABLE` + `Retry-After: 5`, sin contar fallo; log `auth.verify.busy` | **Pendiente de implementar**, junto con SEC-043 | §5, §7 |
+| SEC-042 / D-2.5-03 c | Regla general de texto: `apiText` (NFC; rechaza `\p{Cc}` incluido C1, U+2028/2029, controles bidireccionales y sustitutos sueltos) para texto libre y el login; `apiName` (además `trim`, espacios colapsados y rechazo de `\p{Cf}`, `\p{Co}`, `\p{Cn}` y espacios Unicode distintos de U+0020) para nombres únicos y visibles | **Pendiente de implementar** con HU-05 (primera historia que crea nombres) | §5, §12 |
+
+### 18.3 Lo que genera esta revisión para otros agentes
+
+- **developer + testing:** SEC-043 y la cola del semáforo (18.2), con los
+  casos de "Cómo verificar" de la §7, antes de empezar HU-06. Toca código de
+  HU-01 (`rate-limit.ts`, `serialize.ts`, `verify-pin.ts`, rutas de `auth.ts`).
+- **developer + testing (HU-05):** `apiText` ampliado y `apiName` (§5); el
+  login hereda `apiText` y un C1 pasa de `401` a `400 format` (el test de
+  SEC-042 no fija ese caso).
+- **developer (HU-06):** igualar el tiempo del `approval` con el encargado
+  bloqueado (SEC-025, paso 3 de la §7); hoy el código lo deja para HU-06.
+- **developer (HU-07):** SEC-058 (`load()` comprueba el nombre tras el
+  turno) y revocar las sesiones al desactivar (no confiar solo en la guarda).
+- **infrastructure:** publicar `proxy` solo por IPv4 en DEMO y PROD y que el
+  nombre del servidor resuelva solo a IPv4 (§10); `APP_ENV`/`APP_VERSION`
+  (2.2d, ya en cola).
+- **monitoring:** catálogo de `docs/logging.md`: `auth.verify.busy`,
+  `result="busy"` en `auth_verifications_total`, campo `cause: 'capacity'`
+  en `auth.verify.rate_limited` (18.2), además de lo ya pedido en D-2.5-05.
+- **cybersecurity:** confirmar las decisiones de 18.2 (SEC-043 y cola del
+  semáforo; regla de texto, que sigue sus recomendaciones de la §6.9 punto 3
+  y las amplía para los nombres con `apiName`).
