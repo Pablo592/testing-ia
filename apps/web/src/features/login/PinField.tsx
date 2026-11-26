@@ -11,6 +11,13 @@ export function pinLabel(isManager: boolean): string {
   return isManager ? 'PIN (6 dígitos)' : 'PIN (4 a 6 dígitos)';
 }
 
+/** Etiqueta del campo en cada paso del cambio obligatorio del PIN (H-2.3-04, D-2.5-01). */
+export function changePinLabel(step: 1 | 2 | 3, isManager: boolean): string {
+  if (step === 1) return 'PIN actual (provisional)';
+  if (step === 2) return isManager ? 'PIN nuevo (6 dígitos)' : 'PIN nuevo (4 a 6 dígitos)';
+  return 'Repite el PIN nuevo';
+}
+
 export interface PinFieldProps {
   id: string;
   label: string;

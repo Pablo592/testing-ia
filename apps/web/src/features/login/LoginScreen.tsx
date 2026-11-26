@@ -22,6 +22,9 @@ export const BANNER_TEXT: Record<BannerKey, { text: string; icon: NoticeIcon }> 
 
 export const deviceText = (min: number) => `Demasiados intentos desde este dispositivo. Espera ${min} min.`;
 
+/** Tarjetas del esqueleto de carga de la rejilla (wireframe 01: 4 tarjetas). */
+const SKELETON_SLOTS = [0, 1, 2, 3] as const;
+
 /** El 429 del dispositivo afecta a todos los usuarios: se recuerda mientras dure. */
 let deviceBlockedUntil = 0;
 
@@ -93,6 +96,18 @@ export function LoginScreen() {
       if (retry !== undefined) clearTimeout(retry);
     };
   }, [blockDevice, reloadKey]);
+
+  // design-system §5.12: "Cargando usuarios…" solo si la rejilla tarda más de 1 s.
+  const [slowLoad, setSlowLoad] = useState(false);
+  const waitingUsers = users === null;
+  useEffect(() => {
+    if (!waitingUsers) {
+      setSlowLoad(false);
+      return;
+    }
+    const t = setTimeout(() => setSlowLoad(true), 1000);
+    return () => clearTimeout(t);
+  }, [waitingUsers]);
 
   // H-2.3-10: al volver a P-01 por un cierre del sistema, el foco va al banner
   // con el motivo (va justo antes del h1 en el orden de lectura).
@@ -239,9 +254,26 @@ export function LoginScreen() {
             </div>
             <h1 id="quien-eres">¿Quién eres?</h1>
             {users === null ? (
-              <p className="pin-help" role="status">
-                Cargando usuarios…
-              </p>
+              <>
+                {/* design-system §5.12: el texto solo aparece si la espera pasa de 1 s;
+                    la línea se reserva para que el esqueleto no salte al mostrarlo. */}
+                <p className="pin-help loading-text" role="status">
+                  {slowLoad ? 'Cargando usuarios…' : ''}
+                </p>
+                {/* H-2.3-07, H-2.6-02: esqueleto de 4 tarjetas con la forma de las reales
+                    (mismas clases de rejilla y tarjeta); decorativo para el lector de pantalla. */}
+                <ul className="user-grid" aria-hidden="true">
+                  {SKELETON_SLOTS.map((i) => (
+                    <li key={i}>
+                      <div className="user-card user-card-skeleton" data-testid="esqueleto-usuario" aria-hidden="true">
+                        <span className="user-initials" />
+                        <span className="user-name skeleton-line skeleton-line-name">{'\u00a0'}</span>
+                        <span className="user-role skeleton-line skeleton-line-role">{'\u00a0'}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </>
             ) : null}
             {users !== null && users.length === 0 && !loadFailed && !deviceBlocked ? (
               <p className="pin-help">Todavía no hay usuarios. Pide al encargado que te dé de alta.</p>

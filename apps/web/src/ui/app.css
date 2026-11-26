@@ -108,6 +108,16 @@
   .topbar-login {
     grid-template-areas: 'title user';
   }
+  /* H-2.6-01: el h1 ocupa siempre una línea para que la barra mida lo mismo en
+     todas las pantallas; si no cabe ("Resumen del día" junto a "Gestión") se
+     recorta con elipsis. El texto completo sigue en el DOM (nombre accesible). */
+  .topbar-title {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow-wrap: normal;
+    max-width: 100%;
+  }
   /* El panel se ancla a la barra (no al botón): ancho completo, justo debajo. */
   .menu {
     position: static;
@@ -247,6 +257,26 @@ main.content {
 }
 .user-role {
   color: var(--color-text-secondary);
+}
+/* Esqueleto de carga de la rejilla (§5.12, H-2.3-07): la misma caja que una
+   tarjeta real, con barras en lugar del texto; sin animación. */
+.user-card-skeleton {
+  border-color: var(--color-border);
+  cursor: default;
+}
+.skeleton-line {
+  color: transparent;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(var(--color-surface-muted), var(--color-surface-muted)) left center / 100% 60% no-repeat;
+}
+.skeleton-line-name {
+  width: 70%;
+}
+.skeleton-line-role {
+  width: 45%;
+}
+.loading-text {
+  min-height: var(--text-base-lh);
 }
 .write-user {
   display: flex;

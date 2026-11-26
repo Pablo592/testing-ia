@@ -15,9 +15,9 @@ import { validateBody } from '../validate.ts';
 import { newSessionToken, tokenHash } from '../../modules/auth/tokens.ts';
 import type { VerifyFailure } from '../../modules/auth/verify-pin.ts';
 
-/** Clave del cerrojo por cuenta de verifyPin (SEC-038): el nombre de login normalizado. */
-function accountKey(name: string): string {
-  return name.toLowerCase();
+/** Clave del cerrojo por cuenta de verifyPin (SEC-038, SEC-047) para una cuenta conocida. */
+function userKey(userId: string): string {
+  return `user:${userId}`;
 }
 
 const MSG = {
@@ -87,15 +87,35 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
       const ua = uaFamily(request);
       const token = newSessionToken();
       const sessionId = randomUUID();
+      // SEC-047: la cuenta (y su carril del cerrojo) se resuelve con el mismo
+      // lower() de PostgreSQL que la búsqueda; todas las variantes del nombre que la
+      // BD considera iguales comparten `user:<id>`, también con POST /auth/pin.
+      let resolvedId: string | null = null;
+      const resolveKey = async (): Promise<string> => {
+        const row = await db
+          .selectNoFrom((eb) => [
+            sql<string>`lower(${body.name})`.as('norm'),
+            eb
+              .selectFrom('users')
+              .select('id')
+              .where(sql`lower(name)`, '=', sql`lower(${body.name})`)
+              .limit(1)
+              .as('id'),
+          ])
+          .executeTakeFirst();
+        resolvedId = row?.id ?? null;
+        return resolvedId ? userKey(resolvedId) : `unknown:${row?.norm ?? ''}`;
+      };
+      const loginColumns = ['id', 'name', 'role', 'pin_hash', 'locked_until', 'locked_manual', 'active', 'must_change_pin'] as const;
       // SEC-038: la cuenta se lee en su turno del cerrojo y la sesión se crea en la
       // misma transacción que confirma que sigue sin bloqueo.
       const outcome = await auth.verifyPin({
-        accountKey: accountKey(body.name),
+        accountKey: resolveKey,
         load: () =>
-          db
-            .selectFrom('users')
-            .select(['id', 'name', 'role', 'pin_hash', 'locked_until', 'locked_manual', 'active', 'must_change_pin'])
-            .where(sql`lower(name)`, '=', sql`lower(${body.name})`)
+          (resolvedId
+            ? db.selectFrom('users').select(loginColumns).where('id', '=', resolvedId)
+            : db.selectFrom('users').select(loginColumns).where(sql`lower(name)`, '=', sql`lower(${body.name})`)
+          )
             .executeTakeFirst()
             .then((u) => u ?? null),
         pin: body.pin,
@@ -239,7 +259,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
       // SEC-038: currentPin se verifica en el turno de la cuenta y el PIN nuevo se
       // guarda en la misma transacción que confirma que la cuenta sigue sin bloqueo.
       const outcome = await auth.verifyPin({
-        accountKey: accountKey(s.name),
+        accountKey: userKey(s.userId),
         load: () =>
           db
             .selectFrom('users')

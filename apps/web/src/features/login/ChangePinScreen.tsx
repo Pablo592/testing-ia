@@ -8,7 +8,7 @@ import { api, retryAfterOf } from '../../api/client.ts';
 import { end, loadMe, showToast, useSession } from '../../session/store.ts';
 import { ErrorText, Keypad, Notice, useNow } from '../../ui/components.tsx';
 import { pinRuleHelp, pinRuleMessage } from '../pin/pin-messages.ts';
-import { PIN_MAX, PinField, pinLabel } from './PinField.tsx';
+import { changePinLabel, PIN_MAX, PinField } from './PinField.tsx';
 import { deviceText } from './LoginScreen.tsx';
 
 type Step = 1 | 2 | 3;
@@ -146,7 +146,7 @@ export function ChangePinScreen() {
         </p>
         <PinField
           id="pin-cambio"
-          label={pinLabel(isManager)}
+          label={changePinLabel(step, isManager)}
           value={value}
           disabled={disabled}
           inputRef={inputRef}

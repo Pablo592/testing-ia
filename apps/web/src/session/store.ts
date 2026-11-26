@@ -62,6 +62,10 @@ let lastExpiryCheck = 0;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let ending = false;
 
+/** Recarga pasiva de GET /auth/me en curso (T-48) y si alguien pidió otra mientras tanto. */
+let meInFlight: Promise<boolean> | undefined;
+let meRequestedAgain = false;
+
 const events = new EventsClient({
   onReconnected: () => {
     void loadMe(false);
@@ -71,6 +75,16 @@ const events = new EventsClient({
   onRevoked: (reason) => end(bannerFromRevoked(reason)),
   onSessionUpdated: () => void loadMe(false),
   onRejected: () => void loadMe(false),
+  sessionCheck: () => {
+    if (meInFlight) return meInFlight;
+    // Caducidad absoluta ya pasada según el reloj del servidor: primero GET /auth/me
+    // (con cookie, su 401 trae `reason: absolute`) y solo después el flujo. Como
+    // mucho una vez cada 30 s (si el servidor dice que sigue viva, se abre el flujo).
+    const now = Date.now();
+    if (!pastAbsoluteExpiry() || now - lastExpiryCheck < EXPIRY_CHECK_EVERY_MS) return undefined;
+    lastExpiryCheck = now;
+    return loadMe(false);
+  },
 });
 
 function bannerFromRevoked(reason: string): BannerKey | null {
@@ -87,9 +101,25 @@ export function bannerFromDetails(details: unknown): BannerKey | null {
   return 'desconocido';
 }
 
+/** La caducidad absoluta de la sesión actual ya ha pasado (hora del servidor). */
+function pastAbsoluteExpiry(): boolean {
+  return state.status === 'authenticated' && !!state.me && Date.parse(state.me.session.expiresAt) - (Date.now() + skewMs) <= 0;
+}
+
+/**
+ * Banner de un 401 (T-48). Con `details`, manda el servidor. Sin `details` (la
+ * petición salió sin cookie porque otro 401 —p. ej. el del flujo SSE, cuyo cuerpo
+ * no se puede leer— ya la borró) y con la caducidad absoluta ya pasada, el motivo
+ * es esa caducidad. Con la sesión aún vigente, un 401 sin `details` no da banner.
+ */
+export function bannerFor401(details: unknown, expired: boolean): BannerKey | null {
+  if (details === undefined || details === null) return expired ? 'absolute' : null;
+  return bannerFromDetails(details);
+}
+
 setClientHandlers({
   onUnauthenticated: (details) => {
-    if (state.status === 'authenticated' || state.status === 'booting') end(bannerFromDetails(details));
+    if (state.status === 'authenticated' || state.status === 'booting') end(bannerFor401(details, pastAbsoluteExpiry()));
   },
   onForbidden: () => {
     set({ forbiddenPath: window.location.pathname });
@@ -181,8 +211,40 @@ function startChannels(me: MeResponse, fresh: boolean): void {
   else events.stop();
 }
 
-/** GET /auth/me (siempre pasiva, SEC-030). `first`: fija el desfase del reloj. */
-export async function loadMe(first: boolean): Promise<boolean> {
+/**
+ * GET /auth/me (siempre pasiva, SEC-030). `first`: fija el desfase del reloj.
+ *
+ * T-48 (docs/testing.md §14.8, opción 1): solo hay una recarga pasiva a la vez.
+ * Si llega otra petición (p. ej. `onRejected` del flujo SSE, cuyo 401 ya ha
+ * borrado la cookie) mientras una está en curso, espera su resultado en lugar de
+ * lanzar un segundo GET /auth/me sin cookie, cuyo 401 sin `details` volvería a
+ * P-01 sin el banner del motivo. Si la primera confirma la sesión, se repite una
+ * vez para no quedarse con datos anteriores a lo que motivó la segunda.
+ */
+export function loadMe(first: boolean): Promise<boolean> {
+  if (first) return fetchMe(true);
+  if (meInFlight) {
+    meRequestedAgain = true;
+    return meInFlight;
+  }
+  const run = (async () => {
+    try {
+      let ok = await fetchMe(false);
+      while (meRequestedAgain && state.status === 'authenticated') {
+        meRequestedAgain = false;
+        ok = await fetchMe(false);
+      }
+      return ok;
+    } finally {
+      meRequestedAgain = false;
+      meInFlight = undefined;
+    }
+  })();
+  meInFlight = run;
+  return run;
+}
+
+async function fetchMe(first: boolean): Promise<boolean> {
   const r = await api<MeResponse>('GET', '/auth/me', { passive: true });
   if (!r.ok || !r.data) return false;
   if (state.status === 'anonymous' && !first) return false;

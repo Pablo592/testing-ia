@@ -50,7 +50,8 @@ export type VerifyOutcome = { ok: true } | VerifyFailure;
  * Un intento de PIN completo (SEC-038, RS-05b). Todo ocurre dentro del
  * cerrojo de la cuenta (`accountKey`), en este orden:
  *  1. reserva síncrona del cupo de IP (y de sesión en aprobaciones), antes de cualquier `await`;
- *  2. espera del turno de la cuenta y `load()` con el estado de bloqueo ACTUAL;
+ *  2. resolución de la clave de la cuenta (`user:<id>`, SEC-047), espera de su
+ *     turno y `load()` con el estado de bloqueo ACTUAL;
  *  3. cuenta bloqueada → rechazo sin hash ni conteo;
  *  4. hash; si falla, se anota en IP, sesión y cuenta (escala 5/10/15/20);
  *  5. si acierta, `prepare()` (p. ej. hash del PIN nuevo) y una transacción que
@@ -60,8 +61,13 @@ export type VerifyOutcome = { ok: true } | VerifyFailure;
  *     bloqueó entretanto, no se crea sesión ni se cambia nada: `423`.
  */
 export interface PinAttempt<U extends PinTarget, P, T> {
-  /** Serializa los intentos de una misma cuenta (nombre de login normalizado). */
-  accountKey: string;
+  /**
+   * Carril del cerrojo de la cuenta (SEC-047): `user:<id>` de la cuenta, resuelto
+   * con la misma condición que la búsqueda (`lower(name) = lower($1)` de
+   * PostgreSQL), nunca con `toLowerCase()` de JavaScript. Puede ser una función
+   * asíncrona: se resuelve DESPUÉS de la reserva síncrona del cupo de IP.
+   */
+  accountKey: string | (() => Promise<string>);
   load(): Promise<U | null>;
   pin: string;
   ctx: VerifyContext;
@@ -251,7 +257,8 @@ export function createAuthModule(deps: AuthModuleDeps): AuthModule {
     };
 
     try {
-      return await accounts.run(attempt.accountKey, async () => {
+      const key = typeof attempt.accountKey === 'string' ? attempt.accountKey : await attempt.accountKey();
+      return await accounts.run(key, async () => {
         // 3. Estado de la cuenta leído en su turno (no el de antes de esperar).
         const target = await attempt.load();
         const turnMs = clock.now().getTime();

@@ -11,6 +11,14 @@ export interface EventsHandlers {
   onSessionUpdated(): void;
   /** El servidor rechazó el flujo (p. ej. 401): hay que comprobar la sesión. */
   onRejected(): void;
+  /**
+   * T-48: antes de REABRIR el flujo (vigilante o reintento), la comprobación de
+   * sesión en curso que hay que esperar, si la hay. El `401` de `/events` borra la
+   * cookie y un `EventSource` no puede leer su motivo: si se reabre mientras
+   * `GET /auth/me` está en curso (o con la sesión ya caducada), ese GET sale sin
+   * cookie y la vuelta a P-01 pierde el banner.
+   */
+  sessionCheck?(): Promise<unknown> | undefined;
 }
 
 const WATCHDOG_MS = 5000;
@@ -22,6 +30,8 @@ export class EventsClient {
   private lastMessage = 0;
   private connectedOnce = false;
   private stopped = true;
+  /** Cambia en cada start/stop: una reapertura aplazada de una vuelta anterior no abre nada. */
+  private epoch = 0;
   private readonly handlers: EventsHandlers;
 
   constructor(handlers: EventsHandlers) {
@@ -31,6 +41,7 @@ export class EventsClient {
   start(): void {
     if (!this.stopped) return;
     this.stopped = false;
+    this.epoch += 1;
     this.connectedOnce = false;
     this.open();
     this.watchdog = setInterval(() => {
@@ -41,6 +52,7 @@ export class EventsClient {
 
   stop(): void {
     this.stopped = true;
+    this.epoch += 1;
     if (this.watchdog !== undefined) clearInterval(this.watchdog);
     if (this.retry !== undefined) clearTimeout(this.retry);
     this.watchdog = undefined;
@@ -54,7 +66,25 @@ export class EventsClient {
     this.retry = undefined;
     this.es?.close();
     this.es = undefined;
-    this.open();
+    this.openWhenChecked();
+  }
+
+  /** Reabre el flujo cuando no hay ninguna comprobación de sesión pendiente (T-48). */
+  private openWhenChecked(): void {
+    if (this.stopped) return;
+    const pending = this.handlers.sessionCheck?.();
+    if (!pending) {
+      this.open();
+      return;
+    }
+    const epoch = this.epoch;
+    // Mientras se espera, el vigilante no vuelve a disparar.
+    this.lastMessage = Date.now();
+    const resume = () => {
+      if (this.stopped || this.epoch !== epoch || this.es !== undefined) return;
+      this.openWhenChecked();
+    };
+    pending.then(resume, resume);
   }
 
   private open(): void {
@@ -95,7 +125,7 @@ export class EventsClient {
         if (this.retry !== undefined) clearTimeout(this.retry);
         this.retry = setTimeout(() => {
           this.retry = undefined;
-          this.open();
+          this.openWhenChecked();
         }, 3000);
       }
     };
