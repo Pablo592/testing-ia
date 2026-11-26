@@ -167,3 +167,45 @@ Es el resto de H-2.3-07 (ver arriba), registrado aquí solo como seguimiento: no
 
 ### Limitaciones
 (a) API simulada, igual que en la 2.3. (b) Lighthouse no se ejecutó (sin red); carga local sin red: FCP 60 ms, 3 recursos estáticos más 2 llamadas a la API. (c) Teclado virtual del sistema y lector de pantalla reales: pendientes de la tablet y de la demo (Etapa 4). (d) Arnés: `docs/ux/arnes-2.3/harness.mjs` con una sección nueva de verificación 2.6 (menú, foco, etiquetas) que quedó en el scratchpad; capturas en `docs/ux/capturas-2.6/`.
+
+---
+
+## 2.8c Revisión UX de la entrega 2.8b (commit fe5c5d5, con los tests de la 2.8d)
+
+**Alcance:** etiquetas por paso del cambio de PIN, esqueleto de carga de P-01, `h1` a 375 px, T-48 y regresiones de HU-01. **Imagen:** `localhost/mi-app@sha256:f1e3f15e…` (la SPA se extrajo de la imagen y se sirvió con el arnés de la 2.3 y una API simulada; Chromium, 375/768/1280 px, y 320 px para el `h1`). Capturas en `docs/ux/capturas-2.8c/`. **Resultado: 0 altos, 0 medios abiertos, 1 bajo nuevo (H-2.8c-01).**
+
+### Estado de los hallazgos anteriores
+| ID | Severidad | Estado | Evidencia |
+|---|---|---|---|
+| H-2.3-04 | baja | **Cerrado** (queda la confirmación con VoiceOver/TalkBack reales en la demo) | Textos medidos en el DOM, en camarero y encargado, a 375 y 1280 px: paso 1 "PIN actual (provisional)"; paso 2 "PIN nuevo (4 a 6 dígitos)" (camarero) / "PIN nuevo (6 dígitos)" (encargado); paso 3 "Repite el PIN nuevo". La etiqueta es visible (`label[for]`), `getByLabel(..., exact)` da 1 elemento y se conservan `role="status"` ("Paso 2 de 3 · PIN nuevo") y `aria-describedby` (regla del PIN). `a11y` 9/9. Capturas: `E-paso1-manager-m375.png`, `E-paso2-manager-m375.png`, `E-paso3-waiter-m375.png`. |
+| H-2.3-07 | baja | **Cerrado** | 4 tarjetas esqueleto (`data-testid="esqueleto-usuario"`), `aria-hidden`, sin animación (0 elementos con `animation-name`), borde `--color-border` (#cbd5e1; las reales usan #64748b), mismo alto que una tarjeta real (134 px) y misma rejilla a 375, 768 y 1280 px. Al llegar los datos no hay salto vertical (la línea de texto reserva 24 px). Capturas: `B-esq-0300ms-m375.png`, `B-esq-0300ms-t1280.png`, `B-real-m375.png`. |
+| H-2.6-02 | baja | **Cerrado** | Es el mismo punto que H-2.3-07. A los 300 ms el texto está vacío; a los 1,4 s dice "Cargando usuarios…" en `role="status"` (`B-esq-1400ms-m375.png`), como pide §5.12. |
+| H-2.6-01 | baja | **Parcial: la barra ya no cambia de altura, pero el título se corta mal. Pasa a H-2.8c-01** | La barra mide 113 px en las 5 pantallas del encargado a 375 px (antes 121 px en `/resumen`) y 65 px a 768 y 1280 px; sin desplazamiento horizontal. Pero el `h1` de `/resumen` muestra "Resumen del …" (ver abajo). |
+
+Notas del esqueleto: el contraste del borde del esqueleto (#cbd5e1 sobre blanco, aprox. 1,5:1) no incumple WCAG 1.4.11 porque no es un control ni transmite información (es decorativo y está oculto al lector de pantalla); precisamente por eso es más claro que el de las tarjetas reales, y no se confunde con ellas. El anuncio "Cargando usuarios…" queda en `role="status"`.
+
+### Hallazgo nuevo
+
+#### H-2.8c-01 (baja): el `h1` de "Resumen del día" a <= 375 px se corta justo antes de la palabra clave
+- **Pantalla:** `/resumen` del encargado a 375 px y a 320 px. **Capturas:** `capturas-2.8c/C-resumen-m375.png`, `C-resumen-320.png` (a 1280 px, `C-resumen-t1280.png`, se ve completo).
+- **Medido:** a 375 px el `h1` ocupa 175 px y necesita 176: la elipsis se come "día" y se ve **"Resumen del …"**; a 320 px, 120 px de 176, se ve "Resumen…". El texto completo sigue en el DOM y en el `<title>` ("Resumen del día · Café · Toma de pedidos").
+- **Criterio:** Nielsen 1 y 2 (visibilidad y lenguaje del usuario): el título de la pantalla es la señal principal de dónde está el usuario y se queda en una frase incompleta; `design-system.md` §5.11 fija el título "Resumen del día". Los demás títulos ("Pedidos", "Cola", "Menú", "Personal") caben. Es solo estético y no afecta a la función ni al lector de pantalla, por eso es baja. Lo que se ve, "Resumen del …", no cabe como solución definitiva.
+- **Decisión de UX:** la elipsis vale como red de seguridad (evita el salto de altura), pero no como solución para el título normal. Prefiero un título visible corto a <= 767 px: **"Resumen"**, y mantener el nombre completo "Resumen del día" para el lector de pantalla y el `<title>`.
+- **Corrección propuesta (developer):** en `h1` de `/resumen`, `Resumen<span className="topbar-title-extra"> del día</span>`, con `.topbar-title-extra` visualmente oculto (técnica `sr-only`: clip, no `display:none`, para que el nombre accesible siga siendo "Resumen del día") solo a <= 767 px. Conservar el `nowrap` y la elipsis como respaldo. Verificar: a 375 y 320 px el `h1` se ve "Resumen", `getByRole('heading', { name: 'Resumen del día' })` sigue encontrándolo y la altura de la barra sigue siendo la misma. Hay que cuidar que el test de la 2.8a (`h1` en 1 línea, altura igual) siga pasando; `design-system.md` §5.11 se actualizará con esta excepción cuando se acepte.
+- **Nota para testing:** si se aplica, el test que busca el texto visible "Resumen del día" a 375 px debe usar el nombre accesible, no el texto visible.
+
+### T-48 (banner "caducada por duración máxima" en una carrera)
+Sin problema de UX. El banner `absolute` solo sale si el reloj del servidor dice que `expiresAt` ya pasó, así que el motivo mostrado es verdadero; con la sesión vigente un `401` sin `details` no muestra ningún banner (no se inventa un motivo). La espera previa a reabrir el flujo SSE no tiene ningún efecto visible. Residual aceptable: si coincidieran una caducidad absoluta y un cierre por inactividad o revocación, se mostraría el de duración máxima; es un caso muy poco probable y el mensaje sigue siendo cierto.
+
+### Regresiones de HU-01
+- **axe-core** (`wcag2a/aa`, `wcag21a/aa`, `wcag22aa`, `best-practice`): 0 violaciones en los estados revisados: cambio de PIN en los 3 pasos (camarero y encargado, 375 px), esqueleto de carga (375 y 1280 px) y `/resumen` (375 y 1280 px). `sh tests/run.sh a11y`: 9/9.
+- **`sh tests/run.sh visual`:** 11/11. Regeneró 3 capturas de `tests/screenshots/HU-01/` (`P-01-cambio-pin-1024.png`, `P-01-paso2-1440.png`, `P-01-paso2-768.png`) y se restauraron con `git restore`.
+- **Sin desplazamiento horizontal** en `/pedidos`, `/cola`, `/menu`, `/personal` y `/resumen` a 375, 768 y 1280 px (y `/resumen` a 320 px).
+- **Un solo botón principal** por pantalla y etiquetas con verbo, sin cambios. El foco tras "Siguiente" se mide en el siguiente cuadro de animación (`requestAnimationFrame`): al medirlo de inmediato queda en el botón, igual que en la 2.3; no es una regresión y lo cubre el test a11y de teclado.
+- **Estados** vacío, cargando, error y éxito de P-01 siguen presentes; el de cargando ahora tiene la forma del contenido.
+
+### Pendiente para la demo (Etapa 4)
+Confirmar con VoiceOver y TalkBack reales que cada paso del cambio de PIN lee su etiqueta propia ("PIN actual (provisional)", etc.) y que el esqueleto no se anuncia (`aria-hidden`); H-2.3-02 en la tablet real sigue pendiente (ya registrado).
+
+### Limitaciones
+API simulada (la contrato real es de testing); solo Chromium; Lighthouse no se ejecutó (sin red, como en la 2.3). Arnés en el scratchpad de la sesión (no en el repositorio).
