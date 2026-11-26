@@ -40,6 +40,14 @@
 > save`, `readelf`/`nm` de la raíz exportada, Node de la imagen endurecido,
 > red `/29` de prueba) (§6.7). SEC-028 pasa a corregido. Hallazgos nuevos
 > SEC-033 (baja, con EXC-01), SEC-034 (media), SEC-035..SEC-037 (baja).
+> Revisión 2.3, 2026-11-25 (Etapa 2, HU-01): entrega del developer (commit
+> `4460e09`, tarea 2.2): `apps/api`, `apps/web`, `packages/shared`, migración
+> 0001, comandos, build e imagen real, con pruebas propias en Podman rootless
+> (pila de integración de `compose.test.yaml` con scripts propios montados en
+> `ro`, suites unitaria y de seguridad, `pnpm audit`, Trivy 0.76.2 sobre la
+> imagen, `readelf`/`nm`) (§6.8). SEC-029, SEC-030, SEC-031 y SEC-032 pasan a
+> verificado; SEC-028 confirmado con la imagen real. Hallazgos nuevos
+> **SEC-038 (alta, bloquea)** y SEC-039..SEC-046 (baja).
 > Entradas: `docs/historias/` (README + HU-01..HU-09, IDs estables `CA-`),
 > `docs/arquitectura.md`, `docs/decisiones/ADR-001..008`, `docs/ux/`,
 > `docs/infraestructura.md`, `compose.dev.yaml`, `compose.test.yaml`,
@@ -74,7 +82,7 @@
 3. Actores de amenaza
 4. Superficies de ataque y fronteras de confianza
 5. Amenazas (STRIDE)
-6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c; §6.5, revisión 2.1f; §6.6, revisión 2.1k; §6.7, revisión 2.1m)
+6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c; §6.5, revisión 2.1f; §6.6, revisión 2.1k; §6.7, revisión 2.1m; §6.8, revisión 2.3)
 7. Requisitos de seguridad verificables (para Testing)
 8. Revisión de la arquitectura frente a la política de contenedores (§3)
 9. Hallazgos (SEC-xxx)
@@ -1277,6 +1285,191 @@ esquema en `compose.demo.yaml` y Quadlet cuando existan.
 cubiertas por EXC-01, pendiente de ratificación humana en la puerta de la
 Etapa 2).
 
+### 6.8 Revisión 2.3 (2026-11-25): entrega de HU-01 del developer (commit `4460e09`, tarea 2.2)
+
+Alcance: `apps/api` (config, `buildApp`, guarda, rutas de auth, `verifyPin`,
+límites, hasher, tokens, logger, métricas, hub SSE, SPA, `/healthz`,
+comandos), `apps/web` (cliente HTTP, sesión, SSE, P-01, cambio de PIN),
+`packages/shared`, migración `0001_hu01_auth`, `build.mjs`,
+`pnpm-workspace.yaml`, `pnpm-lock.yaml` e imagen real
+`localhost/mi-app:69e823f40ad7-sucio` (`sha256:42df4724…`).
+
+**Pruebas propias** (todas en Podman rootless, sin modificar código ni tests;
+scripts en el scratchpad de la sesión, `sec23/`):
+(a) pila de integración de `compose.test.yaml` (BD, `migrate`,
+`migrate-template`, `app`) y un script propio montado en `ro` dentro de
+`runner-integration`, con `buildApp` en proceso sobre una BD clonada de
+`app_template` (`montarApp({ bdAislada: true })`): ráfagas concurrentes de
+login y de `currentPin` (SEC-038), centinela de PIN en peticiones válidas e
+inválidas, `Cache-Control`, métodos y rutas no declarados, SSE tras la
+inactividad y tope global de flujos; (b) suite unitaria (171/171) y de
+seguridad (39/39) con los arneses del developer; (c) `parseTrustedProxies` y
+`buildApp` con casos extra de SEC-029 en un contenedor sin red; (d)
+`pnpm audit --prod` y `pnpm audit` (pnpm 12.21.0) en contenedor endurecido
+con el repositorio en `ro`; (e) Trivy 0.76.2 (por digest) sobre `podman
+save` de la imagen real con el fichero de EXC-01; (f) `readelf`/`nm` y
+`grep` sobre la raíz exportada de la imagen (condiciones 3 y 4 de SEC-033);
+(g) `find`/`realpath` de SEC-026 sobre el árbol actual.
+
+**1. SEC-029, SEC-030, SEC-031 y SEC-032: VERIFICADOS.**
+- SEC-029: `parseTrustedProxies` y `validateTrustedProxyList`
+  (`apps/api/src/config.ts:97-129`) aplican las reglas 1–5 de §10.1;
+  `buildApp` valida igual y pasa a Fastify el *array* o `false`
+  (`apps/api/src/app.ts:68`, `:106`). Prueba propia: `" "`, `10.89.240.2 `,
+  `010.89.240.2`, `fe80::1%eth0`, `[::1]`, `::/119`, `::ffff:10.0.0.0/104`,
+  5 elementos, `1.2.3.4\n`, `0x0a.89.240.2`, `1e1.1.1.1` y dígitos no ASCII →
+  `ConfigError` sin el valor en el mensaje; `::ffff:10.89.240.0/120` y 4
+  elementos → arranca; `buildApp` con `['uniquelocal']`, `'uniquelocal'`,
+  `true`, `['10.0.0.0/8']` y `[' 10.89.240.2']` → `ConfigError`. Ninguna
+  lógica usa `request.host`, `hostname`, `protocol`, `ips` ni
+  `X-Forwarded-*` (`grep` en `apps/api/src`). Faltan en los tests algunos de
+  estos casos, entre ellos el de `buildApp` (SEC-045).
+- SEC-030: la guarda solo omite `touch` con `x-activity === 'passive'` exacto
+  (`apps/api/src/http/guard.ts:215`) y hace antes todas las comprobaciones de
+  sesión; en la SPA solo `loadMe` (`GET /auth/me`) usa `{ passive: true }`
+  (`apps/web/src/session/store.ts`) y ningún *handler* de gesto. Integración
+  con variantes `Passive`, `PASSIVE`, `passive, x`, `passive;x` y lectura de
+  `last_activity_at` en verde.
+- SEC-031: la guarda responde `404 NOT_FOUND` con `request.is404` bajo
+  `/api/` y en cualquier método que no sea `GET`/`HEAD`, antes del analizador
+  de cuerpo y sin BD ni `Set-Cookie` (`guard.ts:142-147`); el `notFoundHandler`
+  solo sirve la SPA con `GET`/`HEAD` fuera de `/api/` (`app.ts:224-233`).
+  Prueba propia: `OPTIONS`/`PUT`/`GET` sobre `/api/v1/auth/login`, `TRACE /`,
+  `POST /pedidos` → `404` JSON; suite de seguridad RS-18 en verde. Pendiente
+  solo la documentación de §5/§5.2 (software-engineer, tarea 2.2c).
+- SEC-032: al primer `401`, `session.revoked`, inactividad o *logout*,
+  `end()`/`stopChannels()` hacen `abortAll()` (con número de generación que
+  descarta respuestas tardías), `events.stop()` (cierra el `EventSource`, el
+  vigilante y el reintento) y paran el temporizador antes de pasar a P-01
+  (`apps/web/src/session/store.ts`, `api/client.ts`, `realtime/events.ts`);
+  el *logout* por inactividad espera su respuesta antes de mostrar P-01; no
+  hay `sendBeacon` ni `keepalive` en `apps/web`. El e2e de canales cerrados
+  está en verde; falta el e2e con respuesta retrasada y login durante el
+  retraso que pedía "Cómo verificar" (SEC-045, no impide verificar: el código
+  cumple).
+
+**2. `verifyPin`: el orden y las reglas están bien en secuencia, pero NO
+resiste concurrencia (SEC-038, alta).** En secuencia cumple §7 y T-20:
+límite por IP antes del hash, límite por sesión solo en `approval`, bloqueo
+sin hash ni conteo, hash ficticio si el usuario no existe, contador del
+usuario con la escala 5/10/15/20 en una transacción y revocación de todas
+las sesiones al llegar a `locked_manual` (SEC-016, RS-16b). argon2id
+`m=19456, t=2, p=1` con el *pepper* como `secret` (RS-08); el *pepper* se lee
+de fichero, exige ≥ 32 bytes y sin él `main` no arranca; la comparación es
+`crypto.timingSafeEqual` dentro de `argon2.verify` (argon2 0.45.2). Solo el
+módulo `auth` recibe el hasher (`app.ts:125-132`, `commands/index.ts:47`;
+RS-16c revisado a mano, sin test automático: SEC-045). **Pero** las
+comprobaciones de IP y de bloqueo se hacen con datos leídos antes del hash y
+los fallos se anotan después: con peticiones simultáneas todas pasan las
+comprobaciones. Prueba propia (detalle en SEC-038): 300 logins simultáneos
+desde una IP → 300 verificaciones argon2, ningún `429` ni `423`, y el PIN
+correcto (el último de la ráfaga) → `200` con cookie aunque la cuenta ya
+estaba en `locked_manual`; con 3000, 516 verificaciones en una ráfaga (el
+diseño admite 10 por IP en 10 min y 5 por cuenta antes del bloqueo). Igual
+con `currentPin`: el PIN provisional se cambió (`204`) en una cuenta ya en
+`locked_manual`. Con la rejilla pública de nombres, cada ráfaga prueba ~5 %
+de los PIN de 4 dígitos de un usuario: es la fuerza bruta que SEC-001 y
+SEC-016 cerraron. **Bloquea la puerta.**
+
+**3. Sesiones: CORRECTO, con un hueco en SSE (SEC-039, baja).** Cookie
+`__Host-sid=…; Path=/; Secure; HttpOnly; SameSite=Strict`, sin `Domain` ni
+`Max-Age` (comprobado en la respuesta real; RS-10, SEC-021); token de 256
+bits de `randomBytes`, nuevo en cada login, en BD solo SHA-256 (RS-11);
+caducidad absoluta `now + SESSION_MAX_HOURS` y por inactividad
+`now >= last_activity_at + 15 min`, comprobadas en cada petición, con
+exención solo para `kitchen` con flujo abierto (RS-12, RS-13); revocación
+por *logout*, cambio del PIN provisional (resto de sesiones) y bloqueo
+indefinido (todas), con `session.revoked` y cierre del flujo tras el
+`COMMIT` (RS-14). El `401` lleva exactamente las formas de
+`UnauthenticatedDetails` y, si la petición traía la cookie, el `Set-Cookie`
+de borrado idéntico (`app.ts:201`). Desviación `revoked_reason`/
+`expired_reason` (D-2.2-06 a): **aprobada**; hace el motivo del `401`
+estable y registra `auth.session.expired` una vez, sin datos sensibles. Hueco:
+una sesión caducada por inactividad deja su flujo SSE abierto y recibiendo
+eventos hasta las 12 h (SEC-039).
+
+**4. `Origin`/CSRF, denegación por defecto y RS-18: CORRECTO.** Una sola
+guarda `onRequest` con el orden 404 → `internal` → `Origin` → público →
+sesión → PIN provisional → permiso → `provisionalPinOnly` → actividad
+(`guard.ts:138-216`). `Origin` exacto contra `PUBLIC_ORIGIN` en
+`POST/PUT/PATCH/DELETE`, también en el login (RS-24); solo
+`application/json` (resto `415`); sin `permission` → `403` (RS-17; además un
+`onRoute` rechaza rutas con más de una declaración). La tabla de
+`packages/shared/src/permissions.ts` coincide con `docs/permisos.md` §3.2.
+Desviación "guarda en un solo hook": **aprobada** (el orden es el de §5 y no
+deja huecos entre hooks). Solo `/healthz` y `/readyz` son `internal` (solo
+`GET`, sin datos; Caddy los responde con `404`).
+
+**5. Logs y métricas: CORRECTO.** Doble barrera: `redact` con las rutas fijas
+(incluidos `confirmPin`, `__Host-sid`, `pin_hash`, `pepper`) y regla `/pin/i`
+recursiva en `formatters.log`, `bindings` y el serializador de `err`
+(`apps/api/src/logging/logger.ts`); no se registran cuerpos, cabeceras ni el
+nombre de login. Centinela `908172` en `pin`, `extra.PIN`, JSON roto,
+`text/plain`, número, nombre, PIN de 76 caracteres, *query string* y ruta
+inexistente: **0** apariciones en logs y respuestas salvo cuando el propio
+cliente lo manda como **nombre de una clave** desconocida (sale en
+`issues[].path`; es dato elegido por quien envía, no un valor, y se acepta).
+Métricas con etiquetas acotadas (plantilla de ruta, `not_found`, enums) y
+series a 0 desde el arranque (RS-47). Ningún secreto llega a logs ni
+respuestas: `app.started` solo lista nombres de variables; `ConfigError`
+nunca incluye el valor.
+
+**6. Cabeceras y CSP: CORRECTO en Caddy; `Cache-Control` incompleto
+(SEC-041, baja).** `deploy/proxy/Caddyfile:23-36` tiene exactamente las de
+RS-26; la SPA construida no tiene *scripts* ni estilos en línea
+(`index.html` solo enlaza `/assets/*`) y el código no usa `style=`,
+`innerHTML`, `dangerouslySetInnerHTML`, `eval` ni almacenamiento local, así
+que la CSP estricta no rompe nada (los e2e pasan a través de Caddy). Falta
+`Cache-Control: no-store` en la mayoría de respuestas de `/api` (RS-27).
+
+**7. Dependencias: CORRECTO en producción; dos críticas en las de
+desarrollo (SEC-044, baja en contexto).** `pnpm audit --prod`: 0
+vulnerabilidades (85 dependencias). `pnpm audit` completo: `tinypool` 1.1.1
+(2 críticas, GHSA-5gmw-xhrv-c9v3 y GHSA-85c8-ppgw-ccpr) y `vitest`/`@vitest/mocker`
+3.2.7 (3 moderadas), solo en `tests/`. Lockfile: solo registro npm y enlaces
+del *workspace*, 261 integridades `sha512`, sin `git+` ni *tarballs*.
+`allowBuilds` limitado a `argon2` y `esbuild`. Desviación
+`hoistWorkspacePackages: false`: **aprobada** (coherente con SEC-026: no
+crea el enlace a `tests/` en `node_modules/.pnpm/node_modules`).
+
+**8. Resto de desviaciones declaradas.** `role text + CHECK` en lugar de
+`enum`: **aprobada** (mismo efecto, `CHECK` en BD y validación en servidor).
+PIN de login y `currentPin` de 1–64 caracteres (`400 max_length` fuera):
+**aprobada** (acota la entrada antes del hash; las reglas de composición solo
+se aplican al crear un PIN). Cierre del flujo SSE más antiguo al abrir el
+tercero de una sesión: **aprobado**, pero falta el tope global de 50 de
+RS-23 (SEC-040). `/healthz` `503` con *lag* p99 > 1 s: **aprobado** (es lo
+que pide `docs/logging.md` §8.1; no lo expone Caddy; un reinicio por
+`HealthOnFailure=kill` vacía los límites en memoria, riesgo ya aceptado en
+§6.1.5). `audit_log.entity_id` `text` y `was_lock_kind = none`: sin
+implicaciones de seguridad. Migración 0001: privilegios de `app_rw`
+exactamente los de `docs/permisos.md` §6 (sin `DELETE` en `users` ni
+`audit_log`, sin `UPDATE` en `audit_log`, trigger de inmutabilidad también
+para `TRUNCATE`), `app_backup` por los `DEFAULT PRIVILEGES` de
+`10-roles.sh`. Comandos: el PIN inicial solo se lee de fichero, se valida con
+las reglas de encargado antes del hash y nunca sale en `stderr` ni en logs.
+
+**9. Imagen y build.** Trivy 0.76.2 sobre la imagen real: 0 críticas/altas
+salvo las 2 de EXC-01 (*suppressed*); condiciones 3 y 4 de SEC-033 cumplidas
+(ningún `.node` enlaza `libssl`/`libcrypto` ni importa símbolos QUIC; `dist`
+sin `node:quic` ni `dgram`); `USER 1000:1000`, `HEALTHCHECK` en forma exec,
+sin `.npmrc` ni `.env*`. La imagen probada se construyó **antes** del commit
+y desde un árbol sucio (`69e823f40ad7-sucio`, etiqueta `revision` de
+`69e823f`): es SEC-037 en la práctica; la imagen de la puerta debe
+reconstruirse desde el commit final. Lleva además 10 binarios de `argon2` de
+otras plataformas (SEC-046, baja). SEC-026: `find`/`realpath` sobre el árbol
+actual sin enlaces fuera de la lista de permitidos. SEC-028: los e2e del
+developer con `proxy` y `app` (imagen real) arrancan sin errores de IPAM.
+
+**Otros hallazgos nuevos (baja):** SEC-042 (un `NUL` en el nombre de login
+da `500` y log de error con traza), SEC-043 (límite por IP con clave IPv6
+completa y expulsión de entradas bloqueadas), SEC-045 (faltan pruebas de
+regresión y comprobaciones estáticas).
+
+**Altos o críticos en esta revisión: SEC-038 (alta), abierto. Bloquea la
+puerta de la Etapa 2** hasta que el developer lo corrija y Cybersecurity lo
+verifique con la prueba de concurrencia.
+
 ---
 
 ## 7. Requisitos de seguridad verificables (para Testing)
@@ -1293,6 +1486,7 @@ contra TESTING/DEMO), **S** estático (SAST/lint/CI), **C** contenedores/host.
 | RS-03 | Bloqueo progresivo 5/10/15/20 de §6.1.3; el contador no se reinicia al expirar el bloqueo; durante el bloqueo no se verifica el PIN | I con reloj inyectable: 25 intentos fallidos → tiempos 5, 15, 60 min y `423 ACCOUNT_LOCKED_MANUAL`; luego PIN correcto sigue rechazado |
 | RS-04 | `managerApproval` fallido suma al contador del encargado; cuenta bloqueada/desactivada/PIN provisional no aprueba; error genérico idéntico en todos los casos | I |
 | RS-05 | 10 fallos/10 min desde una IP, sumando login, `managerApproval`, `confirmPin` y `currentPin` → `429` 10 min en todas las rutas de PIN (y en `GET /auth/login-options`) antes de verificar el hash; 5 aprobaciones fallidas/10 min por sesión → `429` | I (medir que no se llama al hasher) |
+| RS-05b | [2.3, SEC-038] Los límites de RS-03, RS-05 y RS-16b se cumplen **también con peticiones simultáneas**: una IP nunca tiene más verificaciones en curso que los fallos que le quedan hasta el límite; una cuenta nunca supera el umbral del bloqueo siguiente por verificaciones simultáneas; un acierto con la cuenta ya bloqueada (`locked_until > now` o `locked_manual`) en el momento de anotarlo no crea sesión ni cambia el PIN | I: 50 logins simultáneos desde una IP con PIN erróneo → como mucho 10 llamadas al hasher y el resto `429`; 50 simultáneos a una cuenta desde IP distintas → como mucho 5 llamadas al hasher antes del `423`; ráfaga con el PIN correcto al final sobre una cuenta que llega a `locked_manual` → ese intento `423`, 0 sesiones abiertas; lo mismo con `currentPin` (el PIN no cambia) |
 | RS-06 | La IP del cliente que usa la app es la que añade Caddy; `X-Forwarded-For` enviado por el cliente se ignora; en TESTING/DEMO/PROD dos dispositivos distintos se ven con IP distinta | D (enviar XFF variable: el límite salta igual) + C (log con dos IP reales) |
 | RS-07 | Usuario inexistente: mismo código, cuerpo y tiempo que PIN erróneo (diferencia de medianas < 50 ms en 100 intentos) | I |
 | RS-08 | argon2id con `m ≥ 19456 KiB, t ≥ 2, p = 1`; *pepper* leído de fichero de secreto; máx. 4 verificaciones simultáneas | U (prefijo del hash) + I (carga: 50 logins simultáneos no superan el límite de memoria del contenedor) |
@@ -1596,7 +1790,7 @@ regla de contenedores.
 - Responsable: software-engineer (ADR-005 revisión (b), `docs/arquitectura.md` §5, §5.1 y §7). Developer en Etapa 2.
 - Cómo corregir: (1) en ADR-005 (b) y arquitectura §7, cambiar "10 fallos (login + aprobaciones + reconfirmaciones)" por "10 fallos de **cualquier verificación de PIN** (login, aprobaciones, reconfirmaciones y `currentPin` de `POST /auth/pin`)", y "Aprobaciones y reconfirmaciones: … 5 fallos por sesión en 10 min" por "Aprobaciones, reconfirmaciones y cambio de PIN propio: mismo contador del usuario cuyo PIN se verifica; 5 fallos por sesión en 10 min → `429`"; (2) en §5.1, fila `POST /auth/pin`, añadir los errores `403 PIN_INVALID` (genérico), `423` y `429`; (3) añadir: "si la cuenta llega a `locked_manual` por fallos desde una sesión propia (`confirmPin`/`currentPin`), se revocan todas sus sesiones". Recomendado: una sola función `verifyPin(user, pin, ctx)` que aplique límite por IP, límite por sesión, bloqueo y contador, y que sea la única forma de llamar al hasher (así una ruta nueva no se olvida del límite).
 - Cómo verificar: Cybersecurity revisa ADR-005 y la arquitectura; en Etapa 2/3, RS-16b.
-- Estado: **verificado** (documentos, 1.4c). `docs/arquitectura.md` §5 (aprobaciones, reconfirmación y cambio del PIN provisional por `verifyPin`), §5.1 (`POST /auth/pin` solo con `mustChangePin = true`, si no `403` sin verificar; `403 PIN_INVALID`, `423 LOCKED`, `423 ACCOUNT_LOCKED_MANUAL`, `429`), §7 (función única `verifyPin`, único componente con el hasher; límite por IP de todas las verificaciones; bloqueo sin hash ni conteo; contador del usuario cuyo PIN se verifica; revocación de todas las sesiones al llegar a `locked_manual` por cualquier vía), §13 y §15; ADR-005 revisión (c). Las cuatro propuestas están incorporadas y la revocación se amplió a todo bloqueo indefinido, que se acepta (§6.4). **Ya no bloquea la puerta.** Cambio de coherencia pendiente, no bloqueante: T-20 (opción A, §6.4) en `docs/arquitectura.md` §7 y ADR-005 (software-engineer). Resto aparte: SEC-025 (baja). En Etapa 2/3: RS-16b, RS-16c, RS-16d.
+- Estado: **verificado** (documentos, 1.4c). `docs/arquitectura.md` §5 (aprobaciones, reconfirmación y cambio del PIN provisional por `verifyPin`), §5.1 (`POST /auth/pin` solo con `mustChangePin = true`, si no `403` sin verificar; `403 PIN_INVALID`, `423 LOCKED`, `423 ACCOUNT_LOCKED_MANUAL`, `429`), §7 (función única `verifyPin`, único componente con el hasher; límite por IP de todas las verificaciones; bloqueo sin hash ni conteo; contador del usuario cuyo PIN se verifica; revocación de todas las sesiones al llegar a `locked_manual` por cualquier vía), §13 y §15; ADR-005 revisión (c). Las cuatro propuestas están incorporadas y la revocación se amplió a todo bloqueo indefinido, que se acepta (§6.4). **Ya no bloquea la puerta.** Cambio de coherencia pendiente, no bloqueante: T-20 (opción A, §6.4) en `docs/arquitectura.md` §7 y ADR-005 (software-engineer). Resto aparte: SEC-025 (baja). En Etapa 2/3: RS-16b, RS-16c, RS-16d. **[2.3]** Implementación (`apps/api/src/modules/auth/verify-pin.ts`, `POST /auth/pin`): cumple en secuencia (límite por IP antes del hash, sin límite por sesión en `change` (T-20), bloqueo → `423` sin hash ni conteo, contador del usuario, revocación de todas las sesiones a los 20 fallos), pero **no con peticiones simultáneas**: la ráfaga de `currentPin` hace 300 verificaciones y cambia el PIN de una cuenta ya en `locked_manual` (SEC-038, alta). La verificación del código queda pendiente de SEC-038.
 
 ## SEC-017: `confirmPin` falta en las listas de redacción de logs
 - Severidad: media
@@ -1605,7 +1799,7 @@ regla de contenedores.
 - Responsable: monitoring (`docs/logging.md` §4.1 y §4.3) y software-engineer (`docs/arquitectura.md` §11)
 - Cómo corregir: añadir `confirmPin` y `*.confirmPin` a la lista de §4.3 y a la tabla de §4.1 de `docs/logging.md`, y `confirmPin` a la lista de §11 de la arquitectura. Regla general recomendada: redactar cualquier clave que case con `/pin/i`.
 - Cómo verificar: RS-29 (el PIN centinela se envía también como `confirmPin` en anular cobro, alta, reset y desbloqueo) y RS-31.
-- Estado: **verificado** (documentos, 1.4c). `docs/logging.md` §4.1 (prohibido el valor de cualquier clave que case con `/pin/i`, `confirmPin` incluido), §4.3 (a) (`confirmPin` y `*.confirmPin` en las rutas fijas, cookie `__Host-sid`) y (b) (función recursiva por nombre de clave `/pin/i`, a cualquier profundidad, también en `err` y en los *bindings*, sin excepciones; `provisional_credential` en lugar de `must_change_pin`), §4.5 (centinela también como `confirmPin`, test unitario de la regla); `docs/arquitectura.md` §11 con la misma regla y remisión a logging. En Etapa 2/3: RS-29, RS-31 y el test de `docs/logging.md` §4.5.
+- Estado: **verificado** (documentos, 1.4c). `docs/logging.md` §4.1 (prohibido el valor de cualquier clave que case con `/pin/i`, `confirmPin` incluido), §4.3 (a) (`confirmPin` y `*.confirmPin` en las rutas fijas, cookie `__Host-sid`) y (b) (función recursiva por nombre de clave `/pin/i`, a cualquier profundidad, también en `err` y en los *bindings*, sin excepciones; `provisional_credential` en lugar de `must_change_pin`), §4.5 (centinela también como `confirmPin`, test unitario de la regla); `docs/arquitectura.md` §11 con la misma regla y remisión a logging. En Etapa 2/3: RS-29, RS-31 y el test de `docs/logging.md` §4.5. **[2.3] Verificado en código**: `apps/api/src/logging/logger.ts` (rutas fijas con `confirmPin`, `__Host-sid`, `pin_hash`, `pepper`; regla `/pin/i` recursiva en `formatters.log`, `bindings` y serializador de `err`); prueba propia con el centinela en 9 tipos de petición: 0 apariciones de valores (§6.8 punto 5).
 
 ## SEC-018: El montaje del proyecto expone `.secrets/` y permite escribir en `.git/` y `.claude/` desde contenedores
 - Severidad: media
@@ -1641,7 +1835,7 @@ regla de contenedores.
 - Responsable: software-engineer
 - Cómo corregir: en ADR-005 y arquitectura §7, cookie `__Host-sid` con `HttpOnly; Secure; SameSite=Strict; Path=/`, sin `Domain` ni `Max-Age`/`Expires`.
 - Cómo verificar: RS-10.
-- Estado: **verificado** (documentos, 1.4c). ADR-005 (sección "Decisión" y revisión (c)) y `docs/arquitectura.md` §7: `__Host-sid` con `HttpOnly; Secure; SameSite=Strict; Path=/`, sin `Domain` ni `Max-Age`/`Expires`; `docs/logging.md` §4.1 y §4.3 redactan `__Host-sid`. En Etapa 2/3: RS-10.
+- Estado: **verificado** (documentos, 1.4c). ADR-005 (sección "Decisión" y revisión (c)) y `docs/arquitectura.md` §7: `__Host-sid` con `HttpOnly; Secure; SameSite=Strict; Path=/`, sin `Domain` ni `Max-Age`/`Expires`; `docs/logging.md` §4.1 y §4.3 redactan `__Host-sid`. En Etapa 2/3: RS-10. **[2.3] Verificado en código y en respuesta real**: `Set-Cookie: __Host-sid=…; Path=/; Secure; HttpOnly; SameSite=Strict` (`apps/api/src/http/cookies.ts`), borrado idéntico en el `401` y el *logout*.
 
 ## SEC-022: El camarero puede leer cobros y tickets de cualquier día
 - Severidad: baja
@@ -1699,7 +1893,7 @@ regla de contenedores.
 - Responsable: infrastructure (`docs/infraestructura.md` §7.1) y testing/developer (comprobación en `tests/run.sh` o en la revisión de cada historia, Etapa 2)
 - Cómo corregir: (1) en §7.1, ampliar la regla: "en el host no se usan extensiones del IDE ni herramientas que carguen código de `node_modules/` o de `apps/`/`packages/` (ESLint, Prettier, Vitest, TypeScript del workspace, plugins de `tsconfig`); si se quieren, se ejecutan en un contenedor o con el IDE apuntando a un contenedor"; (2) comprobación de enlaces: antes de editar en el host y al inicio de `tests/run.sh`, `find apps packages \( -name node_modules -type d \) -prune -o -type l -print` debe salir vacío (corregido en 1.7q: el `-path '*/node_modules' -prune` propuesto en 1.7l poda también un **enlace** llamado `node_modules` y lo oculta; hueco detectado por Infrastructure) y ningún destino de `find apps packages node_modules -type l -exec realpath -m -- {} +` debe salir de `apps/`, `packages/` o `node_modules/` (o solo enlaces revisados y versionados, visibles en `git diff` con modo `120000`); si hay alguno no esperado, el script se detiene; (3) recomendado: que los agentes del host no sigan enlaces simbólicos al leer/escribir en `apps/`/`packages/` (comprobar con `test -L` antes de escribir).
 - Cómo verificar: RS-45 ampliado (enlace plantado desde `deps` en `apps/` → `tests/run.sh` se detiene con error y no lo sigue); revisión de `docs/infraestructura.md` §7.1.
-- Estado: **corregido** (diseño y DEV, 1.7q). Pasa a "verificado" cuando exista `tests/run.sh` con el requisito 5 de `docs/infraestructura.md` §7.1 y RS-45 se repita con el enlace plantado desde `deps` real (Etapa 2, testing/developer). No bloquea.
+- Estado: **corregido** (diseño y DEV, 1.7q). Pasa a "verificado" cuando exista `tests/run.sh` con el requisito 5 de `docs/infraestructura.md` §7.1 y RS-45 se repita con el enlace plantado desde `deps` real (Etapa 2, testing/developer). No bloquea. **[2.3]** Comprobación manual sobre el árbol del commit `4460e09`: (a) sin enlaces simbólicos en `apps/`/`packages/` fuera de `node_modules`; (b) todos los de `apps/`, `packages/` y `node_modules/` resuelven dentro de la lista de permitidos. Sigue pendiente la verificación con `tests/run.sh` (no arranca por D-2.2-01/02).
 - Verificación 1.7q (Cybersecurity):
   - `docs/infraestructura.md` §7.1: regla del IDE y herramientas del host (modo restringido, IDE en contenedor revisado por Cybersecurity, TypeScript solo del IDE y sin `plugins`, sin tareas automáticas ni formateo al guardar con herramientas del workspace) → cubre el punto (1). Regla de enlaces (ninguno en `apps/`/`packages/` fuera de los `node_modules/` reales; ninguno de la lista resuelve fuera de ella; excepciones explícitas, nunca comodín; inspeccionar con `ls -l` y borrar con `rm` sin `-r`) y requisito 5 de `tests/run.sh` (antes de cualquier `up`/`run` y otra vez antes de leer resultados; también `tests/results`/`tests/screenshots` en TESTING) → cubre el punto (2). Regla `test -L` en cada componente del camino antes de escribir y `realpath` antes de leer de `node_modules/` → cubre el punto (3). §4 (orden de `levantar.sh`) y §15 (pruebas) coherentes.
   - Corrección del comando: acepto el cambio de Infrastructure. `-name node_modules -type d` solo poda directorios reales; `find` no sigue enlaces (sin `-L`), así que un enlace llamado `node_modules` no se poda y aparece. La comprobación (b) con `realpath -m` cubre lo que la poda deja fuera (enlaces de pnpm dentro de los `node_modules/`). La comparación con `case "$R"/apps/*` exige la barra, así que `apps-evil/` no pasa; como `realpath` devuelve una ruta canónica (sin `..` ni enlaces), cualquier destino que empiece por `$R/apps/` está de verdad dentro.
@@ -1723,7 +1917,7 @@ regla de contenedores.
 - Responsable: infrastructure
 - Cómo corregir: dar también IP fija a `app` en `proxy-app` (p. ej. `TEST_APP_IP`, por defecto `10.89.240.3`), o reservar las dinámicas fuera de la de `proxy` (`ip_range` de la red, si `podman-compose` lo pasa); `TRUSTED_PROXIES` sigue siendo solo la IP de `proxy`. Mismo esquema en DEMO/PROD.
 - Cómo verificar: con la imagen de la app, `tests/run.sh e2e` llega a `proxy` *healthy*; `podman inspect` muestra `proxy` con `TEST_PROXY_IP` y `app` con otra; RS-06 (una petición directa a `app:3000` desde `backend` con `X-Forwarded-For` falso no cambia la IP que ve la app).
-- Estado: **corregido (infrastructure 2.1h; revisado en la 2.1m, §6.7 punto 4)**. `app` con IP fija `${TEST_APP_IP:-10.89.240.3}` en `proxy-app`, `proxy` en `${TEST_PROXY_IP:-10.89.240.2}` y `TRUSTED_PROXIES` solo esa IP; probado en una red `internal` `/29` en los dos órdenes de arranque (sin conflicto IPAM; una IP ocupada falla cerrado). Pasa a **verificado** con la primera ejecución de `tests/run.sh e2e` con la imagen real (`proxy` *healthy*, `podman inspect` con las dos IP, RS-06) y con el mismo esquema en `compose.demo.yaml`/Quadlet
+- Estado: **corregido (infrastructure 2.1h; revisado en la 2.1m, §6.7 punto 4)**. `app` con IP fija `${TEST_APP_IP:-10.89.240.3}` en `proxy-app`, `proxy` en `${TEST_PROXY_IP:-10.89.240.2}` y `TRUSTED_PROXIES` solo esa IP; probado en una red `internal` `/29` en los dos órdenes de arranque (sin conflicto IPAM; una IP ocupada falla cerrado). Pasa a **verificado** con la primera ejecución de `tests/run.sh e2e` con la imagen real (`proxy` *healthy*, `podman inspect` con las dos IP, RS-06) y con el mismo esquema en `compose.demo.yaml`/Quadlet **[2.3] Confirmado con la imagen real**: los e2e del developer (perfil con `proxy` y `app`, imagen `69e823f40ad7-sucio`) arrancan sin errores de IPAM. Pasa a **verificado** en TESTING; queda el mismo esquema en `compose.demo.yaml` y Quadlet.
 
 ## SEC-029: `TRUSTED_PROXIES` admite CIDR sin límites ni validación estricta
 - Severidad: media
@@ -1732,7 +1926,7 @@ regla de contenedores.
 - Responsable: software-engineer (`docs/arquitectura.md` §10.1) y developer (`config.ts`)
 - Cómo corregir: en `parseSettings`, cada elemento debe ser una IPv4/IPv6 literal o un CIDR con prefijo **≥ /24** (IPv4) o **≥ /120** (IPv6); se rechazan (no arranca) `0.0.0.0/0`, `::/0`, nombres (`loopback`, `linklocal`, `uniquelocal`), `true`, números de saltos y elementos vacíos o con espacios; se pasa a Fastify un *array* ya validado, nunca la cadena original. En TESTING, DEMO y PROD el valor es la IP única de `proxy` (`/32`); un CIDR solo para una red dedicada `proxy`↔`app`. Documentarlo en §10.1 y en `docs/infraestructura.md` §6.
 - Cómo verificar: unitario de `parseSettings` (como RS-13) con `10.0.0.0/8`, `uniquelocal`, `0.0.0.0/0`, `::/0`, `true`, `1`, `10.89.240.2,` → no arranca; `10.89.240.2` y `10.89.240.0/29` → arranca. RS-06 en integración: `X-Forwarded-For` desde una IP no listada se ignora.
-- Estado: **corregido (diseño, 2.1k)**. `docs/arquitectura.md` §10.1 (reglas 1–5 de `parseTrustedProxies`) y §2.1 (`buildApp` valida igual y pasa a Fastify el *array* o `false`) cumplen lo pedido y lo endurecen (tope de 4 elementos, sin recorte de espacios, sin ceros a la izquierda, sin zona IPv6, mensaje sin el valor). Valoración en §6.6. Pasa a **verificado** con el código de HU-01: unitario de `parseSettings` con los casos de "Cómo verificar" más `" "`, `10.89.240.2 ` (espacio final), `010.89.240.2`, `fe80::1%eth0`, `[::1]`, `::/119`, `::ffff:10.0.0.0/104` y 5 elementos válidos → no arranca, y `::ffff:10.89.240.0/120` y 4 elementos válidos → arranca; unitario de `buildApp` con `trustedProxies: ['uniquelocal']` → rechaza con `ConfigError`; integración RS-06; revisión de código de que ninguna lógica de seguridad usa `request.host`/`hostname`/`protocol` (§6.6)
+- Estado: **verificado (código, 2.3)**. `apps/api/src/config.ts:97-129` y `apps/api/src/app.ts:68`, `:106`; unitario de `parseSettings` (88 casos) en verde y prueba propia con los casos extra de "Pasa a verificado" (incluido `buildApp` con `['uniquelocal']` → `ConfigError`) (§6.8 punto 1). Ninguna lógica usa `request.host`/`hostname`/`protocol`/`ips`. Los casos extra que faltan en `tests/unit/api/config.unit.test.ts` (`" "`, espacio final, `[::1]`, `::/119`, `::ffff:10.0.0.0/104`, `::ffff:10.89.240.0/120` aceptado y `buildApp` con `['uniquelocal']`) quedan en SEC-045 (testing, baja).
 
 ## SEC-030: Las peticiones automáticas del cliente cuentan como actividad para la inactividad de 15 min
 - Severidad: baja
@@ -1741,7 +1935,7 @@ regla de contenedores.
 - Responsable: software-engineer (§7 y §9) y developer
 - Cómo corregir: marcar las peticiones que no nacen de una acción del usuario (p. ej. cabecera `X-Activity: passive` en los *snapshots* por `hello`/reconexión y en cualquier recarga automática) y no actualizar `last_activity_at` con ellas (sí se comprueban caducidad e inactividad). Las acciones del usuario y `POST /session/activity` siguen contando como ahora. La cabecera solo puede **restar** actividad, nunca sumarla, así que no hace falta confiar en ella.
 - Cómo verificar: integración con reloj falso: sesión de camarero, 14 min sin actividad, `GET` con `X-Activity: passive` → `200`; a los 15 min → `401` con `reason: idle`. E2E: tras un corte de red con la pantalla montada y sin tocar nada, la sesión se cierra a los 15 min de la última interacción.
-- Estado: **corregido (diseño, 2.1k)**. `docs/arquitectura.md` §7 ("Peticiones pasivas") y §6: `X-Activity: passive` con valor exacto, regla uniforme en servidor que solo resta actividad, comprobaciones de sesión completas también en las pasivas, y lista del cliente (`GET /auth/me` siempre, *snapshots* por `hello`/reconexión, recargas por `businessDate`/`menu.changed`/temporizador). Valoración en §6.6. Pasa a **verificado** con el código de HU-01: los casos de "Cómo verificar" más (a) `X-Activity: Passive`, `passive ` y `passive, x` cuentan como activas; (b) con la sesión a 14 min, una pasiva no mueve `last_activity_at` (lectura de la fila) y a los 15 min el siguiente `GET` → `401 idle`; (c) en el cliente, revisión de código de que solo el cliente HTTP único pone la cabecera y que ningún *handler* de gesto pasa `{ passive: true }`
+- Estado: **verificado (código, 2.3)**. Guarda: `x-activity === 'passive'` exacto solo omite `touch` (`apps/api/src/http/guard.ts:215`) tras todas las comprobaciones; SPA: solo `GET /auth/me` usa `{ passive: true }` y ningún *handler* de gesto (`apps/web/src/session/store.ts`, `api/client.ts`); integración (`HU-01-sesion.int.test.ts`, variantes y lectura de `last_activity_at`) y e2e `serie-red` en verde (§6.8 punto 1).
 
 ## SEC-031: Las rutas inexistentes analizan el cuerpo y no siempre responden `404`
 - Severidad: baja
@@ -1750,7 +1944,7 @@ regla de contenedores.
 - Responsable: software-engineer (§5 y §5.2) y developer
 - Cómo corregir: en el helper de las guardas, si `request.is404`, **responder** en el primer hook de guarda en vez de solo salir: bajo `/api/` (o con un método distinto de `GET`/`HEAD` en cualquier ruta) `return reply.code(404).send({ code: 'NOT_FOUND', message, requestId })` sin `details` ni `Set-Cookie`; con `GET`/`HEAD` fuera de `/api/`, salir y dejar que el *not-found handler* sirva `index.html`. El *not-found handler* mantiene el mismo `404` (lo usa `reply.callNotFound()`). Comprobado en el scratchpad que así JSON inválido, `Content-Type` desconocido y cuerpo > límite dan `404` sin tocar el analizador.
 - Cómo verificar: RS-18 (casos de `404` añadidos en la 2.1k): `PATCH /api/v1/settings` con `{bad`, con `text/plain` y con 65 KiB, con y sin sesión → `404 NOT_FOUND` idéntico salvo `requestId`, sin `Set-Cookie` y sin consultas a la BD; `POST /pedidos` → `404` (no `index.html`); `GET /pedidos` → `index.html`.
-- Estado: abierto (baja, no bloquea; debe estar corregido al implementar las guardas en HU-01)
+- Estado: **verificado (código, 2.3)**. `apps/api/src/http/guard.ts:142-147` responde el `404` en la guarda antes del analizador de cuerpo, sin BD ni `Set-Cookie`; `app.ts:224-233` solo sirve la SPA con `GET`/`HEAD` fuera de `/api/`. Suite de seguridad RS-18 39/39 y prueba propia (`OPTIONS`, `PUT`, `GET` sobre `/api/v1/auth/login`, `TRACE /`, `POST /pedidos` → `404` JSON). Pendiente, no bloqueante: documentarlo en `docs/arquitectura.md` §5/§5.2 (software-engineer, 2.2c).
 
 ## SEC-032: El aborto al primer `401` no cubre todos los canales que pueden borrar la cookie de un login nuevo
 - Severidad: baja
@@ -1759,7 +1953,7 @@ regla de contenedores.
 - Responsable: software-engineer (§5) y developer (`apps/web/src/api/`)
 - Cómo corregir: al primer `401`, en este orden y antes de habilitar el login de P-01: (1) `abort()` de todas las peticiones del cliente HTTP; (2) `close()` del `EventSource` y cancelación del vigilante de 5 s y de los reintentos de reconexión; (3) cancelación de todos los temporizadores de recarga y de la cola de telemetría (que va por el cliente HTTP con `AbortController`, sin `sendBeacon` ni `keepalive`). Mientras P-01 está visible no sale ninguna petición con sesión. Documentarlo en §5 junto al borrado de la cookie.
 - Cómo verificar: E2E con Toxiproxy (o retraso de red de Playwright): con la sesión caducada por inactividad, retrasar 3 s la respuesta de una petición en curso y de la reconexión SSE, hacer login nuevo durante el retraso y comprobar que la cookie nueva sigue presente y la siguiente petición da `200`. Revisión de código: ningún uso de `sendBeacon` ni `keepalive` en `apps/web/`.
-- Estado: abierto (baja, no bloquea)
+- Estado: **verificado (código, 2.3)**. `end()`/`stopChannels()` → `abortAll()` con generación de sesión, `events.stop()` (cierra `EventSource`, vigilante y reintento) y fin del temporizador antes de P-01; el *logout* por inactividad espera su respuesta; sin `sendBeacon` ni `keepalive` en `apps/web` (`apps/web/src/session/store.ts`, `api/client.ts`, `realtime/events.ts`); e2e "Primer 401: no queda ningún canal de la sesión vieja" en verde (Chromium y WebKit). El e2e con respuesta retrasada y login durante el retraso queda en SEC-045 (testing, baja).
 
 ## SEC-033: CVE-2026-107494 y CVE-2026-124709 (QUIC de OpenSSL) en la base distroless — excepción EXC-01
 - Severidad: baja (riesgo en nuestro contexto; el escáner las clasifica **altas**, CVSS 3.1 7.5 `A:H`)
@@ -1785,7 +1979,7 @@ regla de contenedores.
     Se usa con `--ignorefile deploy/app/trivyignore.yaml --show-suppressed --severity HIGH,CRITICAL --exit-code 1` (SEC-034). **Prohibido** `--ignore-unfixed`, ignorar por paquete entero o un `.trivyignore` sin `expired_at`: ocultarían futuras altas sin corrección. Cambiar el fichero requiere una entrada nueva o actualizada de Cybersecurity en este documento.
   - Comprobaciones de las condiciones 3 y 4 en cada build (las añade Infrastructure a `construir.sh` o a la suite `containers`): `node -p 'process.config.variables.node_use_quic'` en la imagen → `false`; `grep -rE "node:quic|experimental-quic|require\(['\"](node:)?dgram|from ['\"](node:)?dgram" /app/dist` sin resultados; ningún `.node` en `/app` con `NEEDED` de `libssl`/`libcrypto` ni símbolos `OSSL_QUIC_`/`SSL_new_listener`/`SSL_set_quic_tls_cbs` sin definir (`readelf -d`, `nm -D --undefined-only`, ejecutados fuera de la imagen sobre `podman export`, porque la distroless no tiene shell).
 - Cómo verificar: (a) `construir.sh` con el fichero → escaneo `0` y 2 *suppressed* con el `statement`; sin el fichero → falla; (b) las comprobaciones de las condiciones 3 y 4 pasan sobre la imagen real; (c) el 2026-12-08 Cybersecurity revisa Trivy (DB actualizada), los avisos de Debian (`openssl`) y las versiones de seguridad de Node, y deja constancia aquí.
-- Estado: abierto (riesgo aceptado con EXC-01 hasta el 2026-12-24; no bloquea; ratificación humana pendiente)
+- Estado: abierto (riesgo aceptado con EXC-01 hasta el 2026-12-24; no bloquea; ratificación humana pendiente) **[2.3]** Imagen real `localhost/mi-app:69e823f40ad7-sucio` (`sha256:42df4724…`): Trivy 0.76.2 con el fichero de EXC-01 → 0 críticas/altas y 2 *suppressed*; condiciones 3 y 4 cumplidas (ningún `.node` de `argon2` con `NEEDED libssl`/`libcrypto` ni símbolos QUIC; `dist` sin `node:quic` ni `dgram`).
 
 ## SEC-034: El escaneo de la imagen no forma parte del build
 - Severidad: media
@@ -1821,12 +2015,130 @@ regla de contenedores.
 - Responsable: infrastructure
 - Cómo corregir: usar la misma lista que `containerignore` (`apps packages package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc 'tsconfig*.json' tests/package.json`) y añadir `--ignored=matching` para detectar ignorados dentro de esas rutas que no excluye el containerignore (o marcar `-sucio` si `git ls-files --others --ignored --exclude-standard -- apps packages` devuelve algo fuera de `node_modules`/`dist`/`.env*`). Mantener que el script no acepta `--build-arg` (las bases solo cambian editando el digest en el Containerfile).
 - Cómo verificar: con un cambio sin commit en un `tsconfig*.json` de la raíz o en `tests/package.json` → etiqueta `<commit>-sucio`; sin cambios → `<commit>`.
+- Estado: abierto (baja, no bloquea) **[2.3]** Ocurrió en la práctica: la imagen usada en las suites de la 2.2 es `69e823f40ad7-sucio` (etiqueta `revision` = `69e823f`), construida antes del commit `4460e09` desde un árbol con cambios. La imagen que se use para la puerta debe reconstruirse desde el commit final y sin `-sucio`.
+
+## SEC-038: `verifyPin` no resiste peticiones simultáneas: se saltan el límite por IP y el bloqueo, y un acierto entra en una cuenta ya bloqueada
+- Severidad: alta
+- Ubicación: apps/api/src/modules/auth/verify-pin.ts:170 (límite por IP comprobado antes del hash), :193 (bloqueo comprobado con la fila leída por la ruta), :217 (hash), :218-227 (acierto: pone `failed_attempts = 0` y `locked_until = NULL` sin mirar el bloqueo actual) y :230-236 (el fallo se anota en IP y cuenta solo después del hash); apps/api/src/http/routes/auth.ts:83-91 y :126-140 (login: lee el usuario, verifica y crea la sesión sin volver a comprobar el bloqueo) y :225-262 (`POST /auth/pin`: igual con `currentPin`, y cambia el PIN); docs/arquitectura.md §7 (la secuencia de `verifyPin` no exige atomicidad)
+- Descripción: las tres defensas contra la fuerza bruta del PIN (10 fallos/10 min por IP, escala 5/10/15/20 por cuenta y revocación en `locked_manual`, SEC-001 y SEC-016) son "comprobar y luego actuar": el límite por IP se consulta al entrar y el fallo se suma al terminar el hash (≈ 40 ms después); el bloqueo se mira en la fila que la ruta leyó **antes** de llamar a `verifyPin`. Todas las peticiones que llegan juntas pasan las comprobaciones y llegan al hash. Además, el acierto no comprueba si la cuenta se ha bloqueado entretanto: pone el contador a 0 y la ruta crea la sesión (o cambia el PIN). Prueba propia (app en proceso con `buildApp` y BD real de TESTING, Podman rootless, §6.8): (A) 300 logins simultáneos desde **una** IP contra un camarero con contador 0, el PIN correcto el último → 300 verificaciones argon2, 299 `401` y ningún `429` ni `423`, el último `200` con `Set-Cookie`; la cuenta acaba con `locked_manual = true` **y una sesión abierta**; (B) lo mismo con contador 19 (un fallo antes del bloqueo indefinido) → mismo resultado; (C) 300 `currentPin` simultáneos en `POST /auth/pin` desde una sesión con PIN provisional → 300 verificaciones, el PIN se cambia (`204`) aunque la cuenta queda en `locked_manual`; (A2) 3000 logins simultáneos → 516 verificaciones antes de que el límite por IP empiece a responder `429`. El diseño admite 10 verificaciones por IP en 10 min y 5 por cuenta antes del primer bloqueo. Con la rejilla pública de nombres (SEC-005), un dispositivo en la red del local prueba ~5 % de los PIN de 4 dígitos de un usuario por ráfaga (~1 min) y puede repetirlo con cada usuario; si acierta entra aunque la ráfaga haya bloqueado la cuenta, y en el camino deja bloqueadas de forma indefinida las cuentas atacadas (denegación de servicio, también del encargado). Requiere estar en la red del personal (SEC-002), por eso es alta y no crítica.
+- Responsable: developer (`verify-pin.ts`, `rate-limit.ts`, rutas de `auth.ts`); software-engineer (añadir la exigencia de atomicidad a `docs/arquitectura.md` §7); testing (RS-05b)
+- Cómo corregir: (1) **IP y sesión, reserva antes del hash**: en `FailureWindow`, un contador síncrono de verificaciones en curso por clave; `verifyPin` rechaza con `429` si `fallos en ventana + en curso ≥ límite`, reserva el hueco antes del primer `await` y lo libera al terminar (acierto) o lo convierte en fallo. Así una IP nunca tiene más verificaciones en vuelo que los fallos que le quedan. (2) **Cuenta, cobro antes del hash**: en vez de leer y luego contar, sumar el intento de forma atómica antes del hash, solo si la cuenta no está bloqueada: `UPDATE users SET failed_attempts = failed_attempts + 1 WHERE id = $1 AND NOT locked_manual AND (locked_until IS NULL OR locked_until <= $now) RETURNING failed_attempts` (0 filas → `423` con el estado leído en esa misma sentencia o en una relectura); aplicar la escala con el valor devuelto en la misma transacción (bloqueo y revocación) y, si el hash acierta, `UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = $1 AND NOT locked_manual AND (locked_until IS NULL OR locked_until <= $now)`: 0 filas → la cuenta se bloqueó durante el hash → tratar como bloqueada (`423`), sin crear sesión ni cambiar el PIN. Alternativa equivalente: cerrojo por usuario en memoria (una sola instancia) que serialice las verificaciones de una misma cuenta, más la condición del acierto. Si el desarrollador elige otra forma, debe cumplir RS-05b. (3) **Crear la sesión y cambiar el PIN dentro de la misma condición**: en `POST /auth/login`, el `INSERT` de la sesión solo si el acierto anterior tocó una fila; en `POST /auth/pin`, el `UPDATE users SET pin_hash … WHERE id = $1 AND NOT locked_manual AND (locked_until IS NULL OR locked_until <= $now)` y comprobar que cambió una fila. (4) Defensa en profundidad: semáforo explícito de 4 verificaciones argon2 con cola acotada (p. ej. 32; llena → `503`) en lugar de depender del tamaño por defecto del *threadpool* de libuv (RS-08), para que una ráfaga no deje en espera sin límite ni bloquee DNS/`fs` del proceso. (5) El `approval` (HU-06) debe usar el mismo mecanismo desde el principio.
+- Cómo verificar: RS-05b en integración (los cuatro casos, con *hasher* espía); repetir la prueba propia de §6.8 (escenarios A, B, C con N = 300 y A2 con N = 3000): A2 ≤ 10 verificaciones; A/B con el PIN correcto al final → `423`/`429` y 0 sesiones abiertas; C → el PIN no cambia. Revisión de código de los tres puntos.
+- Estado: abierto (**alta, bloquea la puerta de la Etapa 2**)
+
+## SEC-039: El flujo SSE de una sesión caducada por inactividad sigue abierto y recibiendo eventos
+- Severidad: baja
+- Ubicación: apps/api/src/realtime/hub.ts:200-209 (`ping()` solo cierra por caducidad absoluta); apps/api/src/http/guard.ts:48-63 (`markExpired` marca `expired_reason` y no cierra los flujos de esa sesión); docs/arquitectura.md §6 y §7 (no dicen qué pasa con el flujo al caducar por inactividad)
+- Descripción: el flujo SSE no cuenta como actividad (RS-12), pero la inactividad solo se comprueba en peticiones REST. Prueba propia: camarero con flujo abierto, reloj +20 min → `GET /auth/me` da `401 idle` (y la fila queda con `expired_reason = idle`), pero el flujo sigue abierto y recibe `ping` cada 2 s; seguiría así hasta la caducidad absoluta (12 h). `docs/permisos.md` §5 dice que toda revocación y la caducidad cierran el flujo. La SPA cierra su propio `EventSource` al caducar (SEC-032), así que solo lo aprovecha un cliente que no sea la SPA y tenga la cookie (`HttpOnly`, difícil de obtener). Hoy solo circulan `hello`/`ping`; desde HU-02 serían pedidos, importes y cobros para una sesión ya caducada.
+- Responsable: developer (`hub.ts`, `guard.ts`); software-engineer (documentarlo en §6/§7)
+- Cómo corregir: (1) `markExpired` (y cualquier caducidad detectada) cierra los flujos de esa sesión tras escribir la fila (`hub.end` con motivo `expired`, sin `session.revoked` o con un evento propio si UX lo quiere); (2) el hub guarda en memoria la última actividad de cada sesión con flujo (actualizada por `touch` y por el login) y, en el `ping`, cierra los flujos de roles distintos de `kitchen` cuya sesión lleve ≥ 15 min sin actividad (la barra sigue exenta mientras tenga la cola abierta); o bien una consulta acotada cada 30–60 s de `last_activity_at` de las sesiones con flujo.
+- Cómo verificar: integración con `FakeClock`: camarero con flujo, +15 min sin peticiones → el flujo se cierra en ≤ 1 ping (2 s) sin ninguna petición REST; con `GET /auth/me` → `401 idle` → el flujo se cierra en ≤ 1 s; barra con la cola abierta → no se cierra. Debe estar corregido antes de entregar HU-02.
+- Estado: abierto (baja, no bloquea; antes de HU-02)
+
+## SEC-040: Falta el tope global de 50 flujos SSE (RS-23)
+- Severidad: baja
+- Ubicación: apps/api/src/realtime/hub.ts:75-83 (`open()`: solo cierra el más antiguo de la misma sesión; no hay límite total)
+- Descripción: RS-23 y `docs/permisos.md` §3.2 piden ≤ 2 flujos por sesión **y ≤ 50 en total**. Prueba propia: 30 sesiones de barra × 2 flujos → 60 flujos abiertos, ningún rechazo. Cada login crea una sesión nueva y una cuenta puede tener muchas, así que un empleado (o una cuenta comprometida) puede abrir flujos sin límite y agotar descriptores y memoria del único proceso `app` (denegación de servicio a todo el local).
+- Responsable: developer
+- Cómo corregir: en `open()`, si `conns.size ≥ 50` (constante con nombre, en `AppDeps` si Testing lo necesita) tras cerrar los sobrantes de la misma sesión, responder `503` con `Retry-After` antes de `hijack` (o desde la ruta antes de abrir el flujo) y registrar `sse.rejected` con `reason = global_limit`; métrica con la etiqueta correspondiente.
+- Cómo verificar: integración: 51.º flujo de una sesión distinta → `503` y los 50 anteriores siguen abiertos; 3.er flujo de una sesión con 50 abiertos → se cierra su más antiguo y el nuevo entra.
 - Estado: abierto (baja, no bloquea)
 
+## SEC-041: `Cache-Control: no-store` solo en tres respuestas de `/api` (RS-27)
+- Severidad: baja
+- Ubicación: apps/api/src/http/errors.ts:51-60 (`sendError` sin `Cache-Control`); apps/api/src/http/routes/auth.ts:180 (`204` del *logout*), :266 (`204` de `POST /auth/pin`), :276 (`204` de `POST /session/activity`); solo llevan `no-store` `GET /auth/login-options`, `POST /auth/login` y `GET /auth/me`
+- Descripción: RS-27 pide `Cache-Control: no-store` en todo `/api/*`. Prueba propia: `401`, `403`, `404` y `204` de `/api` salen sin la cabecera. Riesgo bajo hoy (no hay caché compartida y los errores no llevan datos), pero cada ruta nueva de HU-02..HU-08 tendría que acordarse de ponerla (pedidos, cobros e importes).
+- Responsable: developer
+- Cómo corregir: un `onSend` (o en el primer `onRequest`) que ponga `Cache-Control: no-store` en toda respuesta cuya ruta empiece por `/api/` salvo el flujo SSE (que mantiene `no-cache, no-transform`), en lugar de ponerla ruta a ruta.
+- Cómo verificar: integración: `GET /auth/me` `200` y `401`, `POST /auth/logout` `204`, `POST /auth/login` `403`/`401`/`429`, `GET /api/v1/no-existe` `404` → todas con `cache-control: no-store`; `GET /events` con `no-cache, no-transform`.
+- Estado: abierto (baja, no bloquea)
+
+## SEC-042: Un carácter `NUL` en el nombre de login produce `500` y un log de error con traza
+- Severidad: baja
+- Ubicación: packages/shared/src/api.ts:35 (`name: z.string().min(1).max(30)` admite caracteres de control); apps/api/src/http/routes/auth.ts:83-87 (la consulta falla en PostgreSQL)
+- Descripción: prueba propia: `POST /auth/login {"name":"a\u0000b","pin":"…"}` → `500 INTERNAL` y `http.request.unhandled_error` en nivel `error` con el mensaje de PostgreSQL (`invalid byte sequence for encoding "UTF8": 0x00`, `22021`) y 2 KiB de traza. No se calcula el hash ni se cuenta el intento, y no sale el PIN, pero cualquiera sin sesión puede generar `5xx` y líneas de error a voluntad (ruido en las alertas de errores y en los logs; las peticiones fallidas tampoco cuentan para el límite por IP).
+- Responsable: developer (esquemas de `packages/shared`); software-engineer (regla general para campos de texto en §5)
+- Cómo corregir: un esquema de texto común para todos los campos de texto de la API (`name`, y después notas, motivos, `customerRef`) que rechace caracteres de control (`/[\u0000-\u001F\u007F]/`) con `400 VALIDATION_FAILED` y `rule: 'format'`; normalizar a NFC si se compara por nombre.
+- Cómo verificar: integración: login con `\u0000`, `\u0007` y `\n` en el nombre → `400` con `path: ['name']`, sin líneas de nivel `error` en el log.
+- Estado: abierto (baja, no bloquea)
+
+## SEC-043: El límite por IP usa la dirección IPv6 completa y expulsa entradas bloqueadas cuando se llena
+- Severidad: baja
+- Ubicación: apps/api/src/modules/auth/verify-pin.ts:170, :231 (clave = `clientIp` completa); apps/api/src/modules/auth/rate-limit.ts:55-66 (`prune`: con 10 000 claves borra las más antiguas aunque estén bloqueadas)
+- Descripción: con IPv6, un equipo puede usar muchas direcciones de su `/64` (direcciones temporales) y cada una tiene su propio cupo de 10 fallos: el límite por IP, que es la defensa contra el rociado de PIN entre usuarios (§6.1.5), deja de servir. Además, si se llenan las 10 000 claves, `prune` borra también entradas bloqueadas, así que el atacante con muchas direcciones puede borrar su propio bloqueo. El bloqueo por cuenta sigue funcionando. Depende de que la red del local tenga IPv6 hasta Caddy y de que Caddy vea la dirección real (SEC-003), de ahí baja.
+- Responsable: software-engineer (§7: clave del límite por IP) y developer
+- Cómo corregir: clave del límite = IPv4 completa o prefijo `/64` de la IPv6 (normalizando las IPv4 mapeadas); en `prune`, no borrar nunca una entrada con `blockedUntil > now` (si sigue lleno, rechazar con `429` las claves nuevas mientras dure, o subir el tope).
+- Cómo verificar: unitario de `FailureWindow`/clave: 10 fallos desde `2001:db8::1` y el 11.º desde `2001:db8::2` → `429`; con el mapa lleno de claves sin bloqueo, una clave bloqueada sigue bloqueada tras insertar 10 000 claves nuevas.
+- Estado: abierto (baja, no bloquea)
+
+## SEC-044: Dependencias de desarrollo con vulnerabilidades críticas (`tinypool` 1.1.1) y moderadas (`vitest` 3.2.7)
+- Severidad: baja (en nuestro contexto; el aviso las clasifica críticas)
+- Ubicación: pnpm-lock.yaml:1282, :2293 (`tinypool@1.1.1`, dependencia de `vitest`), tests/package.json:25 (`"vitest": "^3.2.0"`, resuelto a 3.2.7)
+- Descripción: `pnpm audit` (sin `--prod`): `tinypool` GHSA-5gmw-xhrv-c9v3 y GHSA-85c8-ppgw-ccpr (*gadgets* de contaminación de prototipo que llevan a ejecución de código en las opciones del *worker* y de `run()`), corregidas en ≥ 2.1.2; `vitest`/`@vitest/mocker` GHSA-82fw-gwwq-j7x9 (lectura de ficheros por *redirect mock*) y GHSA-qxg6-89mg-rqv8 (registro de *mocks* sin autenticar), corregidas en ≥ 4.1.12. `pnpm audit --prod`: 0. No llegan a la imagen de la app (RS-39 solo exige `--prod`) y los ejecutores de tests corren endurecidos, sin red (unitario) y con el repositorio en `ro`; explotarlas exige una contaminación de prototipo previa en el proceso de tests o el servidor de *browser mode*/UI de Vitest, que no se usa. De ahí baja.
+- Responsable: testing
+- Cómo corregir: actualizar `vitest` a ≥ 4.1.12 (arrastra `tinypool` ≥ 2.1.2 y `@vitest/mocker` corregido) y fijar la versión exacta en `tests/package.json`; revisar a la vez D-2.2-01 (`--configLoader runner`), que puede cambiar con la versión mayor. No usar `vitest --ui` ni *browser mode* sin revisar.
+- Cómo verificar: `pnpm audit` (sin `--prod`) en contenedor → sin críticas ni altas; suites unitaria, de integración y de seguridad en verde con la nueva versión.
+- Estado: abierto (baja, no bloquea)
+
+## SEC-045: Faltan pruebas de regresión y comprobaciones estáticas de seguridad de HU-01
+- Severidad: baja
+- Ubicación: tests/unit/api/config.unit.test.ts:112-167 (SEC-029); tests/e2e/HU-01-iniciar-sesion.e2e.ts:414 (SEC-032); sin test de concurrencia de `verifyPin`; sin test de RS-16c, RS-25 ni RS-35; ningún e2e comprueba la ausencia de violaciones de CSP (RS-26, parte E)
+- Descripción: el código cumple (§6.8), pero estas propiedades no tienen test que avise si se rompen: (a) concurrencia de `verifyPin` (RS-05b, SEC-038); (b) casos de SEC-029 de "Pasa a verificado" que no están: `" "`, espacio final, `[::1]`, `::/119`, `::ffff:10.0.0.0/104`, `::ffff:10.89.240.0/120` aceptado y `buildApp` con `trustedProxies: ['uniquelocal']` → `ConfigError`; (c) SEC-032: e2e con la respuesta de una petición de la sesión vieja y la reconexión SSE retrasadas 3 s y login nuevo durante el retraso (la cookie nueva sigue y la siguiente petición da `200`); (d) RS-16c: test que falla si un módulo distinto del módulo `auth` importa `argon2` o recibe el `PinHasher`; (e) RS-25: regla que falla si `apps/web` usa `dangerouslySetInnerHTML`, `innerHTML`, `eval` o `new Function`; (f) RS-35: búsqueda de `sql.raw`/`sql.lit`/`sql.ref`/`sql.id` y concatenación en `apps/api`; (g) RS-26 E: los e2e a través de Caddy fallan con cualquier `securitypolicyviolation` o error de CSP en consola.
+- Responsable: testing ((a)–(c), (g)); developer con testing ((d)–(f): ESLint o test estático en `tests/security/`)
+- Cómo corregir: añadir los casos citados; (d)–(f) pueden ser un único test estático que recorra `apps/` con expresiones regulares (sin dependencias nuevas) dentro de la suite `security`.
+- Cómo verificar: Cybersecurity revisa los tests; cada uno falla si se introduce a propósito el defecto (p. ej. quitar la reserva de SEC-038, `trustProxy: true`, un `innerHTML` de prueba en una rama local).
+- Estado: abierto (baja, no bloquea; (a) es parte de la verificación de SEC-038)
+
+## SEC-046: La imagen final incluye binarios de `argon2` de otras plataformas
+- Severidad: baja
+- Ubicación: imagen `localhost/mi-app:69e823f40ad7-sucio`, `/app/node_modules/.pnpm/argon2@0.45.2/node_modules/argon2/prebuilds/` (10 ficheros `.node`: `win32-x64`, `darwin-arm64`, `freebsd-*`, `linux-arm*`, `linux-x64` musl); deploy/app/Containerfile (copia `node_modules` de `pnpm deploy` entero)
+- Descripción: `docs/reglas-equipo.md` §3.2 pide que la imagen final contenga solo lo necesario; solo se usa `linux-x64/argon2.glibc.node`. Los demás no se cargan y no tienen vulnerabilidades conocidas (ninguno enlaza `libssl`), pero son código nativo de terceros sin uso que el escáner y las comprobaciones de SEC-033 tienen que revisar en cada build.
+- Responsable: infrastructure
+- Cómo corregir: en la etapa de construcción, tras `pnpm deploy`, borrar de `prebuilds/` todo lo que no sea la plataforma de la imagen (`linux-x64` glibc) y comprobar que la imagen arranca y verifica un PIN (smoke de `create-initial-manager` + login).
+- Cómo verificar: `find /app -name '*.node'` sobre la raíz exportada → solo `linux-x64/argon2.glibc.node`; suites `containers` e integración en verde.
+- Estado: abierto (baja, no bloquea)
 
 ---
 
-### Resumen de la revisión 2.1m (Etapa 2, HU-01, 2026-11-24)
+### Resumen de la revisión 2.3 (Etapa 2, HU-01, 2026-11-25)
+- **Altos o críticos abiertos: SEC-038 (alta). Bloquea la puerta de la
+  Etapa 2.** `verifyPin` no resiste peticiones simultáneas: una ráfaga desde
+  un solo dispositivo hace cientos de verificaciones de PIN (300 de 300; 516
+  con 3000), sin `429` ni `423`, y un acierto entra (o cambia el PIN
+  provisional) en una cuenta ya bloqueada de forma indefinida. Responsable:
+  developer (software-engineer documenta la atomicidad en §7; testing añade
+  RS-05b).
+- **Verificados en código: SEC-029, SEC-030, SEC-031 y SEC-032** (§6.8 punto
+  1), y SEC-017 y SEC-021. SEC-028 confirmado con la imagen real. SEC-016:
+  correcto en secuencia, pendiente de SEC-038.
+- Dictámenes (§6.8): sesiones, `Origin`/CSRF, denegación por defecto, matriz
+  RS-18, redacción de logs (centinela: 0 valores en logs y respuestas),
+  métricas, cabeceras y CSP de Caddy, secretos y migración 0001 correctos.
+  Desviaciones del developer aprobadas: `revoked_reason`/`expired_reason`,
+  `role text + CHECK`, PIN de 1–64, guarda en un solo hook, cierre del flujo
+  SSE más antiguo (falta el tope global, SEC-040), `/healthz` `503`,
+  `hoistWorkspacePackages: false`.
+- Dependencias: `pnpm audit --prod` 0 vulnerabilidades; en desarrollo,
+  `tinypool` 1.1.1 con 2 críticas y `vitest` 3.2.7 con 3 moderadas
+  (SEC-044, baja en contexto). Imagen real: Trivy 0 críticas/altas salvo las
+  2 de EXC-01; condiciones 3 y 4 de SEC-033 cumplidas. La imagen probada es
+  `69e823f40ad7-sucio` (anterior al commit): la de la puerta debe
+  reconstruirse desde el commit final (SEC-037).
+- Nuevos: **SEC-038 (alta; developer)**, SEC-039 (baja; developer +
+  software-engineer; antes de HU-02), SEC-040, SEC-041, SEC-042 (baja;
+  developer), SEC-043 (baja; software-engineer + developer), SEC-044 (baja;
+  testing), SEC-045 (baja; testing + developer), SEC-046 (baja;
+  infrastructure).
+- Abiertos que no bloquean: SEC-003 (media), SEC-025 (baja, HU-06),
+  SEC-033 (baja, con EXC-01), SEC-034 (media, antes de la imagen de la
+  puerta), SEC-035..SEC-037 y SEC-039..SEC-046 (baja).
+- Contenedores: ningún contenedor ni la imagen final corre como root, usa
+  `--privileged`, monta el socket ni la red del host; todas las pruebas de
+  esta revisión se hicieron en Podman rootless con `--cap-drop=ALL`,
+  `no-new-privileges`, raíz de solo lectura y el repositorio en `ro`.
+
+
+### Resumen de la revisión 2.1m (Etapa 2, HU-01, 2026-11-24; histórico, sustituido por el de 2.3)
 - **Altos o críticos abiertos: ninguno.** Las dos CVE altas de `libssl3t64`
   (CVE-2026-107494, CVE-2026-124709) no son alcanzables y quedan cubiertas
   por la excepción fechada **EXC-01** (SEC-033, riesgo residual bajo; revisión
