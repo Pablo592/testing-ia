@@ -87,6 +87,10 @@
 > Unicode en Node) (§6.14). Las tres se **confirman con condiciones**; §18.1
 > coincide con lo verificado. Hallazgo nuevo SEC-059 (baja, HU-06). Plazo de
 > SEC-043 sin cambios.
+> Revisión 2.13d, 2026-11-26 (Etapa 2, HU-01): título corto de la barra
+> (H-2.8c-01, commit `96abf90`), revisión estática (§6.15). Sin estilos en
+> línea, CSP sin cambios, sin HTML construido con cadenas y `SHORT_TITLES`
+> estática. Sin hallazgos nuevos.
 > Entradas: `docs/historias/` (README + HU-01..HU-09, IDs estables `CA-`),
 > `docs/arquitectura.md`, `docs/decisiones/ADR-001..008`, `docs/ux/`,
 > `docs/infraestructura.md`, `compose.dev.yaml`, `compose.test.yaml`,
@@ -121,7 +125,7 @@
 3. Actores de amenaza
 4. Superficies de ataque y fronteras de confianza
 5. Amenazas (STRIDE)
-6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c; §6.5, revisión 2.1f; §6.6, revisión 2.1k; §6.7, revisión 2.1m; §6.8, revisión 2.3; §6.9, revisión 2.6; §6.10, revisión 2.9; §6.14, revisión 2.14)
+6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c; §6.5, revisión 2.1f; §6.6, revisión 2.1k; §6.7, revisión 2.1m; §6.8, revisión 2.3; §6.9, revisión 2.6; §6.10, revisión 2.9; §6.14, revisión 2.14; §6.15, revisión 2.13d)
 7. Requisitos de seguridad verificables (para Testing)
 8. Revisión de la arquitectura frente a la política de contenedores (§3)
 9. Hallazgos (SEC-xxx)
@@ -2576,6 +2580,43 @@ SEC-059 se corrige con HU-06, junto con SEC-025. C10 y C11 van con HU-05.
 HU-06)**. SEC-043 sigue abierto (baja) hasta implementarlo, con el diseño
 confirmado.
 
+### 6.15 Revisión 2.13d (2026-11-26): título corto de la barra, H-2.8c-01 (commit `96abf90`)
+
+Alcance: `git show 96abf90` (`apps/web/src/ui/components.tsx`,
+`apps/web/src/ui/app.css`; `docs/estado.md` sin interés de seguridad), el
+origen de `title` (`apps/web/src/app/App.tsx:20-24`, `:57`, `:65`;
+`apps/web/src/app/Layout.tsx:147`) y la CSP del proxy
+(`deploy/proxy/Caddyfile:27`). Revisión estática; sin contenedores. Prueba
+propia fuera del repositorio (Node, scratchpad) de la búsqueda en
+`SHORT_TITLES` con claves del prototipo.
+
+1. **CSP y estilos en línea: sin cambios.** Ningún atributo `style` ni
+   `.style`. La regla `.topbar-title .sr-only` va en `app.css`, dentro de
+   `@media (max-width: 767px)`, y se sirve con `style-src 'self'`. El
+   commit no toca el Caddyfile (último cambio: `7cc2f97`) y la API no envía
+   CSP propia. No hace falta `'unsafe-inline'`.
+2. **Sin HTML construido con cadenas.** En `apps/web/src` no hay
+   `dangerouslySetInnerHTML`, `innerHTML`, `outerHTML`,
+   `insertAdjacentHTML`, `document.write`, `eval` ni `new Function`. El título
+   corto y el resto (`title.slice(...)`) son nodos de texto de React, que los
+   escapa.
+3. **`SHORT_TITLES` es estática.** Es una constante de módulo con dos
+   literales, tipada `Readonly<Record<string, string>>`. `title` solo puede ser
+   un literal del código (`SCREENS` o "Cambia tu PIN"/"Acceso denegado"), así
+   que ni el usuario ni la API pueden meter entradas. Claves del prototipo
+   (`__proto__`, `constructor`, `toString`, `valueOf`, `hasOwnProperty`):
+   la guarda `title.startsWith(short)` las descarta y devuelven el título
+   sin cambios, sin excepción (probado). Recomendación sin hallazgo, por si
+   algún día llega un título dinámico: usar `Object.hasOwn(SHORT_TITLES,
+   title)` o un `Map`.
+4. **Sin regresiones de seguridad.** El nombre accesible y `document.title`
+   (`useDocumentTitle(title)`) siguen usando el título completo. El texto
+   oculto con `sr-only` es el mismo que antes se veía, sin datos nuevos. No
+   cambian ni el foco (`tabIndex={-1}`, `useEffect` con `focusKey`), ni las
+   rutas, ni la guarda de permisos, ni la API.
+
+**Altos o críticos en esta revisión:** ninguno. Hallazgos nuevos: ninguno.
+
 ## 7. Requisitos de seguridad verificables (para Testing)
 
 Formato: requisito → cómo se verifica. Tipos: **U** unitario, **I**
@@ -3332,7 +3373,23 @@ SEC-049), que Trivy no ve en `alpine3.23` (SEC-051).
 
 ---
 
-### Resumen de la revisión 2.14 (Etapa 2, HU-01, 2026-11-26)
+### Resumen de la revisión 2.13d (Etapa 2, HU-01, 2026-11-26)
+- **H-2.8c-01 (commit `96abf90`): sin observaciones de seguridad** (§6.15).
+  No hay estilos en línea, la CSP (`style-src 'self'`) no cambia, no se
+  construye HTML con cadenas y `SHORT_TITLES` es una constante con dos
+  literales, sin entrada del usuario ni de la API. Las claves del prototipo
+  no la rompen. Recomendación sin hallazgo: `Object.hasOwn` o `Map`.
+- **Hallazgos nuevos:** ninguno.
+- **Altos o críticos abiertos que bloqueen la puerta de la Etapa 2 para HU-01:
+  ninguno.** Lo demás sigue como en el resumen de la 2.14. Riesgo aceptado:
+  SEC-050 (EXC-03) y SEC-033 (EXC-01, baja). Abiertos que no bloquean:
+  SEC-003 (media), SEC-052 y SEC-056 (media, antes de DEMO), SEC-025,
+  SEC-043, SEC-046, SEC-057, SEC-058 y SEC-059 (baja). Siguen en pie la
+  condición de procedimiento (imágenes desde el commit final con el árbol
+  limpio, 2.11: la imagen de la 2.13c, `sha256:9b25a654…`, es `-sucio` y no
+  vale para la puerta) y la ratificación humana de EXC-01 y EXC-03.
+
+### Resumen de la revisión 2.14 (Etapa 2, HU-01, 2026-11-26; histórico, sustituido por el de 2.13d)
 - **Decisiones de `docs/arquitectura.md` §18.2 (2.2c), confirmadas con
   condiciones** (§6.14):
   - **SEC-043:** la clave IPv4 / IPv6 /64, la poda que nunca borra entradas
