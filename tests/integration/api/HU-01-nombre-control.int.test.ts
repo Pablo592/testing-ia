@@ -2,9 +2,13 @@
 // control (C0 o DEL) en el nombre de login se rechaza con 400 VALIDATION_FAILED
 // y `rule: 'format'` en `name`, sin 500, sin líneas de nivel `error` en los
 // logs (cualquiera sin sesión podía generar `5xx` y ruido en las alertas) y sin
-// repetir el valor recibido (RS-31). No se prueban los C1 (U+0080–U+009F) ni
-// los espacios Unicode: su regla general la decide el software-engineer
-// (D-2.5-03 c) y hoy dan 401 normal.
+// repetir el valor recibido (RS-31). No se prueban aquí los C1 (U+0080–U+009F)
+// ni los espacios Unicode: hoy (HU-01) `apiText` solo rechaza C0 y DEL y esos
+// dan 401 normal, pero docs/arquitectura.md §18.2 (D-2.5-03 c, confirmada por
+// cybersecurity en docs/seguridad.md §6.14) decide que `apiText` ampliado los
+// rechazará: en el login pasarán a `400 VALIDATION_FAILED` con `rule: 'format'`
+// en `name`, sin líneas de nivel error. Esos tests (\u0085, \u009f, \u202e,
+// \u2066, \u2028 y "\ud800") llegan con HU-05, que implementa `apiText` y `apiName`.
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { montarApp, type Ctx } from '../../support/app.ts';
 import { codigo, incidencias, ipUnica, pedir } from '../../support/http.ts';

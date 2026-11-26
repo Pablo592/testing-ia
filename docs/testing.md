@@ -239,7 +239,7 @@ Testing no numera criterios: solo los cita.
 - Requisitos de seguridad de `docs/seguridad.md` §7: se citan por su ID,
   `[RS-03]`, junto al criterio de historia si lo hay:
   `[HU-01/CA-F06][RS-03] Bloqueo progresivo 5/15/60 min e indefinido a los 20`.
-- Tests transversales (sin historia): `[TX-CONT-01]` contenedores, `[TX-SMK-nn]`
+- Tests transversales (sin historia): `[TX-CONT-01]`, `[TX-CONT-02]` y `[TX-CONT-03]` contenedores, `[TX-SMK-nn]`
   smoke, `[TX-RT-nn]` tiempo real, `[TX-TZ-nn]` zona horaria.
 - `tests/tools/trazabilidad.ts` lee los IDs **de las propias historias**
   (`docs/historias/HU-*.md`, patrón `^- \*\*CA-[FUN]\d\d\*\*`, incluidas las
@@ -855,6 +855,36 @@ contenedor):
    - `HEALTHCHECK` definido y estado `healthy`.
 4. Se ejecuta en TESTING, DEMO y PROD (en PROD, sobre las unidades Quadlet).
 
+**`[TX-CONT-02]` (tarea 2.11a): excepciones de seguridad e imágenes derivadas.**
+`tests/containers/tx-cont-02.sh`, en el host, con la pila de `containers` en
+marcha, después de TX-CONT-01:
+
+1. `sh deploy/scan/comprobar-excepciones.sh` sale con **0** (SEC-054: condiciones de
+   EXC-03 sobre el Caddyfile, los compose y el `Containerfile` del proxy; ningún
+   compose llama a `gosu`). Si falla, se muestra su salida.
+2. `compose.test.yaml` usa en `db` exactamente `localhost/mi-app-db:19.0-alpine3.24`
+   y en `proxy` `localhost/mi-app-proxy:2.11.9-alpine`; y los contenedores en
+   marcha de esos servicios se crearon desde esas etiquetas y desde la imagen
+   a la que apuntan hoy.
+3. La imagen de db y la del proxy tienen `USER` 1000 (`1000` o `1000:1000`).
+4. `/usr/local/bin/gosu` no existe en la db en ejecución (`podman exec` con el
+   usuario del contenedor, sin `-u root`, reglas §3.5) ni en la imagen
+   (`podman run --user 1000:1000 --read-only --network none --entrypoint /bin/sh`,
+   `test ! -e`). Control positivo: la misma orden sobre
+   `docker.io/library/postgres:19.0-alpine3.24` da "existe" (la oficial lleva gosu).
+
+**`[TX-CONT-03]` (tarea 2.11a): registro de escaneo aprobado (SEC-052 punto 3).**
+`tests/containers/tx-cont-03.sh` lo llama `tests/run.sh` **antes de levantar la
+pila** en toda suite con `APP_IMAGE`. Lee `~/.local/state/mi-app/escaneos/aprobadas/<digest>`
+(o `$SCAN_DIR`) campo a campo, sin cargarlo como código, y exige los puntos (a)–(h) de
+`docs/seguridad.md` §6.11/§6.12 que le tocan a Testing: registro existente con
+`app=` igual a `APP_IMAGE`; fecha de ≤ 7 días y no futura; etiqueta igual al
+commit corto de 12 caracteres y sin `-sucio`/`-rechazada`; `commit` de 40 hex,
+existente y antecesor de `HEAD`; `arbol_limpio=si`; `excepciones_sha256` igual al de
+los ficheros de excepciones del commit y del árbol actual; `db=` y `proxy=` iguales
+a los digests actuales de las etiquetas fijas; imagen presente y sin nombres de
+rechazo. **Sin `GATE` se avisa; con `GATE=1` la ejecución se aborta** (§7.3).
+
 ### 5.9 Smoke post-despliegue
 
 | ID | Comprobación | DEMO | PROD |
@@ -1017,7 +1047,8 @@ navegador solo visita la app bajo prueba). En ningún caso `--privileged` ni
    (podman-compose 1.5.0 instalado lo admite).
 4. `trap` que siempre ejecuta `podman-compose -f compose.test.yaml -p <proyecto> down -v`
    y borra los secretos de la ejecución, también si falla.
-5. Para `containers`, ejecuta `TX-CONT-01` en el host mientras la pila está en marcha.
+5. Para `containers`, ejecuta `TX-CONT-01`, `TX-CMD-01` y `TX-CONT-02` en el host mientras la pila está en marcha.
+   Antes de levantar nada, en toda suite con `APP_IMAGE`, comprueba el registro de escaneo (`TX-CONT-03`, §5.8): **sin `GATE`, aviso; con `GATE=1`, aborta con código 1**. `GATE=1` es obligatorio en las ejecuciones de puerta (Etapa 2 final, Etapa 3) y antes de DEMO; el registro de la ejecución queda en `resumen.txt` (`registro_escaneo=PASA|AVISO|FALLA`).
 6. Deja informes en `tests/results/<proyecto>/` (JUnit, HTML de Playwright,
    cobertura, k6) y el resumen en §12.
 
@@ -1579,6 +1610,8 @@ la opción "Ajustes" no aparece en el menú del encargado (§5.2.2).
 | ID | Comprobación | Tipos |
 |---|---|---|
 | TX-CONT-01 | Política rootless de todos los contenedores (RS-36, RS-37, RS-38) | Contenedores |
+| TX-CONT-02 | `comprobar-excepciones.sh` sale con 0; db derivada `localhost/mi-app-db:19.0-alpine3.24` sin `gosu` y proxy `localhost/mi-app-proxy:2.11.9-alpine`, ambos con `USER` 1000 (SEC-049, SEC-054, SEC-055) | Contenedores |
+| TX-CONT-03 | Registro de escaneo aprobado vigente (≤ 7 días, commit, árbol limpio, excepciones, digests de db y proxy) de `APP_IMAGE`; aviso sin `GATE`, fallo con `GATE=1` (SEC-052 punto 3) | Contenedores |
 | RS-01..RS-46 | Requisitos de `docs/seguridad.md` §7 no ligados a un criterio de historia (cabeceras, TLS, CSRF, BD, imágenes…) | S, D, C según §7 |
 | TX-SMK-01..07 | Smoke post-despliegue | Smoke |
 | TX-RT-01 | El proxy no almacena SSE en búfer | R |
@@ -1597,7 +1630,7 @@ Una historia está terminada para Testing cuando:
 2. **Todos los tests pasan**: los de la historia y la regresión completa de las
    historias ya terminadas, en el entorno TESTING efímero, con Playwright con
    `retries: 0`. Un test inestable cuenta como fallo hasta que se explique.
-3. Matriz de autorización y `TX-CONT-01` en verde.
+3. Matriz de autorización y `TX-CONT-01`, `TX-CONT-02` en verde (y, en la ejecución de puerta, `GATE=1`, §7.3).
 4. axe sin violaciones `serious`/`critical` en las pantallas de la historia.
 5. Capturas en `tests/screenshots/<HU>/` entregadas al UX Designer.
 6. **Cobertura mínima** (V8, líneas / ramas), medida sobre el código de la
@@ -1646,6 +1679,7 @@ captura o traza de Playwright), **agente responsable**.
 | 2026-11-26 | 2 (tarea 2.8a) | `a11y` | misma imagen | **Falla a propósito**: 7 pasan, **2 fallan** (etiqueta por paso del cambio de PIN, encargado y camarero) | — | `getByLabel('PIN actual (provisional)')` no existe: el campo se llama «PIN (6 dígitos)» / «PIN (4 a 6 dígitos)» en los 3 pasos. axe: sin violaciones en los 7 anteriores. |
 | 2026-11-26 | 2 (tarea 2.8a) | `visual` | misma imagen | **Pasa**: 11/11 | — | Las capturas regeneradas se restauraron con `git restore tests/screenshots` (los usuarios de prueba son aleatorios). |
 | 2026-11-26 | 2 (tarea 2.8a) | `unit` y `trazabilidad` | misma imagen / `TESTS_NODE_IMAGE` = `localhost/mi-app-dev-tools@sha256:4ccbdb7e…` | **Pasan**: `unit` 6 ficheros, 177/177; `trazabilidad` HU-01 23/23, sin errores | — | Los tests nuevos citan `[HU-01/CA-…]` solo de criterios vigentes; los demás usan `[RS-…]`, `[SEC-…]`, `[H-…]` y `[T-…]`, que la herramienta no valida. |
+| 2026-11-26 | 2 (tarea 2.11a) | `containers` (sin `GATE`) | `APP_IMAGE` = `localhost/mi-app@sha256:da93418b…` (`ec09e9e3d3a7-sucio`, solo para ver el aviso) / db `localhost/mi-app-db@sha256:a0e839a0…` / proxy `localhost/mi-app-proxy@sha256:0210e566…` / commit `b79a455` + cambios sin commit de `tests/` | **Pasa**: TX-CONT-01, TX-CMD-01 y TX-CONT-02 (12 comprobaciones); TX-CONT-03 da `INCUMPLE` (la imagen `-sucio` no tiene registro) y `run.sh` avisa y sigue (`registro_escaneo=AVISO`) | — | Con `GATE=1` y la misma imagen: código 1 antes de levantar nada. Con `GATE=2`: código 2. Imagen provisional: la 2.11b reconstruye desde el commit con el árbol limpio. |
 
 ## 13. Fallos abiertos
 
@@ -1801,4 +1835,22 @@ Comprobación de que las regresiones SEC-039..042 no son vacías: con 5 defectos
 inyectados a mano en una copia del árbol (fuera del repositorio), 19 de los 24
 tests nuevos fallan (§12). Una regla de texto más amplia que la de SEC-042
 (C1, espacios Unicode: D-2.5-03 c del software-engineer) no está cubierta a
-propósito: los tests solo fijan los caracteres de control C0 y DEL.
+propósito: los tests solo fijan los caracteres de control C0 y DEL. **[2.11a]** Con la decisión de `docs/arquitectura.md` §18.2 (D-2.5-03 c, confirmada en `docs/seguridad.md` §6.14), `apiText` ampliado rechazará los C1 y el login pasará de `401` a `400 VALIDATION_FAILED` `format` en `name`: el comentario de cabecera de `tests/integration/api/HU-01-nombre-control.int.test.ts` lo dice así (sin cambiar aserciones) y los tests de `\u0085`, `\u009f`, `\u202e`, `\u2066`, `\u2028` y `"\ud800"` llegan con HU-05.
+
+### 14.9 Tarea 2.11a (HU-01): TX-CONT-02, registro de escaneo (SEC-052 punto 3) y comentario de SEC-042
+
+Cambios solo en `tests/` y en esta documentación (no se tocan `apps/`, `packages/` ni `deploy/`).
+
+| Cambio | Fichero | Detalle |
+|---|---|---|
+| TX-CONT-02 | `tests/containers/tx-cont-02.sh`, llamado desde la suite `containers` de `tests/run.sh` | `comprobar-excepciones.sh` con código 0; etiquetas de db y proxy en `compose.test.yaml` y en los contenedores; `USER` 1000; sin `gosu` en la db (§5.8) |
+| TX-CONT-03 y `GATE` | `tests/containers/tx-cont-03.sh`, `tests/run.sh` | Registro de escaneo aprobado (§5.8). **Decisión: sin `GATE` es un aviso, con `GATE=1` aborta con código 1 antes de levantar nada.** Motivo: durante el desarrollo las imágenes son `-sucio` y no tienen registro, y un fallo permanente impediría el trabajo diario; la puerta y DEMO exigen `GATE=1` (§6.12 punto 4 de `docs/seguridad.md`). `GATE` con otro valor que vacío, `0` o `1` da código 2. El script solo lee el registro |
+| Comentario SEC-042 | `tests/integration/api/HU-01-nombre-control.int.test.ts:5-12` | Ya no dice que los C1 «dan 401» sin más: hoy dan 401, y con §18.2 pasarán a `400 format`; sin cambiar aserciones |
+
+**Comprobación de que los tests no son vacíos** (copias fuera del repositorio, clon local y registro sintético en el directorio de trabajo temporal; nada se escribió en el registro real):
+
+- TX-CONT-03 con un registro correcto → PASA. Falla, y solo por esa causa, con: fecha de hace 8 días, fecha futura, etiqueta propia, sin `etiqueta`, etiqueta `-sucio`, sin `arbol_limpio`, `arbol_limpio=no`, `db=` con otro digest, `excepciones_sha256` distinto, `app=` distinto, commit inexistente, sin registro y `APP_IMAGE` por etiqueta (13 de 13).
+- TX-CONT-02 con una pila inexistente → FALLA (contenedores). Con `templates` añadido al Caddyfile → FALLA por `comprobar-excepciones.sh`; con la imagen oficial de postgres o con otra etiqueta del proxy en `compose.test.yaml` → FALLA por la etiqueta. Control positivo de `gosu`: la imagen oficial `postgres:19.0-alpine3.24` lo tiene; `localhost/mi-app-db:19.0-alpine3.24`, no.
+
+**Estado de la puerta respecto a SEC-052:** con el `construir.sh` actual, `GATE=1` no puede pasar aún, porque el registro no incluye `arbol_limpio=si` (requisito (e), responsable infrastructure, antes de DEMO). Los demás campos, con una imagen construida sin argumento desde el commit final y árbol limpio, sí se comprueban. El registro real `9be1188a…` (commit `fb427fa`) falla además por `db=`/`proxy=` (las etiquetas apuntan hoy a otras imágenes) y no vale para la puerta (§6.12 punto 4).
+

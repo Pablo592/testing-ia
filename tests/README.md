@@ -24,7 +24,8 @@ sh tests/run.sh integration     # Vitest + buildApp(FakeClock) + PostgreSQL efí
 sh tests/run.sh e2e             # Playwright contra proxy -> app -> db (incluye las series con PIN erróneo y con cortes de red)
 sh tests/run.sh a11y | visual   # axe / capturas para UX (tests/screenshots/HU-01/)
 sh tests/run.sh perf            # k6 (Etapa 3; en Etapa 2 solo control rápido)
-sh tests/run.sh containers      # TX-CONT-01 en el host sobre la pila en marcha
+sh tests/run.sh containers      # TX-CONT-01/02 en el host sobre la pila en marcha (y el aviso del registro de escaneo)
+GATE=1 sh tests/run.sh <suite>  # ejecución de PUERTA: aborta si APP_IMAGE no tiene registro de escaneo vigente (ver abajo)
 sh tests/run.sh trazabilidad    # cruza criterios de las historias con los títulos de los tests
 sh tests/run.sh all             # orden de docs/testing.md §7.4
 sh tests/run.sh integration integration/api/HU-01-login   # un fichero (filtro de Vitest)
@@ -48,6 +49,38 @@ Variables: ver la cabecera de `tests/run.sh`. Desde la 2.2b:
   (`sha256:a3e24437…`). Siguen siendo obligatorios `APP_IMAGE`
   (`sh deploy/app/construir.sh`) y, para `perf`, `K6_IMAGE`.
 
+### Registro de escaneo aprobado y `GATE=1` (SEC-052 punto 3, tarea 2.11a)
+
+`sh deploy/app/construir.sh` escanea app, db y proxy y, si todo pasa, escribe
+`~/.local/state/mi-app/escaneos/aprobadas/<digest-app>`. Desde la 2.11a,
+`tests/run.sh` lo **lee** (nunca lo escribe ni lo borra) con
+`tests/containers/tx-cont-03.sh` en toda suite que usa `APP_IMAGE`
+(`integration`, `security`, `e2e`, `a11y`, `visual`, `perf`, `containers`;
+con `all`, una sola vez). Comprueba (§6.11 y §6.12 de `docs/seguridad.md`,
+requisitos (a)–(h)):
+
+1. `APP_IMAGE` es `localhost/mi-app@sha256:<64 hex>` y existe el registro de ese digest.
+2. `app=` es exactamente `APP_IMAGE`; la imagen existe y ninguno de sus nombres lleva `-sucio` ni `-rechazada`.
+3. `fecha` de hace como mucho **7 días** y no futura.
+4. `etiqueta` sin `-sucio`/`-rechazada` e igual a los 12 primeros caracteres de `commit` (40 hex); `arbol_limpio=si`.
+5. El commit existe y es `HEAD` o un antecesor.
+6. `excepciones_sha256` coincide con el de `deploy/app/trivyignore.yaml` + `deploy/scan/trivyignore-proxy.yaml` **en ese commit** y en el árbol actual.
+7. `db=` y `proxy=` son los digests que apuntan **hoy** `localhost/mi-app-db:19.0-alpine3.24` y `localhost/mi-app-proxy:2.11.9-alpine`.
+
+Comportamiento (decisión de Testing): **sin `GATE`, aviso; con `GATE=1`, fallo.**
+
+| Ejecución | Registro no vigente |
+|---|---|
+| `sh tests/run.sh <suite>` (trabajo diario) | informe `INCUMPLE: …` + `AVISO (SEC-052)`; la suite sigue; `resumen.txt` dice `registro_escaneo=AVISO` |
+| `GATE=1 sh tests/run.sh <suite>` (puerta de Etapa 2/3 y antes de DEMO) | código 1 **antes de levantar nada**; `resumen.txt` no se escribe, queda `tests/results/<proyecto>/tx-cont-03.txt` |
+
+Un valor de `GATE` distinto de vacío, `0` o `1` es un error (código 2). No hay
+variable para cambiar los 7 días ni el directorio del registro más allá de
+`SCAN_DIR`, el mismo que usa `construir.sh`. Mientras `construir.sh` no escriba
+`arbol_limpio=si` (requisito (e), pendiente de infrastructure), `GATE=1`
+falla siempre por ese campo: es lo que debe pasar, no se relaja la
+comprobación.
+
 ## Estructura
 
 ```
@@ -62,7 +95,7 @@ tests/
 ├── a11y/                 axe + comprobaciones de teclado/etiquetas
 ├── visual/               capturas 375/768/1024/1440/1920 para UX
 ├── performance/k6/       escenarios k6
-├── containers/           TX-CONT-01 (host)
+├── containers/           TX-CONT-01 (rootless), TX-CONT-02 (excepciones y db/proxy derivadas), TX-CONT-03 (registro de escaneo), TX-CMD-01 (host)
 ├── support/              helpers (reloj, app, http, sse, bd, logs, métricas, semilla e2e)
 ├── tools/                trazabilidad
 ├── results/  screenshots/   SALIDA (únicas rutas en escritura desde los contenedores)

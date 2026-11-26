@@ -26,6 +26,14 @@
 #   E2E_WORKERS       workers de Playwright en paralelo (por defecto 3; D-2.2-03)
 #   APP_TZ            zona de app (por defecto UTC; segunda ejecución con America/New_York)
 #   RONDAS            rondas de k6 (por defecto 3 en Etapa 2; 20 en Etapa 3)
+#   GATE              1 = ejecución de PUERTA (SEC-052 punto 3, docs/seguridad.md §6.12):
+#                     si APP_IMAGE no tiene un registro de escaneo aprobado vigente
+#                     (tests/containers/tx-cont-03.sh: máximo 7 días, commit y
+#                     etiqueta, árbol limpio, excepciones, digests de db y proxy), la
+#                     ejecución se ABORTA con código 1 antes de levantar nada. Sin
+#                     GATE (trabajo diario) el mismo informe sale como AVISO y la
+#                     ejecución sigue. Obligatorio antes de DEMO. Cualquier otro
+#                     valor distinto de vacío, 0 o 1 es un error.
 #
 # Requisitos de docs/infraestructura.md §7.1 que cumple este script:
 #   1. `mkdir -p -m 0700 .secrets` antes de cualquier up/run.
@@ -143,9 +151,52 @@ mkdir -p tests/results tests/screenshots/HU-01
 # Requisito 5: antes de cualquier up/run.
 comprobar_enlaces
 
+# --- Registro de escaneo aprobado (SEC-052 punto 3) --------------------------
+case "${GATE:-}" in
+  ""|0|1) ;;
+  *) echo "ERROR: GATE debe ser vacío, 0 o 1 (vale '$GATE')" >&2; exit 2 ;;
+esac
+# Estado que se anota en resumen.txt: no-aplica | PASA | AVISO (sin GATE) | FALLA (con GATE, aborta).
+REGISTRO_ESTADO=${REGISTRO_ESTADO:-no-aplica}
+verificar_registro() {
+  # $1: fichero donde guardar el informe (opcional). Solo lee (tx-cont-03.sh);
+  # no escribe ni borra nada del registro. Imprime el informe.
+  if [ -n "${REGISTRO_VERIFICADO:-}" ]; then
+    return 0
+  fi
+  # El código de salida se toma del script, no de tee.
+  set +e
+  salida_reg=$(sh tests/containers/tx-cont-03.sh "$APP_IMAGE" 2>&1)
+  rc_reg=$?
+  set -e
+  printf '%s\n' "$salida_reg"
+  [ -z "${1:-}" ] || printf '%s\n' "$salida_reg" > "$1"
+  if [ "$rc_reg" -eq 0 ]; then
+    REGISTRO_ESTADO=PASA
+    return 0
+  fi
+  if [ "${GATE:-0}" = "1" ]; then
+    REGISTRO_ESTADO=FALLA
+    echo "ERROR (GATE=1, SEC-052): APP_IMAGE no tiene un registro de escaneo aprobado vigente." >&2
+    echo "  Construya con 'sh deploy/app/construir.sh' (sin argumento, desde el commit final y con el árbol limpio)" >&2
+    echo "  y use el APP_IMAGE que imprime. No se ejecuta ninguna suite." >&2
+    return 1
+  fi
+  REGISTRO_ESTADO=AVISO
+  echo "AVISO (SEC-052): APP_IMAGE NO tiene un registro de escaneo aprobado vigente (ver arriba)." >&2
+  echo "  Vale para el trabajo diario; NO vale para la puerta: allí se ejecuta con GATE=1." >&2
+  return 0
+}
+
 # --- all: una pila nueva por suite, en el orden de docs/testing.md §7.4 ------
 if [ "$SUITE" = "all" ]; then
   rc=0
+  # El registro se comprueba una sola vez para todas las suites (si falta APP_IMAGE,
+  # 'containers' lo avisa como siempre).
+  if [ -n "${APP_IMAGE:-}" ]; then
+    verificar_registro || exit 1
+    export REGISTRO_VERIFICADO=1 REGISTRO_ESTADO
+  fi
   sh "$0" containers || { echo "containers falla: se detiene (la pila incumple la política)" >&2; exit 1; }
   for s in trazabilidad unit integration security e2e a11y visual perf; do
     sh "$0" "$s" || rc=1
@@ -318,6 +369,11 @@ ejecutar() {
   return $rc_ej
 }
 
+# SEC-052 punto 3: antes de levantar nada, con la imagen ya validada.
+if necesita_app; then
+  verificar_registro "$RESULTADOS/tx-cont-03.txt" || exit 1
+fi
+
 RUN_ENV_EXTRA=""
 PROYECTOS_E2E="--project=tablet-h --project=tablet-h-webkit --project=tablet-v --project=tpv --project=barra --project=escritorio --project=movil"
 # D-2.2-02: el binario de Playwright está en tests/node_modules (paquete del
@@ -391,6 +447,10 @@ case "$SUITE" in
         # docs/infraestructura.md §9.2), después de migrate (BD sin encargados).
         sh tests/containers/tx-cmd-01.sh "$PROYECTO" | tee "$RESULTADOS/tx-cmd-01.txt" || RC=1
         grep -Eq '^\[TX-CMD-01\] (PASA|SKIP)' "$RESULTADOS/tx-cmd-01.txt" || RC=1
+        # TX-CONT-02: condiciones de las excepciones (SEC-054) y de las imágenes
+        # derivadas de db y proxy (SEC-049, SEC-055).
+        sh tests/containers/tx-cont-02.sh "$PROYECTO" | tee "$RESULTADOS/tx-cont-02.txt" || RC=1
+        grep -q '^\[TX-CONT-02\] PASA' "$RESULTADOS/tx-cont-02.txt" || RC=1
         ;;
     esac
     ;;
@@ -401,6 +461,7 @@ esac
   echo "APP_IMAGE=$APP_IMAGE"
   echo "TESTS_NODE_IMAGE=$TESTS_NODE_IMAGE"
   echo "PLAYWRIGHT_IMAGE=$PLAYWRIGHT_IMAGE"
+  echo "registro_escaneo=$REGISTRO_ESTADO gate=${GATE:-0}"
   echo "fecha=$(date -u +%Y-%m-%dT%H:%M:%SZ) commit=$(git rev-parse --short HEAD 2>/dev/null || echo '-')"
 } > "$RESULTADOS/resumen.txt"
 cat "$RESULTADOS/resumen.txt"
