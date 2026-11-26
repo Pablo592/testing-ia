@@ -79,6 +79,14 @@
 > mutaciones) (§6.12). **SEC-055 verificado**; SEC-052 3a/3b verificados,
 > con requisitos nuevos (e)–(h); SEC-056 ampliado (M11–M12). Ningún
 > crítico ni alto abierto que bloquee la puerta de la Etapa 2.
+> Revisión 2.14, 2026-11-26 (Etapa 2, HU-01): decisiones de la 2.2c en
+> `docs/arquitectura.md` §18 (commit `86b111c`): SEC-043 (clave IPv4 / IPv6
+> /64, poda que falla cerrado, publicación solo por IPv4), cola del semáforo
+> argon2 y regla de texto `apiText`/`apiName`, contrastadas con el código, con
+> prueba propia fuera del repositorio (memoria y coste de la poda, clases
+> Unicode en Node) (§6.14). Las tres se **confirman con condiciones**; §18.1
+> coincide con lo verificado. Hallazgo nuevo SEC-059 (baja, HU-06). Plazo de
+> SEC-043 sin cambios.
 > Entradas: `docs/historias/` (README + HU-01..HU-09, IDs estables `CA-`),
 > `docs/arquitectura.md`, `docs/decisiones/ADR-001..008`, `docs/ux/`,
 > `docs/infraestructura.md`, `compose.dev.yaml`, `compose.test.yaml`,
@@ -113,7 +121,7 @@
 3. Actores de amenaza
 4. Superficies de ataque y fronteras de confianza
 5. Amenazas (STRIDE)
-6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c; §6.5, revisión 2.1f; §6.6, revisión 2.1k; §6.7, revisión 2.1m; §6.8, revisión 2.3; §6.9, revisión 2.6; §6.10, revisión 2.9)
+6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c; §6.5, revisión 2.1f; §6.6, revisión 2.1k; §6.7, revisión 2.1m; §6.8, revisión 2.3; §6.9, revisión 2.6; §6.10, revisión 2.9; §6.14, revisión 2.14)
 7. Requisitos de seguridad verificables (para Testing)
 8. Revisión de la arquitectura frente a la política de contenedores (§3)
 9. Hallazgos (SEC-xxx)
@@ -2372,6 +2380,202 @@ ficheros), incluidos los 4 de SEC-047; prueba propia **12/12**. La imagen
 **Altos o críticos en esta revisión:** ninguno nuevo. **SEC-047 VERIFICADO.**
 Nuevo SEC-058 (baja, HU-07).
 
+### 6.14 Revisión 2.14 (2026-11-26): decisiones de la 2.2c (`docs/arquitectura.md` §18, commit `86b111c`)
+
+Alcance: `docs/arquitectura.md` §5 (texto recibido, `503`), §7 (atomicidad,
+clave del límite por IP, capacidad y cola de argon2), §10 (publicación solo
+por IPv4) y §18.1–§18.3, contrastados con el código actual (`rate-limit.ts`,
+`serialize.ts`, `verify-pin.ts`, `http/routes/auth.ts`, `http/context.ts`,
+`http/guard.ts`, `http/validate.ts`, `packages/shared/src/api.ts`,
+`commands/index.ts`). Revisión de diseño: sin contenedores. Prueba propia
+fuera del repositorio (Node 22, scratchpad de la sesión): memoria y coste de
+la poda de un mapa como el de `FailureWindow` con 10 000 y 65 536 claves
+(≈ 300 B por entrada: 2,9 MiB y 17,8 MiB; recorrido completo de la poda
+2,8 ms y 8,4 ms), y `\p{Cc}`, `\p{Cf}` e `isWellFormed()` con U+0085,
+U+200D, U+061C y `\ud800`.
+
+**1. SEC-043: CONFIRMADA, con las condiciones C1–C6.**
+
+(a) **Clave = IPv4 completa o /64 de IPv6.** Correcto: el /64 es lo que
+controla un equipo con SLAAC y direcciones temporales. Condiciones para
+`ipRateKey`:
+- **C1.** Solo `::ffff:0:0/96` (forma decimal o hexadecimal) se trata como
+  IPv4, y se decide sobre la dirección ya analizada (16 bytes), no sobre el
+  texto. Cualquier otra IPv6 con cola decimal (`2001:db8::192.0.2.1`,
+  `::192.0.2.1`, `64:ff9b::/96`, `2002::/16`) sigue la regla del /64. Si se
+  sacara la IPv4 de toda dirección con cola decimal, un equipo con un /64
+  tendría 2^32 claves y el límite volvería a no servir.
+- **C2.** Se quita la zona (`%…`) antes de calcular la clave. Una entrada que
+  no es una IP (`net.isIP() === 0`, cadena vacía) va a **una clave fija
+  compartida** (p. ej. `invalid`) con un log `warn`, nunca a la cadena
+  recibida.
+- Casos a añadir a los de "Cómo verificar" de la §7: `2001:db8::192.0.2.1` y
+  `2001:db8::192.0.2.2` → misma clave /64; `::ffff:c000:201` → `192.0.2.1`;
+  `2001:DB8:0:0::1` y `2001:db8::1` → misma clave; `fe80::1%eth0` →
+  `fe80::/64`; `''` → la clave fija.
+
+(b) **La poda no borra bloqueadas ni con fallos; con el mapa lleno, falla
+cerrado.** Se ha valorado la denegación de servicio que pedía la tarea:
+- **El impacto es de todo el local.** Solo tienen entrada las claves con
+  fallos; un dispositivo del personal sin fallos recientes **no tiene
+  entrada**. Con el mapa lleno, todo el personal recibe `429` en el login (y
+  desde HU-06 en las aprobaciones) mientras dure el ataque y hasta 10–20 min
+  después (lo que tardan en caducar las entradas del atacante).
+- **Pero no es barato ni alcanzable desde el local.** Llenarlo exige
+  ≥ 10 000 claves distintas con al menos un fallo cada una en 10 min. Cada
+  fallo es una conexión TCP + TLS completa con Caddy desde la dirección real
+  (sin respuesta no hay *handshake*, así que no se puede falsificar), y
+  `X-Forwarded-For` solo se acepta de `proxy` (SEC-029 verificado). En IPv4,
+  el atacante tiene como mucho las direcciones de la red del personal: una
+  /24 son 253, y ocuparlas obliga a suplantar ARP de toda la red, que deja al
+  local sin red por sí solo (un ataque más barato que este). En IPv6 una LAN
+  es un solo /64, es decir, una clave; muchos /64 solo llegan desde redes
+  enrutadas, que SEC-002 deja fuera.
+- **Fallar abierto sería peor.** Con más de 10 000 claves, el atacante
+  tendría 10 intentos por clave sin tope y solo le pararía el bloqueo por
+  cuenta: 20 PIN por cuenta antes de `locked_manual`, dejando bloqueadas todas
+  las cuentas. Las dos opciones son una denegación de servicio, y la cerrada
+  además protege los PIN. Se confirma.
+- **Tamaño del mapa:** basta con `maxKeys` ≥ 2 × el número de direcciones de
+  la red desde la que se llega a Caddy (la del personal y, en la topología
+  B1, la del túnel WireGuard). **C3:** esas redes no deben ser mayores que
+  /20 (4 094 direcciones) con `maxKeys = 10 000`; si lo fueran,
+  Infrastructure lo anota y se sube `maxKeys` en proporción. La memoria no es
+  el límite (≈ 3 MiB con 10 000 y ≈ 18 MiB con 65 536), así que no hace falta
+  subirlo hoy.
+- **C4. Coste de la poda.** Con el mapa lleno, la poda recorre todo el mapa
+  (≈ 3 ms con 10 000 en la prueba propia). Debe ejecutarse **como mucho una
+  vez por segundo** (o cada N inserciones), y el rechazo de claves nuevas se
+  decide con el resultado de la última poda. Si no, cada petición con el mapa
+  lleno cuesta un recorrido completo en el bucle de eventos. Eso sube el
+  *lag* de `/healthz`, y el reinicio por `HealthOnFailure=kill` vacía todos
+  los límites en memoria (§6.8 punto 8).
+- **C5.** Se quita el bucle que hoy expulsa la entrada más antigua
+  (`rate-limit.ts:104-108`). Una reserva ya aceptada anota su fallo aunque se
+  pase del tope: está acotada por las reservas en curso (≤ 10 por clave). Se
+  aplica la misma regla en el mapa por sesión de las aprobaciones (clave
+  nueva → `429` con 60 s). `GET /auth/login-options` no responde `429` por
+  capacidad, solo a claves bloqueadas: aceptado, porque la rejilla ya es
+  pública (SEC-005).
+- **C6 (monitoring).** `auth.verify.rate_limited` con `cause: 'capacity'`
+  dispara una alerta inmediata, sin umbral: significa que el local está sin
+  login o que hay un ataque con miles de direcciones. Además, en DEMO/PROD,
+  hay que alertar si llega cualquier `client_ip` IPv6: indica que la
+  publicación solo por IPv4 se ha roto y que todo el local comparte cupo.
+
+(c) **Publicar `proxy` solo por IPv4 en DEMO y PROD: CONFIRMADA.** Es lo que
+hace que la consecuencia aceptada de la §7 punto 2 (toda la Wi-Fi del
+personal en un /64) no se dé. Condiciones para Infrastructure, que se
+verifican en DEMO:
+- Dirección IPv4 **explícita** en la publicación: `PublishPort=0.0.0.0:…`
+  o `-p 0.0.0.0:…`, o `ListenStream=0.0.0.0:443` en el `.socket`. Nunca
+  solo el puerto: `ListenStream=443` o `-p 443:…` escuchan también en
+  `[::]`, y con `BindIPv6Only=both` también aceptan IPv6.
+- Segunda barrera en el cortafuegos del host: descartar IPv6 hacia 80/443
+  (tabla `inet` o `ip6`).
+- El nombre del servidor no tiene registro AAAA ni anuncio mDNS de AAAA.
+- Cómo verificar: `ss -ltnH` sin ninguna escucha IPv6 en esos puertos;
+  `curl -6` desde un dispositivo del personal falla; RS-06 con dos
+  dispositivos da dos IPv4 distintas. Si el local solo tuviera IPv6, no se
+  publica sin decidirlo antes con Cybersecurity (ya está en la §10).
+
+**2. Cola del semáforo argon2 (32 en cola; llena → `503` + `Retry-After:
+5`, sin contar fallo, `auth.verify.busy`): CONFIRMADA, con las condiciones
+C7–C9.**
+- **Coste para el atacante.** Cada IP solo tiene 10 verificaciones por cada
+  10 min: los fallos cuentan y un `busy` no consume cupo. El semáforo atiende
+  4/t verificaciones por segundo (t = duración de una). Mantener la cola llena
+  exige ≈ 240/t direcciones: ~1 000 con 250 ms y ~6 000 con 40 ms. Una sola IP
+  no llena 4 + 32 (como mucho 10 en vuelo). Una ráfaga desde 4 IP (≈ 40
+  verificaciones) da `503` durante 0,4–2,5 s y deja esas IP bloqueadas
+  10 min. Los aciertos no consumen cupo, pero el carril por cuenta los
+  serializa: una credencial válida da 1 hash a la vez, y llenar la cola
+  exigiría 36 cuentas conocidas. No es barato.
+- **No filtra nada en el login.** El `503` no depende del PIN ni de la
+  cuenta. Una cuenta bloqueada responde `423` antes del semáforo, y ese `423`
+  ya es explícito en el login, `confirm` y `change`. En `approval` sí filtra:
+  ver **SEC-059**.
+- **32 es suficiente.** Con ~10 dispositivos la cola nunca pasa de ~6.
+- **C7.** El rechazo es síncrono, sin esperar (`queued ≥ 32` en el momento de
+  pedir hueco). Libera las reservas de IP y de sesión, no llama a
+  `registerFailure` y no registra `auth.verify.rate_limited`.
+- **C8.** Si el `prepare` (`hashNewPin` del PIN nuevo) recibe `busy` después
+  de acertar `currentPin` → `503`, sin escribir nada, con la reserva liberada
+  y **nunca `500`**. Hoy `prepare` está fuera del `try/catch` del acierto
+  (`verify-pin.ts:290`, antes del `try` de `:292`): un error propio llegaría
+  como `500 INTERNAL` con `http.request.unhandled_error`. Lo mismo para el
+  alta y el restablecimiento de PIN de HU-07. Test: `POST /auth/pin` con la
+  cola llena en el `prepare` → `503`, `pin_hash` y `failed_attempts` sin
+  cambiar.
+- **C9.** `approval`: SEC-059 (HU-06).
+
+**3. Regla de texto (`apiText`/`apiName`, D-2.5-03 c): CONFIRMADA, con las
+condiciones C10–C11.** Recoge las recomendaciones de la §6.9 punto 3 y las
+amplía con `apiName`.
+- **El C1 en el login (`401` → `400 format`) no filtra nada.** El `400` se
+  decide en `preValidation` (`http/validate.ts:9-11`) solo con la cadena
+  recibida, antes de cualquier consulta o hash. El cuerpo, las cabeceras y el
+  tiempo son iguales sea cual sea la cuenta, y no dice si el usuario existe.
+  Hay dos diferencias: (i) deja de contar como fallo de la IP. Es inocuo,
+  porque no se comprueba ningún PIN y el `400` no cuesta hash ni BD, como
+  cualquier otro `400` de formato. (ii) Una cuenta cuyo nombre guardado
+  contuviera un C1 ya no podría entrar. Por la API no puede existir, pero el
+  comando `create-initial-manager` hoy solo hace `trim()` y comprueba la
+  longitud (`commands/index.ts:65-66`).
+- **C10.** `create-initial-manager` usa `apiName` (la §5 ya lo lista como
+  "encargado inicial"). Al implementar HU-05 se comprueban los nombres que ya
+  existen en DEV y TESTING: `SELECT id FROM users WHERE name IS NOT NFC
+  NORMALIZED OR name ~ '[[:cntrl:]]'` → 0 filas.
+- **C11.** `apiText` y `apiName` se implementan como `transform` de zod (no
+  solo `refine`), para que el valor normalizado sea el que llega a la ruta:
+  `validateBody` sustituye `request.body` por el resultado
+  (`validate.ts:11`). Así el carril de SEC-047, la búsqueda `lower()` y el
+  valor guardado usan la misma cadena NFC. Test: el login con
+  `"José"` entra en la cuenta `José` y comparte el carril `user:<id>`.
+- Comprobado en Node: `\p{Cc}` incluye U+0085, `isWellFormed()` detecta
+  `\ud800`, y `\p{Cf}` incluye U+200D y U+061C. Las marcas direccionales
+  (U+200E, U+200F, U+061C) no están en la lista de `apiText`. Se acepta en
+  texto libre, porque no reordenan como los *overrides* o los aislamientos
+  que sí se rechazan. En `apiName` las rechaza `\p{Cf}`.
+- **Riesgo residual aceptado, sin hallazgo:** los homoglifos (`a` latina y
+  `а` cirílica) no se rechazan. Solo el encargado crea nombres (con
+  `confirmPin`) y cada cuenta tiene su PIN.
+- Para Testing (con HU-05): en el login, `\u0085`, `\u009f`, `‮`,
+  `⁦`, ` ` y `"\ud800"` → `400` `format` en `name`, sin líneas de
+  nivel `error`. Hay que actualizar el comentario de
+  `tests/integration/api/HU-01-nombre-control.int.test.ts:5-7`, que dice que
+  los C1 dan `401`.
+
+**4. §18.1: coincide con lo verificado** en la 2.1m, 2.3, 2.6, 2.9, 2.10b,
+2.10d y 2.8c (SEC-031/032, D-2.2-06 a/d/e, guarda única, `pnpm`, SEC-038,
+SEC-039..042, SEC-047, T-45, T-48, IMG-02, SEC-049/055). También coincide
+`retryAfterSeconds: 1` con las reservas en curso (`rate-limit.ts:29`, `:61`).
+Hay una sola inexactitud: la introducción dice que Cybersecurity ya aprobó
+todas las desviaciones, pero siete filas no tenían dictamen expreso: usuario
+desactivado → `401`, *hub* con `expired_reason IS NULL`, `validatePin(newPin)`
+antes de verificar `currentPin`, `413`/`500`, `RouteAuthConfig`, migrador
+propio y subrutas. **Revisadas ahora: aprobadas.** Detalles:
+- Usuario desactivado: la guarda (`guard.ts:107`) responde `401` pero no
+  revoca la sesión ni cierra sus flujos. Para HU-07 (ya en la §18.3): revocar
+  y cerrar los flujos en la misma operación que desactiva. Test: desactivar y
+  reactivar → la cookie antigua sigue dando `401 revoked` (la reactivación no
+  resucita la sesión).
+- `validatePin(newPin)` primero: el `400` solo depende de `newPin`, no dice
+  nada de `currentPin`, no consume cupo y exige una sesión con PIN
+  provisional.
+- Migrador propio: los privilegios de la 0001 ya se verificaron en la 2.3.
+  El resto no tiene implicaciones de seguridad.
+
+**5. Plazos.** **No cambia el plazo de SEC-043:** se corrige antes de empezar
+HU-06 y, como tarde, antes de la puerta de la Etapa 3 (tarea 2.15), con
+C1, C2, C4, C5, C7 y C8 y los casos de "Cómo verificar". C3 y la parte de
+Infrastructure de (c) van antes de DEMO. C6 lo hace Monitoring, antes de DEMO.
+SEC-059 se corrige con HU-06, junto con SEC-025. C10 y C11 van con HU-05.
+
+**Altos o críticos en esta revisión:** ninguno. Nuevo **SEC-059 (baja,
+HU-06)**. SEC-043 sigue abierto (baja) hasta implementarlo, con el diseño
+confirmado.
+
 ## 7. Requisitos de seguridad verificables (para Testing)
 
 Formato: requisito → cómo se verifica. Tipos: **U** unitario, **I**
@@ -2976,7 +3180,7 @@ SEC-049), que Trivy no ve en `alpine3.23` (SEC-051).
 - Responsable: software-engineer (§7: clave del límite por IP) y developer
 - Cómo corregir: clave del límite = IPv4 completa o prefijo `/64` de la IPv6 (normalizando las IPv4 mapeadas); en `prune`, no borrar nunca una entrada con `blockedUntil > now` (si sigue lleno, rechazar con `429` las claves nuevas mientras dure, o subir el tope).
 - Cómo verificar: unitario de `FailureWindow`/clave: 10 fallos desde `2001:db8::1` y el 11.º desde `2001:db8::2` → `429`; con el mapa lleno de claves sin bloqueo, una clave bloqueada sigue bloqueada tras insertar 10 000 claves nuevas.
-- Estado: abierto (baja, no bloquea). **[2.6]** Aplazamiento aceptado hasta la decisión del software-engineer (D-2.5-03 d), con condiciones: corregir antes de empezar HU-06 y, en todo caso, antes de la puerta de la Etapa 3, junto con el tope de la cola del semáforo argon2 (§6.9 punto 4).
+- Estado: abierto (baja, no bloquea). **[2.6]** Aplazamiento aceptado hasta la decisión del software-engineer (D-2.5-03 d), con condiciones: corregir antes de empezar HU-06 y, en todo caso, antes de la puerta de la Etapa 3, junto con el tope de la cola del semáforo argon2 (§6.9 punto 4). **[2.14]** Diseño del software-engineer (`docs/arquitectura.md` §7 y §10, 2.2c) **confirmado con condiciones** C1–C6 (§6.14 punto 1); sigue abierto hasta implementarlo (tarea 2.15). Plazo sin cambios.
 
 ## SEC-044: Dependencias de desarrollo con vulnerabilidades críticas (`tinypool` 1.1.1) y moderadas (`vitest` 3.2.7)
 - Severidad: baja (en nuestro contexto; el aviso las clasifica críticas)
@@ -3117,9 +3321,58 @@ SEC-049), que Trivy no ve en `alpine3.23` (SEC-051).
 - Cómo verificar: integración en HU-07, con un *hasher* que retiene la verificación en curso: (a) un login con el nombre `A` en cola detrás de otra verificación de la misma cuenta; durante la espera, `PATCH` renombra `A`→`B`; el login con `A` y el PIN correcto → `401` y 0 sesiones nuevas; (b) un login con `C` (inexistente) en cola; durante la espera, `POST /staff` crea `C`; ese intento → `401` sin verificar contra la cuenta nueva, y con otro login de `C` a la vez, `maxSimultaneas` = 1.
 - Estado: abierto (baja, no bloquea; corregir con HU-07, antes de cerrar esa historia)
 
+## SEC-059: Con la cola de argon2 llena, una aprobación revela si el encargado elegido está bloqueado
+- Severidad: baja
+- Ubicación: docs/arquitectura.md §7, "Clave del límite por IP y capacidad" punto 4 (cola llena → `busy`/`503`) y paso 3 de `approval` (bloqueo → error genérico con espera por `setTimeout`, fuera del semáforo); apps/api/src/modules/auth/verify-pin.ts:263-284 (la rama de la cuenta bloqueada responde antes del semáforo, que se usa en `verifyHash`, :113 y :288)
+- Descripción: con la decisión de la 2.2c, una verificación que encuentra la cola de argon2 llena recibe `503` sin que se compruebe el PIN. En una aprobación (HU-06), la rama del encargado bloqueado no pasa por el semáforo: responde `403 MANAGER_APPROVAL_INVALID` (con la espera igualada de SEC-025), mientras que con un encargado no bloqueado la misma petición recibe `503`. Quien sature la cola, o aproveche un momento de carga, distingue "bloqueado" de "no bloqueado" por el código de estado, que es justo lo que SEC-025 y RS-16d quieren ocultar. Con menos carga pasa lo mismo, de forma gradual, con el tiempo: una verificación real espera en la cola y la espera igualada no. Saturar la cola exige ráfagas desde varias direcciones (§6.14 punto 2), y el impacto es el de SEC-025: baja. No afecta al login, a `confirm` ni a `change`, porque allí el `423` ya es explícito.
+- Responsable: software-engineer (`docs/arquitectura.md` §7) y developer (HU-06)
+- Cómo corregir: en `approval`, hacer la espera igualada de la cuenta bloqueada **dentro del mismo semáforo** (`argon2Slots.run(() => esperar(referencia + variación))`). Así ocupa hueco y puesto en la cola como una verificación real, pero sin CPU; recibe `busy`/`503` en las mismas condiciones, y bajo carga su tiempo incluye la misma espera en la cola. Alternativa mínima: comprobar la admisión en la cola antes de mirar el bloqueo y rechazar igual las dos ramas (no iguala el tiempo de espera bajo carga).
+- Cómo verificar: integración en HU-06 con *hasher* lento y la cola llena (4 en curso y 32 en cola): una aprobación con el encargado bloqueado y otra con el encargado no bloqueado → las dos `503` + `Retry-After: 5`; sin la cola llena, las dos `403 MANAGER_APPROVAL_INVALID` (RS-16d). Unitario de `verifyPin`: con la cola llena, la rama bloqueada no espera fuera del semáforo.
+- Estado: abierto (baja, no bloquea; corregir con HU-06, junto con SEC-025)
+
 ---
 
-### Resumen de la revisión 2.8c (Etapa 2, HU-01, 2026-11-26)
+### Resumen de la revisión 2.14 (Etapa 2, HU-01, 2026-11-26)
+- **Decisiones de `docs/arquitectura.md` §18.2 (2.2c), confirmadas con
+  condiciones** (§6.14):
+  - **SEC-043:** la clave IPv4 / IPv6 /64, la poda que nunca borra entradas
+    bloqueadas ni con fallos y el fallo cerrado con el mapa lleno se
+    confirman. Con el mapa lleno, el `429` alcanza a todo el local, pero
+    llenarlo exige ≥ 10 000 direcciones reales con fallos en 10 min, y eso no
+    se puede hacer desde la red del local. Fallar abierto sería peor.
+    `maxKeys = 10 000` basta si la red del personal (o la del túnel B1) no es
+    mayor que /20 (≈ 3 MiB de memoria). Condiciones C1–C6: IPv4 solo de
+    `::ffff:0:0/96`, una clave fija para las entradas inválidas, poda como
+    mucho una vez por segundo, quitar la expulsión de la más antigua y
+    alertas de `cause: 'capacity'` y de cualquier IPv6 en DEMO/PROD.
+  - **Publicación solo por IPv4 en DEMO y PROD:** confirmada, con dirección
+    IPv4 explícita (nunca solo el puerto), IPv6 descartada en el cortafuegos,
+    sin AAAA y verificada con `ss`/`curl -6`/RS-06 en DEMO.
+  - **Cola del semáforo de 32 → `503` + `Retry-After: 5`:** confirmada.
+    Saturarla de forma sostenida exige ~1 000–6 000 direcciones, y en el
+    login no filtra nada. Condiciones C7–C8: rechazo síncrono que libera las
+    reservas, y el `busy` del `prepare` de `POST /auth/pin` → `503`, nunca
+    `500`.
+  - **`apiText`/`apiName`:** confirmada. El C1 del login (`401` → `400
+    format`) no filtra nada, porque se decide solo con la cadena recibida,
+    antes de la BD y del hash. Condiciones C10–C11: `create-initial-manager`
+    con `apiName` y `transform` de zod para que la ruta reciba el valor NFC.
+- **§18.1:** coincide con las revisiones anteriores. Siete filas sin dictamen
+  expreso se aprueban ahora; para HU-07, la reactivación no debe resucitar
+  sesiones.
+- **Nuevo:** **SEC-059 (baja, HU-06):** con la cola llena, una aprobación con
+  el encargado bloqueado da `403` y con uno no bloqueado da `503`. La espera
+  igualada debe ir dentro del semáforo.
+- **Plazo de SEC-043 sin cambios:** antes de HU-06 y, como tarde, antes de la
+  puerta de la Etapa 3 (2.15).
+- **Altos o críticos abiertos que bloqueen la puerta de la Etapa 2 para HU-01:
+  ninguno.** Riesgo aceptado: SEC-050 (EXC-03) y SEC-033 (EXC-01, baja).
+  Abiertos que no bloquean: SEC-003 (media), SEC-052 y SEC-056 (media, antes
+  de DEMO), SEC-025, SEC-043, SEC-046, SEC-057, SEC-058 y SEC-059 (baja).
+  Siguen en pie la condición de procedimiento (imágenes desde el commit final
+  con el árbol limpio, 2.11) y la ratificación humana de EXC-01 y EXC-03.
+
+### Resumen de la revisión 2.8c (Etapa 2, HU-01, 2026-11-26; histórico, sustituido por el de 2.14)
 - **SEC-047 (baja): VERIFICADO** (§6.13). Carril `user:<id>` resuelto con el
   `lower()` de PostgreSQL tras la reserva síncrona de IP; `POST /auth/pin` en
   el mismo carril. 16 o 32 variantes `i`/`İ` y `σ`/`Σ` → 5 verificaciones,
