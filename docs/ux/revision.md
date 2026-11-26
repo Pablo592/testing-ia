@@ -55,6 +55,7 @@ Fecha: 2026-11-25. Alcance: P-01 (paso 1 y paso 2), cambio obligatorio del PIN, 
 - **Dónde:** `apps/web/src/app/Layout.tsx:304-309` (la lista `GESTION` solo tiene Cola de barra, Menú, Personal y Resumen del día; no hay enlace a Pedidos en ningún sitio de la barra). Captura: `capturas-2.3/S-manager-menu-abierto-t1280.png`, `S-manager-resumen-t768.png`.
 - **Criterio:** Nielsen 3 (control y libertad del usuario); HU-01/CA-F03 ("puede acceder a todas las funciones (pedidos, …)"): hoy solo llega a Pedidos al iniciar sesión.
 - **Causa:** es un hueco del diseño, no un error del developer. `flujos.md:51` y `wireframes/02-pedidos.md` definen "Gestión" con 4 opciones y no la vuelta a P-02. En una tablet sin botón Atrás, la única salida es cerrar sesión y volver a entrar.
+- **Estado [2.4, 2026-11-25]: diseño corregido, falta implementar (developer, 2.5).** Cambio respecto a la propuesta: la opción de la pantalla actual **no se oculta** en `/pedidos`; se marca "Estás aquí" con `aria-current="page"` para que la lista no cambie de posición. Definido en `flujos.md` §0, `wireframes/06-gestion-menu.md`, `02-pedidos.md`, `10-acceso-denegado.md` y `design-system.md` §5.11.
 - **Propuesta:** ux-designer añade "Pedidos" como primera opción de "Gestión" (y la corrige en `flujos.md:51`, `02-pedidos.md` y `design-system.md` §5.11); el developer la implementa y la oculta en la propia pantalla `/pedidos`. Test para Testing: un encargado llega a `/pedidos` desde `/resumen` en 2 toques.
 
 #### H-2.3-02 (media): el teclado del sistema tapa el teclado propio
@@ -80,6 +81,7 @@ Fecha: 2026-11-25. Alcance: P-01 (paso 1 y paso 2), cambio obligatorio del PIN, 
 - **Dónde:** `apps/web/src/ui/app.css:3-12` (`.topbar` con `flex-wrap`) y `:41-55` (`.menu-list` `position: absolute; right: 0` dentro de `.menu`, sin cierre al salir con Tab). Captura: `capturas-2.3/S-manager-menu-abierto-m375.png`.
 - **Criterio:** axe `target-size` (serious, WCAG 2.5.8): con el menú abierto en el encargado a 375 px, la lista se solapa con "Cerrar sesión", que queda en la 3.ª fila. Además, la barra del encargado ocupa 3 filas (unos 160 px de 812) frente a los 64 px del design system §5.11.
 - **Gravedad:** baja porque 375 px es "solo uso de emergencia" y el menú es transitorio (se cierra al tocar fuera o con Escape). A 768 y 1280 px no ocurre y axe da 0 violaciones.
+- **Diseño [2.4]:** definido a <= 767 px en `flujos.md` §0 y `design-system.md` §5.11 (barra en 2 filas: `h1` + "Gestión" / nombre y rol + "Cerrar sesión"; menú como panel a ancho completo bajo la barra). Falta implementarlo (developer, 2.5); se corrige junto con H-2.3-01.
 - **Propuesta:** a <= 767 px, nombre y rol en una fila propia y los dos botones juntos; abrir el menú a ancho completo bajo la barra o cerrarlo al perder el foco.
 
 #### H-2.3-06 (baja): el anillo de foco del `h1` parece un campo

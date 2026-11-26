@@ -30,7 +30,7 @@ Los criterios se citan con su ID estable `HU-xx/CA-xnn` (`docs/historias/README.
 | HU-01/CA-U02 | Teclado con botones >= 44x44 | P-01, P-06, P-07, P-08, P-10 | 72x72 px (64 en 375 px) |
 | HU-01/CA-U03, CA-F05 | Error junto al campo, en texto; PIN vaciado | P-01 | "Usuario o PIN incorrectos" bajo el campo |
 | HU-01/CA-U04 | Nombre y rol en todas las pantallas | Todas | Barra superior (design-system §5.11) |
-| HU-01/CA-F01, CA-F02, CA-F03 | Destino según el rol; gestión solo para el encargado | P-01 -> P-02 / P-05; `/menu`, `/personal`, `/resumen` [2.1d] | "Gestión" solo en la barra del encargado; en HU-01, Menú, Personal y Resumen del día existen vacías con su `h1` (`10-acceso-denegado.md`) [2.1d] |
+| HU-01/CA-F01, CA-F02, CA-F03 | Destino según el rol; gestión solo para el encargado | P-01 -> P-02 / P-05; `/menu`, `/personal`, `/resumen` [2.1d] | "Gestión" solo en la barra del encargado, con "Pedidos" como primera opción [2.4]; en HU-01, Menú, Personal y Resumen del día existen vacías con su `h1` (`10-acceso-denegado.md`) [2.1d] |
 | HU-01/CA-F04 [2.1d] | "Acceso denegado" por URL sin ejecutar la acción | Estado de la layout en cualquier ruta sin permiso | `h1` "Acceso denegado", texto y enlace "Ir a Pedidos" / "Ir a la cola"; no monta la pantalla ni carga sus datos (design-system §5.13) |
 | HU-01/CA-F06, CA-F11 | Bloqueo progresivo con tiempo restante, indefinido y por dispositivo | P-01 | "Mensajes de bloqueo"; minutos redondeados hacia arriba (I-03) [1.2c] |
 | HU-01/CA-F07 | "Usuario desactivado, contacta con el encargado" | P-01 | Estado "Desactivado" |

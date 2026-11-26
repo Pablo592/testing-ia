@@ -3,6 +3,7 @@
 Autor: UX/UI Designer · Etapa 1, tareas 1.2, 1.2b y 1.2c · Fecha: 2026-11-23
 Entradas: `docs/historias/` (HU-01..HU-08 tras las rondas 1.1d, 1.1e y 1.1f; supuestos 1-24; HU-09 fuera del MVP), `docs/seguridad.md` §6.1 y §6.3 (PIN, bloqueo, SEC-007). Estado: **propuesta, pendiente de aprobación humana**.
 Cambios de la tarea 1.2b: estado "Servido" y "Cobrados hoy" (§4, §5), "Deshacer" de "Empezar" (§4), autorización y reconfirmación del encargado (§6, §7), bloqueos (§1) y Ajustes vinculados a HU-09 (§9).
+Cambios de la tarea 2.4 (2026-11-25): "Pedidos" pasa a ser la primera opción del menú "Gestión" del encargado, con la vuelta a P-02 desde cualquier pantalla (§0, H-2.3-01) y su comportamiento a 375 px (H-2.3-05).
 Cambios de la tarea 2.1d (2026-11-24): rutas de la SPA y "Acceso denegado" (§0), banners de vuelta al login por motivo y texto del `423` en el cambio obligatorio del PIN (§1, T-30), `screen` de "Acceso denegado" (§10.2).
 Cambios de la tarea 1.2c: HU-09 y P-12 fuera del MVP (§0, §9), cambio obligatorio del PIN y sesiones bloqueadas o revocadas (§1, HU-01/CA-F12, CA-F13), sonido y pantalla encendida en barra (§4), desglose por usuario del resumen (§8, SEC-008) y flujos y pasos de la telemetría del cliente (§10, M-03).
 
@@ -39,6 +40,7 @@ flowchart LR
   P -->|tocar fila| D[P-08 Detalle] --> CB
   D -->|Añadir productos| T
   P -. solo encargado: Menú de gestión .-> G{{Gestión}}
+  G -->|Pedidos, vuelta a P-02 desde cualquier pantalla| P
   G --> M[P-09 Menú]
   G --> S[P-10 Personal]
   G --> R[P-11 Resumen del día]
@@ -48,7 +50,14 @@ flowchart LR
 Pasos en texto:
 - Camarero: P-01 -> P-02 Pedidos. Desde ahí crea (P-03 -> P-04), cobra (P-06) y abre el detalle (P-08).
 - Barra: P-01 -> P-05 Cola. No tiene otra navegación (HU-01: no puede crear, cobrar ni cancelar).
-- Encargado: P-01 -> P-02 Pedidos + botón "Gestión" en la barra superior (Cola de barra, Menú, Personal y Resumen del día). No hay opción "Ajustes" [1.2c].
+- Encargado: P-01 -> P-02 Pedidos + botón "Gestión" en la barra superior con **5 opciones, en este orden: Pedidos, Cola de barra, Menú, Personal y Resumen del día** [2.4, H-2.3-01]. No hay opción "Ajustes" [1.2c].
+- **Navegación del encargado [2.4, H-2.3-01]:** "Pedidos" está siempre disponible en "Gestión", también cuando el encargado está en Menú, Personal, Resumen del día, Cola o "Acceso denegado". Volver a P-02 desde cualquiera de ellas son **2 toques** (abrir "Gestión" + "Pedidos"). Así el encargado tiene el mismo acceso al inicio de sala que el camarero y no depende de un botón Atrás (la tablet no lo tiene). Reglas:
+  - El menú lista siempre las 5 opciones en el mismo orden (la posición no cambia según la pantalla). La opción de la pantalla actual se marca con "Estás aquí" en texto, `aria-current="page"` y fondo `surface-alt`; sigue siendo un enlace (llevar a la misma pantalla no hace nada y cierra el menú). No se oculta: una lista que cambia de sitio obliga a releer.
+  - "Pedidos" va primera porque es el inicio del encargado y lo que más usa; el resto sigue el orden anterior.
+  - El nombre del botón sigue siendo "Gestión" (sin cambio de rótulo en el MVP). Decisión pendiente del humano: si "Pedidos" dentro de "Gestión" confunde en la demo (Etapa 4), cambiarlo a "Secciones"; no afecta a la estructura.
+  - Los demás roles no cambian: el camarero ya está en P-02 y no tiene más pantallas; la barra solo tiene la cola. Ninguno ve el botón "Gestión".
+  - Para el encargado en "Acceso denegado" el enlace del bloque sigue siendo "Ir a Pedidos" (1 toque); el menú ofrece lo mismo en 2.
+- **Barra superior a <= 767 px [2.4, H-2.3-05]:** dos filas de 56 px (112 px en total, no 3 filas). Fila 1: `h1` a la izquierda y "☰ Gestión" (solo encargado) a la derecha. Fila 2: "Marta · Encargado" a la izquierda y "Cerrar sesión" a la derecha. Para los demás roles, fila 1 `h1` y fila 2 nombre y "Cerrar sesión". El menú "Gestión" se abre como **panel a ancho completo justo debajo de la barra** (no desplegable anclado al botón): tapa el contenido, nunca la barra, así "Cerrar sesión" sigue visible y pulsable con el menú abierto. Se cierra con Escape, al tocar fuera, al elegir una opción y al salir del panel con Tab (el foco vuelve al botón "Gestión"). A >= 768 px sigue siendo un desplegable bajo el botón, alineado a la derecha, de 280 px de ancho.
 - P-02 tiene dos pestañas: "Pedidos activos" y "Cobrados hoy" (1 toque, HU-04).
 - **Todas las pantallas** llevan la barra superior con "Nombre · Rol" y "Cerrar sesión" (HU-01).
 

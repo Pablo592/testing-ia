@@ -9,13 +9,31 @@ Solo encargado. Uso típico: TPV u ordenador (1440 px), también tablet. Navegab
 ```
 +--------------------------------+
 | Gestión                        |
+|  [☰ Pedidos]                   |   <- primera opción: vuelta a P-02 (H-2.3-01)
 |  [▦ Cola de barra]             |
 |  [☕ Menú]                      |
 |  [👤 Personal]                  |
 |  [€ Resumen del día]           |   <- 1 toque al resumen de hoy (HU-08/CA-U01)
 +--------------------------------+
 ```
-Panel lateral con opciones de 56 px de alto, icono + texto. [1.2c] **No hay opción "Ajustes"**: HU-09 está fuera del MVP y el número de mesas y el umbral de retraso no se pueden cambiar desde la aplicación (supuesto 20).
+Panel con opciones de 56 px de alto, icono + texto, **5 opciones siempre en este orden** (Pedidos, Cola de barra, Menú, Personal, Resumen del día) [2.4]. La opción de la pantalla actual lleva "Estás aquí" en texto, `aria-current="page"` y fondo `surface-alt`, y sigue siendo un enlace; no se oculta, para que la lista no cambie de posición. Icono de Pedidos: `clipboard-list` (Lucide). Pestañas y foco: al abrir, el foco va a la primera opción; Escape cierra y devuelve el foco al botón "Gestión".
+
+Posición: a >= 768 px, desplegable bajo el botón "Gestión", alineado a la derecha, 280 px de ancho. A <= 767 px (375 px), panel a ancho completo bajo la barra superior (las 5 opciones suman 280 px, caben en 812 px de alto); no cubre la barra, así que "Cerrar sesión" sigue accesible (H-2.3-05).
+
+```
+375 px, menú abierto (encargado)
++-------------------------------+
+| Resumen del día   [☰ Gestión] |  fila 1, 56 px
+| Marta · Encargado [⎋ Cerrar]  |  fila 2, 56 px ("Cerrar sesión")
++-------------------------------+
+| ☰ Pedidos                     |  56 px
+| ▦ Cola de barra               |
+| ☕ Menú                        |
+| 👤 Personal                    |
+| € Resumen del día  Estás aquí |
++-------------------------------+
+  (el resto de la pantalla queda atenuado; tocar fuera cierra)
+``` [1.2c] **No hay opción "Ajustes"**: HU-09 está fuera del MVP y el número de mesas y el umbral de retraso no se pueden cambiar desde la aplicación (supuesto 20).
 
 ## P-09 Menú (1440x900)
 
@@ -92,7 +110,7 @@ Desactivar un producto: diálogo "¿Desactivar Moca? Dejará de aparecer en la t
 | HU-05/CA-U02 | Modo agotados de `03-toma-pedido.md` |
 | HU-05/CA-N04 | Etiqueta visible por campo; reordenar con Subir/Bajar sin arrastrar (WCAG 2.5.7) |
 | HU-08/CA-U01 | "Resumen del día" en el menú de gestión, 1 toque |
-| HU-01/CA-F03 | El menú de gestión da acceso a cola, menú, personal y resumen |
+| HU-01/CA-F03 | El menú de gestión da acceso a pedidos, cola, menú, personal y resumen; el encargado vuelve a Pedidos desde cualquier pantalla en 2 toques [2.4, H-2.3-01] |
 
 ## ~~P-12 Ajustes~~ — FUERA DEL MVP [1.2c] (solo referencia)
 

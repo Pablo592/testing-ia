@@ -34,7 +34,7 @@ No es una pantalla con ID propio (P-xx): es un **estado de la layout** que susti
 +-----------------------------------------------------------------------------------+
 ```
 
-Encargado: la barra superior tiene además "☰ Gestión", como en el resto de pantallas. Barra: la barra superior no lleva el interruptor de sonido ni el indicador de conexión (son de P-05).
+Encargado: la barra superior tiene además "☰ Gestión", como en el resto de pantallas, con "Pedidos" como primera opción [2.4]; "IR A PEDIDOS" es la vía de 1 toque y el menú la de 2. Barra: la barra superior no lleva el interruptor de sonido ni el indicador de conexión (son de P-05).
 
 ## Textos exactos
 
@@ -68,7 +68,7 @@ Encargado: la barra superior tiene además "☰ Gestión", como en el resto de p
 
 En HU-01 se crean las rutas `/menu`, `/personal` y `/resumen` con su guarda (§5.2) y solo la barra superior. Su contenido llega con HU-05, HU-07 y HU-08.
 
-| Ruta | `h1` (barra superior) | Título del documento | Opción de "Gestión" que lleva a ella |
+| Ruta | `h1` (barra superior) | Título del documento | Opción de "Gestión" que lleva a ella ("Pedidos" y "Cola de barra" también están en el menú) |
 |---|---|---|---|
 | `/menu` | "Menú" | "Menú · Café · Toma de pedidos" | "Menú" |
 | `/personal` | "Personal" | "Personal · Café · Toma de pedidos" | "Personal" |
@@ -85,6 +85,6 @@ Las rutas `/pedidos` y `/cola` de HU-01 usan los `h1` "Pedidos" y "Cola" de sus 
 | Criterio | Cómo |
 |---|---|
 | HU-01/CA-F04 | "Acceso denegado" por URL sin montar la pantalla ni pedir sus datos; el servidor responde además `403 FORBIDDEN` |
-| HU-01/CA-F03 | El encargado llega a `/menu`, `/personal`, `/resumen` y `/cola` desde "Gestión" sin ver "Acceso denegado" |
+| HU-01/CA-F03 | El encargado llega a `/pedidos`, `/menu`, `/personal`, `/resumen` y `/cola` desde "Gestión" sin ver "Acceso denegado" [2.4] |
 | HU-01/CA-U04 | La barra superior, con nombre y rol, se mantiene en "Acceso denegado" y en las pantallas vacías |
 | Criterio común WCAG 2.2 AA | Foco al `h1`, enlace con propósito descriptivo, título del documento, contrastes de tokens verificados |

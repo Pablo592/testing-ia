@@ -8,7 +8,7 @@ Actualizado en la tarea 1.2b: estado "Servido", pedidos cobrados sin servir en l
 ```
 +-----------------------------------------------------------------------------------+
 | Pedidos                                     Lucía · Camarero   [⎋ Cerrar sesión]  |
-|                                   (encargado: [☰ Gestión] antes del nombre)        |
+|                                   (encargado: [☰ Gestión] antes del nombre; ahí está "Pedidos") |
 +-----------------------------------------------------------------------------------+
 |  [ Pedidos activos (7) ]  [ Cobrados hoy ]   <- pestañas, 56 px; 1 toque           |
 |                                                         +-----------------------+ |
@@ -87,6 +87,7 @@ Los pedidos cobrados y no servidos dejan de verse a las 00:00 (`Europe/Madrid`) 
 | Éxito | Toasts: "Pedido 42 enviado a barra", "Pedido 42 cobrado", "Pedido 42 servido · Deshacer" |
 
 ## Responsive
+- 375 px, barra superior: dos filas (fila 1 `h1` y "☰ Gestión"; fila 2 nombre y rol y "Cerrar sesión"), el menú se abre a ancho completo bajo la barra (`06-gestion-menu.md`, H-2.3-05).
 - 375 px: filas en 2 líneas (arriba número, mesa e insignias; abajo total y acciones, "Servido" a la izquierda de "Cobrar"); "Nuevo pedido" como botón fijo inferior a todo el ancho; el toast de Deshacer va encima de ese botón, sin taparlo.
 - 768 px vertical: como el wireframe, con "Nuevo pedido" fijo abajo a la derecha. Si las insignias no caben en una línea, bajan a una segunda línea de la fila (la fila crece, no se cortan).
 - 1440 px: lista de ancho máximo 1200 px, centrada.
@@ -96,6 +97,7 @@ Los pedidos cobrados y no servidos dejan de verse a las 00:00 (`Europe/Madrid`) 
 |---|---|
 | HU-01/CA-U04 | Barra superior con nombre y rol |
 | HU-01/CA-F01 | El botón "Gestión" solo existe para el encargado (y el servidor lo valida) |
+| HU-01/CA-F03 | El menú "Gestión" incluye "Pedidos" (aquí marcada "Estás aquí"): el encargado vuelve a P-02 desde cualquier pantalla en 2 toques [2.4] |
 | HU-02/CA-F16 | Esta pantalla al entrar; "Nuevo pedido" = toque 1 |
 | HU-02/CA-F17, CA-F18 | Tabla "Qué entra en la lista" |
 | HU-02/CA-F19 | Fila: número, mesa/cliente, hora, estado en texto, "€ COBRADO", total |
