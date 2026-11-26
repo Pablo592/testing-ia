@@ -79,7 +79,7 @@ Caddy responde `404` a los tres y el 9464 no se publica ni se enruta.
 | `session:self` | `POST /auth/logout`, `GET /auth/me` | ✓ | ✓ | ✓ | HU-01 | Permitidas también con PIN provisional |
 | `session:self` | `POST /auth/pin` | ✓ (solo con PIN provisional) | ✓ (ídem) | ✓ (ídem) | HU-07/CA-F04, CA-F09 | **Solo el cambio obligatorio del PIN provisional** (`must_change_pin = true`); sin PIN provisional → `403 FORBIDDEN` sin verificar nada ni sumar a ningún contador. Exige `currentPin` (pasa por `verifyPin`: contador del usuario y límite por IP; `403 PIN_INVALID`, `423 LOCKED`, `423 ACCOUNT_LOCKED_MANUAL`, `429`); regla de PIN por rol; revoca las demás sesiones del usuario. No hay cambio voluntario del PIN en el MVP |
 | `session:self` | `POST /session/activity` | ✓ | ✓ | ✓ | HU-01 | Máx. 1/min |
-| `events:subscribe` | `GET /events` | ✓ | ✓ (K) | ✓ | HU-03, HU-05 | Máx. 2 flujos por sesión |
+| `events:subscribe` | `GET /events` | ✓ | ✓ (K) | ✓ | HU-03, HU-05 | Máx. 2 flujos por sesión (el tercero cierra el más antiguo) y **50 en total** (RS-23; el 51.º → `503 SERVICE_UNAVAILABLE` con `Retry-After: 5`, antes de abrir el flujo). [2.6, SEC-040] |
 | `menu:read` | `GET /menu` | ✓ | ✓ (K, sin precios) | ✓ | HU-02, HU-05 | |
 | (sin permiso propio) | `GET /auth/me` → `localConfig` (configuración de instalación de solo lectura: `TABLE_COUNT`, `DELAY_THRESHOLD_MINUTES`) | W `{tableCount}` | K `{delayThresholdMinutes}` | ambos | HU-02, HU-03 | Cada rol recibe solo el valor que usa. Barra lo recibe además en `GET /kitchen/queue`. No hay evento SSE de ajustes (cambian solo con un reinicio de `app`) |
 | `product:set_availability` | `PATCH /products/:id/availability` | ✓ | ✗ | ✓ | HU-05 | Solo el campo `available` |

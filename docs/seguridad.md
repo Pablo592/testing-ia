@@ -48,6 +48,17 @@
 > imagen, `readelf`/`nm`) (§6.8). SEC-029, SEC-030, SEC-031 y SEC-032 pasan a
 > verificado; SEC-028 confirmado con la imagen real. Hallazgos nuevos
 > **SEC-038 (alta, bloquea)** y SEC-039..SEC-046 (baja).
+> Revisión 2.6, 2026-11-26 (Etapa 2, HU-01): verificación de la entrega 2.5
+> del developer (commit `0d7ca30`): SEC-038, T-45, SEC-039..SEC-042, cambios
+> de UX H-2.3-01..11 y D-2.5-01..05, con la imagen reconstruida desde el
+> commit (`localhost/mi-app:0b3c9f111c63`, `sha256:66fcdf09…`), suites
+> `unit`, `security`, `integration` y `e2e`, prueba propia en
+> `runner-integration` (fichero temporal, borrado al terminar), `lower()` de
+> PostgreSQL en contenedor efímero, `pnpm audit` y Trivy 0.76.2 sobre las
+> tres imágenes desplegables (§6.9). **SEC-038 verificado**; SEC-039..SEC-042,
+> SEC-044 y SEC-045 verificados; aplazamiento de SEC-043 aceptado con
+> condiciones. Hallazgos nuevos SEC-047 (baja) y **SEC-048, SEC-049 y SEC-050
+> (alta, imágenes de `app`, `db` y `proxy`; bloquean)**.
 > Entradas: `docs/historias/` (README + HU-01..HU-09, IDs estables `CA-`),
 > `docs/arquitectura.md`, `docs/decisiones/ADR-001..008`, `docs/ux/`,
 > `docs/infraestructura.md`, `compose.dev.yaml`, `compose.test.yaml`,
@@ -82,7 +93,7 @@
 3. Actores de amenaza
 4. Superficies de ataque y fronteras de confianza
 5. Amenazas (STRIDE)
-6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c; §6.5, revisión 2.1f; §6.6, revisión 2.1k; §6.7, revisión 2.1m; §6.8, revisión 2.3)
+6. Decisiones sobre los hallazgos abiertos de `docs/estado.md` (incl. §6.3, otros puntos; §6.4, revisión 1.4c; §6.5, revisión 2.1f; §6.6, revisión 2.1k; §6.7, revisión 2.1m; §6.8, revisión 2.3; §6.9, revisión 2.6)
 7. Requisitos de seguridad verificables (para Testing)
 8. Revisión de la arquitectura frente a la política de contenedores (§3)
 9. Hallazgos (SEC-xxx)
@@ -1472,6 +1483,186 @@ verifique con la prueba de concurrencia.
 
 ---
 
+### 6.9 Revisión 2.6 (2026-11-26): verificación de la entrega 2.5 (commit `0d7ca30`)
+
+Alcance: el diff de `0d7ca30` (`verify-pin.ts`, `rate-limit.ts`,
+`serialize.ts` nuevo, rutas de `auth.ts` y `system.ts`, `guard.ts`, `hub.ts`,
+`session-policy.ts`, `app.ts`, `metrics.ts`; `packages/shared` (`api.ts`,
+`api-constants.ts`, `zod-csp.ts`); `apps/web` (barra y menú "Gestión", P-01,
+cambio de PIN, `PinField`, iconos)), D-2.5-01..05 y las imágenes que usa
+TESTING (`app`, `db`, `proxy`).
+
+**Pruebas** (Podman 5.7.0 rootless; sin modificar código ni tests del
+repositorio): (a) imagen reconstruida con `sh deploy/app/construir.sh` desde
+el árbol limpio (HEAD `0b3c9f1`, que respecto a `0d7ca30` solo cambia
+`docs/`): `localhost/mi-app:0b3c9f111c63` =
+`APP_IMAGE=localhost/mi-app@sha256:66fcdf09d0b3757c57318e0d370803554937fbedbdb3ba92ff008dcb68ed5b06`,
+sin `-sucio`; (b) `sh tests/run.sh unit`, `security`, `integration` y `e2e`
+con esa imagen; (c) prueba propia: fichero de integración temporal (copiado a
+`tests/integration/api/`, ejecutado con `sh tests/run.sh integration
+<filtro>` y **borrado al terminar**; copia en el scratchpad de la sesión) con
+`montarApp` (BD real de TESTING y *hasher* espía): escenarios A, B, C y A2 de
+SEC-038, variantes Unicode del nombre, SSE tras la inactividad, tope de 50
+flujos, `Cache-Control` y caracteres de control; (d) `lower()` de la imagen
+`db` (PostgreSQL 19, `initdb --locale=C.UTF-8`) en un contenedor efímero sin
+red con UID 70; (e) Trivy 0.76.2 por digest sobre `podman save` de las tres
+imágenes (UID 1000, `cap-drop ALL`, raíz `ro`, `.tar` en `ro`), con el
+fichero de EXC-01 para `app`; (f) `pnpm audit` y `pnpm audit --prod` en
+contenedor endurecido con el repositorio en `ro`; (g) inspección de la raíz
+exportada de la imagen (`index.html`, *bundle*, `.node`, `readelf -d`).
+
+**1. SEC-038: VERIFICADO.** Los tres puntos de "Cómo corregir" están, con
+otra forma que cumple RS-05b:
+- IP (y sesión en `approval`): reserva **síncrona** en
+  `FailureWindow.tryReserve` (`rate-limit.ts:54-64`) antes del primer `await`
+  (`verify-pin.ts:216`); rechaza si `fallos en la ventana + en curso ≥
+  límite`. Cada reserva se cierra una sola vez, como fallo o liberada
+  (`settle`, `verify-pin.ts:240-251`; el `finally` de `:323-326` la libera si
+  hay un error inesperado). Las reservas en curso van fuera de `entries`, así
+  que `prune` no las borra.
+- Cuenta: cerrojo FIFO por clave (`KeyedSerializer`, `serialize.ts:10-33`) y
+  `load()` dentro del turno (`verify-pin.ts:256`): cada intento ve el bloqueo
+  que dejó el anterior. **Salvedad:** la clave es `name.toLowerCase()` de JS y
+  no coincide siempre con `lower()` de PostgreSQL (SEC-047, baja).
+- Acierto: `UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE
+  id = … AND NOT locked_manual AND (locked_until IS NULL OR locked_until <=
+  now)` y `onSuccess` (el `INSERT` de la sesión, o el `pin_hash` nuevo y la
+  revocación) en la **misma transacción** (`verify-pin.ts:286-297`); 0 filas
+  → *rollback* y `423` (`:301-313`). Como la condición la evalúa PostgreSQL
+  con el bloqueo de fila, también cubre un fallo simultáneo que llegue por
+  otro carril (lo confirma el caso D2 de SEC-047).
+- Semáforo explícito de 4 operaciones argon2 (`serialize.ts:40-63`), también
+  en `hashNewPin`.
+- Resultados: RS-05b **4/4 en verde** (junit de la suite `integration`).
+  Prueba propia (entre paréntesis, la 2.3): **A** 300 logins desde una IP,
+  contador 0, PIN correcto el último → **5** verificaciones (300), `401`×5,
+  `423`×5, `429`×290, el correcto `429` (`200` con cookie), **0 sesiones**,
+  contador 5. **B** 300 desde IP distintas, contador 19 → **1** verificación,
+  `423`×299, el correcto `423`, 0 sesiones, `locked_manual`. **C** 300
+  `currentPin` desde IP distintas, contador 19 → **1** verificación, todas
+  `423`, **el PIN no cambia** (`204`). **A2** 3000 logins desde una IP →
+  **10** verificaciones (516) y 2990 `429`.
+- Pendiente, sin bloquear: (i) SEC-047; (ii) del punto 4 falta la cola
+  acotada del semáforo con `503` (D-2.5-03 a): por IP la cola ya está
+  acotada (≤ 10 en curso), pero con muchas direcciones (SEC-043) puede crecer;
+  se decide con SEC-043 (punto 4 de esta sección); (iii) la atomicidad aún no
+  está en `docs/arquitectura.md` §7 (D-2.5-03 a, software-engineer).
+
+**2. T-45: CORREGIDO sin relajar la CSP.** La CSP de
+`deploy/proxy/Caddyfile:27` no ha cambiado desde la Etapa 1 (último commit
+que toca el fichero: `7cc2f97`); no hay `unsafe-eval`, `unsafe-inline` ni
+`wasm-unsafe-eval` en `deploy/` ni en `apps/`, y la app no pone una CSP
+propia. La causa desaparece con H-2.3-11: `apps/web` solo importa **tipos**
+de `@mi-app/shared/api` y las constantes de `api-constants.ts`, así que el
+*bundle* de la imagen (`/app/public/assets/index-ChIbHF-X.js`) ya no lleva el
+código de análisis de zod ni la sonda `new Function("")` (0 apariciones de
+`Function(`); solo queda `config({ jitless: true })` de `zod-csp.ts`, que se
+aprueba como defensa por si zod vuelve al cliente. `index.html` sin
+*scripts* ni estilos en línea. e2e: `HU-01-csp` 4/4 (Chromium y WebKit,
+incluido el control que inyecta un *script* y comprueba que el vigilante lo
+registra); con el vigilante de CSP en todos los e2e, ver punto 7.
+
+**3. SEC-039, SEC-040, SEC-041 y SEC-042: VERIFICADOS** con prueba propia
+(las regresiones automáticas están pedidas a testing en D-2.5-02):
+- SEC-039: `markExpired` llama a `hub.expire` (`guard.ts:57-58`); el hub
+  guarda la última actividad de cada sesión con flujo (la actualiza `touch`
+  de la guarda, solo en peticiones que cuentan, SEC-030) y en cada `ping`
+  cierra con `expired` los flujos de roles distintos de `kitchen` con ≥ 15
+  min sin actividad (`IDLE_TIMEOUT_MS` común en `session-policy.ts`). Prueba:
+  camarero con flujo, +15 min sin peticiones → cerrado en **1,8 s** sin
+  ninguna petición REST; otro camarero con `GET /auth/me` a los 10 min →
+  sigue abierto; barra → sigue abierta.
+- SEC-040: `canAccept` antes del `hijack` (`system.ts`) y `open` justo
+  después, sin `await` entre medias (sin carrera). Prueba: 25 sesiones × 2 =
+  50 flujos; el 51.º de otra sesión → `503 SERVICE_UNAVAILABLE`,
+  `Retry-After: 5`, `cache-control: no-store`; el 3.º de una sesión con 50
+  abiertos → `200` (sustituye a su más antiguo). `sse.rejected` sin datos
+  sensibles.
+- SEC-041: `onSend` común (`app.ts:171-177`). Prueba: `200` y `401` de
+  `/auth/me` (también con *query string*), `401`, `400` y `429` del login,
+  `404` de `GET` y `POST` a rutas inexistentes, `403` sin `Origin`, `403` de
+  `POST /auth/pin` sin PIN provisional, `204` de `/session/activity` y del
+  *logout* y el `503` del flujo → todas con `no-store`. El flujo SSE conserva
+  `no-cache, no-transform` (`hijack`).
+- SEC-042: `apiText` (`packages/shared/src/api.ts`) rechaza C0 y DEL.
+  Prueba: `\u0000`, `\u0007`, `\n` y `\u007f` en `name` → `400
+  VALIDATION_FAILED` con `[{ path: ['name'], rule: 'format' }]` y 0 líneas de
+  nivel `error`; `\u0085`, ` ` y `​` → `401` normal (sin `500`).
+  Para la regla general de texto (D-2.5-03 c, software-engineer) se
+  recomienda rechazar además C1 (U+0080–U+009F), los controles
+  bidireccionales (U+202A–U+202E, U+2066–U+2069) y U+2028/U+2029 en los
+  campos que se muestran a otras personas (nombres de la rejilla, notas,
+  motivos) y normalizar a NFC al guardar. No es hallazgo nuevo: hoy solo el
+  encargado crea nombres.
+
+**4. SEC-043: se acepta el aplazamiento** hasta la decisión del
+software-engineer (D-2.5-03 d). Es baja, la 2.5 no la empeora (las reservas
+en curso no las toca `prune`) y depende de que haya IPv6 hasta Caddy.
+Condiciones: decidir y corregir **antes de empezar HU-06** (las aprobaciones
+usan el mismo límite por IP) y, en todo caso, antes de la puerta de la
+Etapa 3; en la misma decisión, el tope de la cola del semáforo argon2 (punto
+1 (ii)), porque con muchas direcciones es lo único que acota esa cola.
+
+**5. Cambios de UX (H-2.3-01..11): sin hallazgos.** El menú "Gestión" filtra
+por `me.permissions` solo para pintar; la autorización sigue en la guarda del
+servidor (RS-17/RS-18 en verde). Iconos SVG en JSX, sin `innerHTML`.
+`PinField` sigue con `type="password"`, `autocomplete="off"` y filtro a
+dígitos; `inputmode="none"` y los 6 indicadores no muestran nada que no
+mostraran ya los puntos del campo (la longitud ya era visible) y el contador
+"N de 6 dígitos" solo lo oye el lector de pantalla. "Reintentar" de P-01 solo
+repite `GET /auth/login-options` (sujeto al bloqueo por IP). La gestión del
+foco no tiene efectos de seguridad. Estático de RS-25 en verde.
+
+**6. D-2.5-01..05.** D-2.5-01 (localizador de testing) y D-2.5-04 (UX): sin
+implicaciones de seguridad. D-2.5-02: hace falta para que SEC-039..SEC-042
+sigan verificados en cada ejecución (testing, baja). D-2.5-03: (a) atomicidad
+**aprobada** con la salvedad de SEC-047; (b) `503 SERVICE_UNAVAILABLE` con
+`Retry-After: 5` **aprobado**; (c) ver punto 3; (d) ver punto 4; (e)
+`session-policy.ts` compartido **aprobado**. D-2.5-05: los eventos nuevos
+(`sse.rejected`; `auth.verify.locked` también en el acierto con la cuenta ya
+bloqueada) solo llevan identificadores, rol y motivo: **aprobado**.
+
+**7. Suites con la imagen `sha256:66fcdf09…`.** `unit` 177/177; `security`
+73 pasan + 241 omitidos por alcance; `integration` 254 pasan (incluidos los
+4 de RS-05b) + 244 omitidos; `e2e`: partes normales **73 pasan, 1 falla** y 2
+omitidos hasta HU-02, `serie-pin` 5/5, `serie-red` 1/1. El fallo es WebKit,
+`tests/e2e/HU-01-iniciar-sesion.e2e.ts:396` (CA-N06, barra a las 12 h):
+vuelve a P-01 sin el banner del motivo y el vigilante anota una violación
+`style-src-elem` (estilo en línea bloqueado en `https://toxiproxy:8443/`,
+origen `?:5:30`, muestra vacía). Repetido aislado 8 veces (4 Chromium y 4
+WebKit) → 8/8 en verde. No sale del código de la app (sin `<style>` ni
+`style=` en `apps/web`, *bundle* e `index.html` sin estilos en línea) y la
+CSP hace lo que debe (bloquea). Se trata como intermitencia de la pila e2e
+(posiblemente T-46) y se pasa a testing; no es un hallazgo de seguridad.
+
+**8. Dependencias e imágenes.** `pnpm audit --prod` y `pnpm audit`: 0
+vulnerabilidades (Vitest 4.1.12 exacto, sin `tinypool` 1.x): **SEC-044
+verificado**. Trivy 0.76.2 (DB del 2026-11-26), solo `HIGH,CRITICAL`:
+- `app` (`sha256:66fcdf09…`, distroless Debian 13.8): las 2 de EXC-01 como
+  *suppressed* y **una alta nueva con corrección**, `libzstd1` 1.5.7+dfsg-1,
+  CVE-2026-124851 → **SEC-048**. Condiciones 3 y 4 de SEC-033 siguen
+  cumpliéndose (`/nodejs/bin/node` solo enlaza libc, libm, libdl,
+  libpthread, libstdc++, libgcc_s y libatomic; ningún `.node` enlaza `libssl`
+  ni `libcrypto`). Siguen los 10 `.node` de `argon2` de otras plataformas
+  (SEC-046).
+- `db` (`postgres:19.0-alpine`, Alpine 3.24.4): `libxml2` (1 alta con
+  corrección) y `/usr/local/bin/gosu` (Go 1.24.6: 1 crítica y 25 altas, todas
+  con corrección en Go) → **SEC-049**.
+- `proxy` (`caddy:2.11.9-alpine`): 2 altas en `/usr/bin/caddy`
+  (`go-jose/v3` sin corrección y `x/net` con corrección) → **SEC-050**.
+- Es el **primer escaneo** de `db` y `proxy`: hasta ahora solo se había
+  escaneado la imagen de la app (§6.7, §6.8). El escaneo de SEC-034 debe
+  cubrir todas las imágenes desplegables, no solo la de la app.
+- La imagen de esta revisión se construyó desde el commit, sin `-sucio`
+  (SEC-037 sigue abierto como control del script).
+
+**Altos o críticos en esta revisión:** SEC-038 **verificado**. Quedan
+abiertos **SEC-048, SEC-049 y SEC-050** (alta, infrastructure, imágenes),
+que **bloquean la puerta de la Etapa 2** por la regla de imágenes sin
+vulnerabilidades críticas/altas, hasta actualizar los digests o, solo para lo
+que no tenga corrección, aprobar una excepción fechada. El código de HU-01 no
+tiene altos ni críticos abiertos.
+
 ## 7. Requisitos de seguridad verificables (para Testing)
 
 Formato: requisito → cómo se verifica. Tipos: **U** unitario, **I**
@@ -1486,7 +1677,7 @@ contra TESTING/DEMO), **S** estático (SAST/lint/CI), **C** contenedores/host.
 | RS-03 | Bloqueo progresivo 5/10/15/20 de §6.1.3; el contador no se reinicia al expirar el bloqueo; durante el bloqueo no se verifica el PIN | I con reloj inyectable: 25 intentos fallidos → tiempos 5, 15, 60 min y `423 ACCOUNT_LOCKED_MANUAL`; luego PIN correcto sigue rechazado |
 | RS-04 | `managerApproval` fallido suma al contador del encargado; cuenta bloqueada/desactivada/PIN provisional no aprueba; error genérico idéntico en todos los casos | I |
 | RS-05 | 10 fallos/10 min desde una IP, sumando login, `managerApproval`, `confirmPin` y `currentPin` → `429` 10 min en todas las rutas de PIN (y en `GET /auth/login-options`) antes de verificar el hash; 5 aprobaciones fallidas/10 min por sesión → `429` | I (medir que no se llama al hasher) |
-| RS-05b | [2.3, SEC-038] Los límites de RS-03, RS-05 y RS-16b se cumplen **también con peticiones simultáneas**: una IP nunca tiene más verificaciones en curso que los fallos que le quedan hasta el límite; una cuenta nunca supera el umbral del bloqueo siguiente por verificaciones simultáneas; un acierto con la cuenta ya bloqueada (`locked_until > now` o `locked_manual`) en el momento de anotarlo no crea sesión ni cambia el PIN | I: 50 logins simultáneos desde una IP con PIN erróneo → como mucho 10 llamadas al hasher y el resto `429`; 50 simultáneos a una cuenta desde IP distintas → como mucho 5 llamadas al hasher antes del `423`; ráfaga con el PIN correcto al final sobre una cuenta que llega a `locked_manual` → ese intento `423`, 0 sesiones abiertas; lo mismo con `currentPin` (el PIN no cambia) |
+| RS-05b | [2.3, SEC-038] Los límites de RS-03, RS-05 y RS-16b se cumplen **también con peticiones simultáneas**: una IP nunca tiene más verificaciones en curso que los fallos que le quedan hasta el límite; una cuenta nunca supera el umbral del bloqueo siguiente por verificaciones simultáneas; un acierto con la cuenta ya bloqueada (`locked_until > now` o `locked_manual`) en el momento de anotarlo no crea sesión ni cambia el PIN | I: 50 logins simultáneos desde una IP con PIN erróneo → como mucho 10 llamadas al hasher y el resto `429`; 50 simultáneos a una cuenta desde IP distintas → como mucho 5 llamadas al hasher antes del `423`; ráfaga con el PIN correcto al final sobre una cuenta que llega a `locked_manual` → ese intento `423`, 0 sesiones abiertas; lo mismo con `currentPin` (el PIN no cambia); [2.6, SEC-047] 16 logins simultáneos a una cuenta con las variantes del nombre que PostgreSQL considera iguales (`i`/`İ` en un nombre con 4 `i`) desde IP distintas → como mucho 5 llamadas al hasher |
 | RS-06 | La IP del cliente que usa la app es la que añade Caddy; `X-Forwarded-For` enviado por el cliente se ignora; en TESTING/DEMO/PROD dos dispositivos distintos se ven con IP distinta | D (enviar XFF variable: el límite salta igual) + C (log con dos IP reales) |
 | RS-07 | Usuario inexistente: mismo código, cuerpo y tiempo que PIN erróneo (diferencia de medianas < 50 ms en 100 intentos) | I |
 | RS-08 | argon2id con `m ≥ 19456 KiB, t ≥ 2, p = 1`; *pepper* leído de fichero de secreto; máx. 4 verificaciones simultáneas | U (prefijo del hash) + I (carga: 50 logins simultáneos no superan el límite de memoria del contenedor) |
@@ -1607,7 +1798,7 @@ aprobar los ficheros de `deploy/` cuando existan.
 | Containerfile de DEV | base por digest, `USER 1000:1000`, root solo en construcción, sin secretos | — | Cumple |
 | `10-roles.sh` | sin contraseñas en el log (SEC-015); roles `NOSUPERUSER…`, límites de conexión, `app_backup` | igual | Cumple; **SEC-020 (media)** por `pg_stat_statements`. [1.4c] Corregido y verificado: `SET pg_stat_statements.track_utility = off` en cada bloque y `pg_stat_statements_reset()` al final |
 | `Caddyfile` | — | `admin off`, 8080/8443, RS-26 completo, `-Server`, sin `log_credentials`, `X-Request-Id` propio, 404 a internos, sin `trusted_proxies` | Cumple |
-| Escaneo Trivy/Grype | imagen de herramientas no desplegable | imagen final aún no existe | Pendiente (Etapa 2, RS-39). [2.1m] Base distroless: 0 críticas, 2 altas con EXC-01 (SEC-033); escaneo dentro del build pendiente (SEC-034) |
+| Escaneo Trivy/Grype | imagen de herramientas no desplegable | imagen final aún no existe | Pendiente (Etapa 2, RS-39). [2.1m] Base distroless: 0 críticas, 2 altas con EXC-01 (SEC-033); escaneo dentro del build pendiente (SEC-034). [2.6] `app`: 1 alta nueva con corrección (SEC-048); primer escaneo de `db` (1 crítica, 26 altas, SEC-049) y `proxy` (2 altas, SEC-050): **bloquea** hasta actualizar los digests |
 
 **Veredicto (1.4b):** ningún contenedor corre como root, usa `--privileged`,
 monta el socket ni la red del host. No hay motivo de bloqueo por la regla de
@@ -1979,7 +2170,7 @@ regla de contenedores.
     Se usa con `--ignorefile deploy/app/trivyignore.yaml --show-suppressed --severity HIGH,CRITICAL --exit-code 1` (SEC-034). **Prohibido** `--ignore-unfixed`, ignorar por paquete entero o un `.trivyignore` sin `expired_at`: ocultarían futuras altas sin corrección. Cambiar el fichero requiere una entrada nueva o actualizada de Cybersecurity en este documento.
   - Comprobaciones de las condiciones 3 y 4 en cada build (las añade Infrastructure a `construir.sh` o a la suite `containers`): `node -p 'process.config.variables.node_use_quic'` en la imagen → `false`; `grep -rE "node:quic|experimental-quic|require\(['\"](node:)?dgram|from ['\"](node:)?dgram" /app/dist` sin resultados; ningún `.node` en `/app` con `NEEDED` de `libssl`/`libcrypto` ni símbolos `OSSL_QUIC_`/`SSL_new_listener`/`SSL_set_quic_tls_cbs` sin definir (`readelf -d`, `nm -D --undefined-only`, ejecutados fuera de la imagen sobre `podman export`, porque la distroless no tiene shell).
 - Cómo verificar: (a) `construir.sh` con el fichero → escaneo `0` y 2 *suppressed* con el `statement`; sin el fichero → falla; (b) las comprobaciones de las condiciones 3 y 4 pasan sobre la imagen real; (c) el 2026-12-08 Cybersecurity revisa Trivy (DB actualizada), los avisos de Debian (`openssl`) y las versiones de seguridad de Node, y deja constancia aquí.
-- Estado: abierto (riesgo aceptado con EXC-01 hasta el 2026-12-24; no bloquea; ratificación humana pendiente) **[2.3]** Imagen real `localhost/mi-app:69e823f40ad7-sucio` (`sha256:42df4724…`): Trivy 0.76.2 con el fichero de EXC-01 → 0 críticas/altas y 2 *suppressed*; condiciones 3 y 4 cumplidas (ningún `.node` de `argon2` con `NEEDED libssl`/`libcrypto` ni símbolos QUIC; `dist` sin `node:quic` ni `dgram`).
+- Estado: abierto (riesgo aceptado con EXC-01 hasta el 2026-12-24; no bloquea; ratificación humana pendiente) **[2.3]** Imagen real `localhost/mi-app:69e823f40ad7-sucio` (`sha256:42df4724…`): Trivy 0.76.2 con el fichero de EXC-01 → 0 críticas/altas y 2 *suppressed*; condiciones 3 y 4 cumplidas (ningún `.node` de `argon2` con `NEEDED libssl`/`libcrypto` ni símbolos QUIC; `dist` sin `node:quic` ni `dgram`). **[2.6]** Imagen `0b3c9f111c63` (`sha256:66fcdf09…`): las 2 de EXC-01 siguen *suppressed* y las condiciones 3 y 4 se cumplen; aparece otra alta, con corrección, fuera de EXC-01 (`libzstd1`, SEC-048). Al actualizar el digest de la base para SEC-048, revisar si `libssl3t64` ya está corregido (condición 1).
 
 ## SEC-034: El escaneo de la imagen no forma parte del build
 - Severidad: media
@@ -1988,7 +2179,7 @@ regla de contenedores.
 - Responsable: infrastructure
 - Cómo corregir: tras `podman build`, en `construir.sh`: (1) `podman save` a un fichero temporal en `$XDG_RUNTIME_DIR` (o el scratch del usuario) y Trivy por digest (el de §8) en contenedor rootless (`--user 1000:1000`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--read-only`, el `.tar` montado `ro`, caché de la DB en un directorio del usuario), **nunca** con el socket de Podman (§8 de este documento); `--severity HIGH,CRITICAL --exit-code 1 --ignorefile deploy/app/trivyignore.yaml --show-suppressed`, con el informe JSON guardado junto a la etiqueta; (2) `pnpm audit --prod --audit-level high` sobre el lockfile (en la etapa de construcción, que ya tiene red en `pnpm deploy`, o en el script); (3) las comprobaciones de las condiciones 3 y 4 de SEC-033; (4) si algo falla, el script sale con código ≠ 0, **no imprime `APP_IMAGE`** y borra la etiqueta (o la marca como `-rechazada`). Documentarlo en §8.1 y en `docs/infraestructura.md` §14.
 - Cómo verificar: `sh deploy/app/construir.sh` con la imagen real → escaneo en la salida, 2 *suppressed* (EXC-01) y `APP_IMAGE`; con `deploy/app/trivyignore.yaml` renombrado → sale ≠ 0 y sin `APP_IMAGE`; `podman ps` durante el escaneo no muestra montajes del socket.
-- Estado: abierto (media, no bloquea; debe estar hecho antes de usar la primera imagen real para la puerta de la Etapa 2)
+- Estado: abierto (media, no bloquea; debe estar hecho antes de usar la primera imagen real para la puerta de la Etapa 2). **[2.6]** Sigue sin estar en `construir.sh` (2.1n en cola) y la imagen del escaneo manual tiene una alta nueva (SEC-048). Ampliación: el escaneo debe cubrir **todas las imágenes desplegables** de los compose (`app`, `db`, `proxy`), no solo la de la app: el primer escaneo de `db` y `proxy` (2.6) da SEC-049 y SEC-050.
 
 ## SEC-035: pnpm se instala en la etapa de construcción sin integridad fijada
 - Severidad: baja
@@ -2024,7 +2215,7 @@ regla de contenedores.
 - Responsable: developer (`verify-pin.ts`, `rate-limit.ts`, rutas de `auth.ts`); software-engineer (añadir la exigencia de atomicidad a `docs/arquitectura.md` §7); testing (RS-05b)
 - Cómo corregir: (1) **IP y sesión, reserva antes del hash**: en `FailureWindow`, un contador síncrono de verificaciones en curso por clave; `verifyPin` rechaza con `429` si `fallos en ventana + en curso ≥ límite`, reserva el hueco antes del primer `await` y lo libera al terminar (acierto) o lo convierte en fallo. Así una IP nunca tiene más verificaciones en vuelo que los fallos que le quedan. (2) **Cuenta, cobro antes del hash**: en vez de leer y luego contar, sumar el intento de forma atómica antes del hash, solo si la cuenta no está bloqueada: `UPDATE users SET failed_attempts = failed_attempts + 1 WHERE id = $1 AND NOT locked_manual AND (locked_until IS NULL OR locked_until <= $now) RETURNING failed_attempts` (0 filas → `423` con el estado leído en esa misma sentencia o en una relectura); aplicar la escala con el valor devuelto en la misma transacción (bloqueo y revocación) y, si el hash acierta, `UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = $1 AND NOT locked_manual AND (locked_until IS NULL OR locked_until <= $now)`: 0 filas → la cuenta se bloqueó durante el hash → tratar como bloqueada (`423`), sin crear sesión ni cambiar el PIN. Alternativa equivalente: cerrojo por usuario en memoria (una sola instancia) que serialice las verificaciones de una misma cuenta, más la condición del acierto. Si el desarrollador elige otra forma, debe cumplir RS-05b. (3) **Crear la sesión y cambiar el PIN dentro de la misma condición**: en `POST /auth/login`, el `INSERT` de la sesión solo si el acierto anterior tocó una fila; en `POST /auth/pin`, el `UPDATE users SET pin_hash … WHERE id = $1 AND NOT locked_manual AND (locked_until IS NULL OR locked_until <= $now)` y comprobar que cambió una fila. (4) Defensa en profundidad: semáforo explícito de 4 verificaciones argon2 con cola acotada (p. ej. 32; llena → `503`) en lugar de depender del tamaño por defecto del *threadpool* de libuv (RS-08), para que una ráfaga no deje en espera sin límite ni bloquee DNS/`fs` del proceso. (5) El `approval` (HU-06) debe usar el mismo mecanismo desde el principio.
 - Cómo verificar: RS-05b en integración (los cuatro casos, con *hasher* espía); repetir la prueba propia de §6.8 (escenarios A, B, C con N = 300 y A2 con N = 3000): A2 ≤ 10 verificaciones; A/B con el PIN correcto al final → `423`/`429` y 0 sesiones abiertas; C → el PIN no cambia. Revisión de código de los tres puntos.
-- Estado: abierto (**alta, bloquea la puerta de la Etapa 2**)
+- Estado: **verificado (2.6)**. Reserva síncrona de IP/sesión, cerrojo FIFO por cuenta con `load()` en el turno, acierto y sesión/cambio de PIN en la transacción condicionada y semáforo de 4 (§6.9 punto 1). RS-05b 4/4 en verde; prueba propia: A 5 verificaciones y el correcto `429` con 0 sesiones, B 1 verificación y el correcto `423` con 0 sesiones, C el PIN no cambia, A2 10 verificaciones de 3000. Salvedades que no bloquean: SEC-047 (clave del cerrojo, baja); cola acotada del semáforo pendiente con SEC-043 (D-2.5-03 a); atomicidad aún sin documentar en `docs/arquitectura.md` §7 (software-engineer).
 
 ## SEC-039: El flujo SSE de una sesión caducada por inactividad sigue abierto y recibiendo eventos
 - Severidad: baja
@@ -2033,7 +2224,7 @@ regla de contenedores.
 - Responsable: developer (`hub.ts`, `guard.ts`); software-engineer (documentarlo en §6/§7)
 - Cómo corregir: (1) `markExpired` (y cualquier caducidad detectada) cierra los flujos de esa sesión tras escribir la fila (`hub.end` con motivo `expired`, sin `session.revoked` o con un evento propio si UX lo quiere); (2) el hub guarda en memoria la última actividad de cada sesión con flujo (actualizada por `touch` y por el login) y, en el `ping`, cierra los flujos de roles distintos de `kitchen` cuya sesión lleve ≥ 15 min sin actividad (la barra sigue exenta mientras tenga la cola abierta); o bien una consulta acotada cada 30–60 s de `last_activity_at` de las sesiones con flujo.
 - Cómo verificar: integración con `FakeClock`: camarero con flujo, +15 min sin peticiones → el flujo se cierra en ≤ 1 ping (2 s) sin ninguna petición REST; con `GET /auth/me` → `401 idle` → el flujo se cierra en ≤ 1 s; barra con la cola abierta → no se cierra. Debe estar corregido antes de entregar HU-02.
-- Estado: abierto (baja, no bloquea; antes de HU-02)
+- Estado: **verificado (2.6, prueba propia)**: camarero +15 min sin peticiones → flujo cerrado en 1,8 s; con actividad a los 10 min → abierto; barra → abierta (§6.9 punto 3). Pendiente: test de regresión (D-2.5-02, testing) y documentación en §6/§7 (D-2.5-03 e, software-engineer).
 
 ## SEC-040: Falta el tope global de 50 flujos SSE (RS-23)
 - Severidad: baja
@@ -2042,7 +2233,7 @@ regla de contenedores.
 - Responsable: developer
 - Cómo corregir: en `open()`, si `conns.size ≥ 50` (constante con nombre, en `AppDeps` si Testing lo necesita) tras cerrar los sobrantes de la misma sesión, responder `503` con `Retry-After` antes de `hijack` (o desde la ruta antes de abrir el flujo) y registrar `sse.rejected` con `reason = global_limit`; métrica con la etiqueta correspondiente.
 - Cómo verificar: integración: 51.º flujo de una sesión distinta → `503` y los 50 anteriores siguen abiertos; 3.er flujo de una sesión con 50 abiertos → se cierra su más antiguo y el nuevo entra.
-- Estado: abierto (baja, no bloquea)
+- Estado: **verificado (2.6, prueba propia)**: 50 flujos abiertos; el 51.º de otra sesión → `503 SERVICE_UNAVAILABLE`, `Retry-After: 5`, `no-store`; el 3.º de una sesión con 50 → `200` (§6.9 punto 3). Pendiente: test de regresión (D-2.5-02, testing).
 
 ## SEC-041: `Cache-Control: no-store` solo en tres respuestas de `/api` (RS-27)
 - Severidad: baja
@@ -2051,7 +2242,7 @@ regla de contenedores.
 - Responsable: developer
 - Cómo corregir: un `onSend` (o en el primer `onRequest`) que ponga `Cache-Control: no-store` en toda respuesta cuya ruta empiece por `/api/` salvo el flujo SSE (que mantiene `no-cache, no-transform`), en lugar de ponerla ruta a ruta.
 - Cómo verificar: integración: `GET /auth/me` `200` y `401`, `POST /auth/logout` `204`, `POST /auth/login` `403`/`401`/`429`, `GET /api/v1/no-existe` `404` → todas con `cache-control: no-store`; `GET /events` con `no-cache, no-transform`.
-- Estado: abierto (baja, no bloquea)
+- Estado: **verificado (2.6, prueba propia)**: `no-store` en `200`/`400`/`401`/`403`/`404`/`429`/`503`/`204` de `/api`; SSE con `no-cache, no-transform` (§6.9 punto 3). Pendiente: test de regresión (D-2.5-02, testing).
 
 ## SEC-042: Un carácter `NUL` en el nombre de login produce `500` y un log de error con traza
 - Severidad: baja
@@ -2060,7 +2251,7 @@ regla de contenedores.
 - Responsable: developer (esquemas de `packages/shared`); software-engineer (regla general para campos de texto en §5)
 - Cómo corregir: un esquema de texto común para todos los campos de texto de la API (`name`, y después notas, motivos, `customerRef`) que rechace caracteres de control (`/[\u0000-\u001F\u007F]/`) con `400 VALIDATION_FAILED` y `rule: 'format'`; normalizar a NFC si se compara por nombre.
 - Cómo verificar: integración: login con `\u0000`, `\u0007` y `\n` en el nombre → `400` con `path: ['name']`, sin líneas de nivel `error` en el log.
-- Estado: abierto (baja, no bloquea)
+- Estado: **verificado (2.6, prueba propia)**: `\u0000`, `\u0007`, `\n`, `\u007f` → `400` `rule: 'format'` en `name`, sin líneas `error` (§6.9 punto 3). Pendiente: test de regresión (D-2.5-02, testing) y regla general de texto (D-2.5-03 c, software-engineer; recomendaciones en §6.9 punto 3).
 
 ## SEC-043: El límite por IP usa la dirección IPv6 completa y expulsa entradas bloqueadas cuando se llena
 - Severidad: baja
@@ -2069,7 +2260,7 @@ regla de contenedores.
 - Responsable: software-engineer (§7: clave del límite por IP) y developer
 - Cómo corregir: clave del límite = IPv4 completa o prefijo `/64` de la IPv6 (normalizando las IPv4 mapeadas); en `prune`, no borrar nunca una entrada con `blockedUntil > now` (si sigue lleno, rechazar con `429` las claves nuevas mientras dure, o subir el tope).
 - Cómo verificar: unitario de `FailureWindow`/clave: 10 fallos desde `2001:db8::1` y el 11.º desde `2001:db8::2` → `429`; con el mapa lleno de claves sin bloqueo, una clave bloqueada sigue bloqueada tras insertar 10 000 claves nuevas.
-- Estado: abierto (baja, no bloquea)
+- Estado: abierto (baja, no bloquea). **[2.6]** Aplazamiento aceptado hasta la decisión del software-engineer (D-2.5-03 d), con condiciones: corregir antes de empezar HU-06 y, en todo caso, antes de la puerta de la Etapa 3, junto con el tope de la cola del semáforo argon2 (§6.9 punto 4).
 
 ## SEC-044: Dependencias de desarrollo con vulnerabilidades críticas (`tinypool` 1.1.1) y moderadas (`vitest` 3.2.7)
 - Severidad: baja (en nuestro contexto; el aviso las clasifica críticas)
@@ -2078,7 +2269,7 @@ regla de contenedores.
 - Responsable: testing
 - Cómo corregir: actualizar `vitest` a ≥ 4.1.12 (arrastra `tinypool` ≥ 2.1.2 y `@vitest/mocker` corregido) y fijar la versión exacta en `tests/package.json`; revisar a la vez D-2.2-01 (`--configLoader runner`), que puede cambiar con la versión mayor. No usar `vitest --ui` ni *browser mode* sin revisar.
 - Cómo verificar: `pnpm audit` (sin `--prod`) en contenedor → sin críticas ni altas; suites unitaria, de integración y de seguridad en verde con la nueva versión.
-- Estado: abierto (baja, no bloquea)
+- Estado: **verificado (2.6)**: `tests/package.json` con `"vitest": "4.1.12"` exacto; `pnpm audit` y `pnpm audit --prod` en contenedor → 0 vulnerabilidades; suites `unit`, `integration` y `security` en verde.
 
 ## SEC-045: Faltan pruebas de regresión y comprobaciones estáticas de seguridad de HU-01
 - Severidad: baja
@@ -2087,7 +2278,7 @@ regla de contenedores.
 - Responsable: testing ((a)–(c), (g)); developer con testing ((d)–(f): ESLint o test estático en `tests/security/`)
 - Cómo corregir: añadir los casos citados; (d)–(f) pueden ser un único test estático que recorra `apps/` con expresiones regulares (sin dependencias nuevas) dentro de la suite `security`.
 - Cómo verificar: Cybersecurity revisa los tests; cada uno falla si se introduce a propósito el defecto (p. ej. quitar la reserva de SEC-038, `trustProxy: true`, un `innerHTML` de prueba en una rama local).
-- Estado: abierto (baja, no bloquea; (a) es parte de la verificación de SEC-038)
+- Estado: **verificado (2.6)**: (a) RS-05b (4 tests; fallaban antes de la 2.5 y pasan con la corrección); (b) casos de SEC-029 en `tests/unit/api/config.unit.test.ts` (incluido `uniquelocal`); (c) `tests/e2e/HU-01-sec032-retraso.e2e.ts`; (d)–(f) `tests/security/estatico.sec.test.ts` con casos de control que inyectan cada defecto; (g) vigilante de CSP en `tests/support/e2e/base.ts` con su control en `HU-01-csp`. Las regresiones de SEC-039..SEC-042 y SEC-047 son tareas nuevas (D-2.5-02 y SEC-047), no de este hallazgo.
 
 ## SEC-046: La imagen final incluye binarios de `argon2` de otras plataformas
 - Severidad: baja
@@ -2096,11 +2287,88 @@ regla de contenedores.
 - Responsable: infrastructure
 - Cómo corregir: en la etapa de construcción, tras `pnpm deploy`, borrar de `prebuilds/` todo lo que no sea la plataforma de la imagen (`linux-x64` glibc) y comprobar que la imagen arranca y verifica un PIN (smoke de `create-initial-manager` + login).
 - Cómo verificar: `find /app -name '*.node'` sobre la raíz exportada → solo `linux-x64/argon2.glibc.node`; suites `containers` e integración en verde.
-- Estado: abierto (baja, no bloquea)
+- Estado: abierto (baja, no bloquea). **[2.6]** Sigue en la imagen `0b3c9f111c63` (10 `.node` de `argon2`, solo se usa `linux-x64/argon2.glibc.node`).
+
+## SEC-047: La clave del cerrojo por cuenta de `verifyPin` usa `toLowerCase()` de JavaScript y la búsqueda `lower()` de PostgreSQL: variantes del nombre esquivan la serialización
+- Severidad: baja
+- Ubicación: apps/api/src/http/routes/auth.ts:19-21 (`accountKey` = `name.toLowerCase()`), :93 (login), :242 (`POST /auth/pin`, con `s.name`), frente a :98 (`lower(name) = lower(${body.name})`) y apps/api/src/db/migrations/0001_hu01_auth.ts:22 (índice único sobre `lower(name)`); apps/api/src/modules/auth/serialize.ts:10-33
+- Descripción: PostgreSQL y JavaScript no pasan a minúsculas igual. Comprobado con la imagen `db` (PostgreSQL 19, `C.UTF-8`): `lower('İris') = lower('Iris')` (U+0130 → `i`) y `lower('ΑΣ') = lower('Ασ')`; en JS, `'İris'.toLowerCase()` = `'i̇ris'` (`i` + U+0307) y `'ΑΣ'.toLowerCase()` = `'ας'`. Cada variante identifica la misma cuenta en la BD pero cae en un carril distinto del `KeyedSerializer`, así que sus verificaciones van en paralelo y vuelve, acotado, el "comprobar y luego actuar" de SEC-038 sobre el contador de la cuenta. Prueba propia (§6.9): usuario `iiii…` (4 `i` → 16 variantes con `i`/`İ`), 16 logins simultáneos con PIN erróneo desde IP distintas → **16 verificaciones** y contador 16 (RS-05b: ≤ 5); con contador 19, 15 variantes erróneas y el PIN correcto con otra variante → 16 verificaciones, contador 34 y `locked_manual`, y el acierto **sí** da `423` con 0 sesiones (la condición del `UPDATE` de SEC-038 sigue protegiendo). Efecto: una ráfaga hace tantos intentos como variantes tenga el nombre (2^k con k letras `i`, limitado también a 10 en curso por IP) en lugar de parar en el umbral; hasta el bloqueo indefinido caben unos 20 + (variantes − 1) intentos en vez de 20 (con 16 variantes, ~0,35 % de los PIN de 4 dígitos en vez de 0,2 %). No permite entrar en una cuenta bloqueada ni saltarse el límite por IP; de ahí baja.
+- Responsable: developer; testing (caso nuevo de RS-05b)
+- Cómo corregir: que la clave del cerrojo salga de la misma normalización que la búsqueda. Preferible: resolver el `id` antes del cerrojo con la misma condición (`SELECT id FROM users WHERE lower(name) = lower($1)`) y usar `user:<id>` como clave, y `user:<s.userId>` en `POST /auth/pin` (así login y cambio de PIN de la misma cuenta comparten carril); para un nombre que no existe, `unknown:` + el `lower()` calculado por PostgreSQL. `load()` sigue releyendo la fila en el turno. Alternativa: calcular la clave con `SELECT lower($1)` en PostgreSQL. No basta con `toLocaleLowerCase()` ni con normalizar a NFC en JS.
+- Cómo verificar: integración (RS-05b ampliado): usuario con 4 `i` en el nombre, 16 logins simultáneos con las variantes `i`/`İ` desde IP distintas → ≤ 5 verificaciones y contador ≤ 5; un login y un `POST /auth/pin` simultáneos de la misma cuenta nunca verifican a la vez (espía del *hasher*).
+- Estado: abierto (baja, no bloquea; corregir en el siguiente ciclo de HU-01 o, como tarde, antes de empezar HU-06)
+
+## SEC-048: La imagen de la app tiene una vulnerabilidad alta con corrección en `libzstd1` (CVE-2026-124851)
+- Severidad: alta (por `docs/reglas-equipo.md` §3.3 y RS-39: alta con versión corregida, no admite excepción; riesgo real bajo)
+- Ubicación: deploy/app/Containerfile (`RUNTIME_IMAGE` = `gcr.io/distroless/nodejs26-debian13@sha256:b462e87a…`); imagen `localhost/mi-app:0b3c9f111c63` (`sha256:66fcdf09…`), paquete `libzstd1` 1.5.7+dfsg-1 (`/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7`)
+- Descripción: Trivy 0.76.2 (DB del 2026-11-26) da CVE-2026-124851 (revelación de información por un búfer sin inicializar en Zstandard), HIGH, `fixed` en 1.5.7+dfsg-1+deb13u1. En la imagen solo la enlaza `libcrypto.so.3` del sistema, que no carga nadie (`node` lleva su propio OpenSSL y no enlaza `libzstd`; ningún `.node` enlaza `libcrypto`, SEC-033 condición 4), así que hoy no es alcanzable. Pero hay versión corregida y la política no admite altas corregibles (EXC-01 cubre solo las dos CVE de `libssl3t64`). En la 2.3 no salía: el aviso es posterior. Es lo que el escaneo en cada build (SEC-034) debe atrapar.
+- Responsable: infrastructure
+- Cómo corregir: actualizar `RUNTIME_IMAGE` al digest actual de `gcr.io/distroless/nodejs26-debian13` con `libzstd1` ≥ 1.5.7+dfsg-1+deb13u1 (y comprobar si ya trae `libssl3t64` corregido: en ese caso, retirar EXC-01 por su condición 1); actualizar `docs/infraestructura.md` §8; reconstruir desde el commit y repetir las comprobaciones 3 y 4 de SEC-033. Si el digest nuevo cambia la versión de Debian o el `purl` de `libssl3t64`, EXC-01 deja de aplicarse sola y la revisa Cybersecurity.
+- Cómo verificar: Trivy con el fichero de EXC-01 sobre la imagen reconstruida → 0 críticas/altas (como mucho las 2 *suppressed*); suites `containers`, `integration` y `e2e` en verde con esa imagen.
+- Estado: abierto (**alta, bloquea la puerta de la Etapa 2**)
+
+## SEC-049: La imagen de PostgreSQL tiene una crítica y 26 altas (`gosu` y `libxml2`)
+- Severidad: alta (el escáner: 1 crítica y 26 altas, todas con corrección; riesgo real bajo)
+- Ubicación: compose.dev.yaml:95 y compose.test.yaml:108 (`docker.io/library/postgres:19.0-alpine@sha256:8b0ff4cd…`, Alpine 3.24.4); docs/infraestructura.md §8 (tabla de imágenes); dentro de la imagen: `libxml2` 2.13.9-r2 (CVE-2026-86144, HIGH, corregida en 2.13.9-r3) y `/usr/local/bin/gosu`, compilado con Go 1.24.6: CVE-2025-68121 (CRITICAL, `crypto/tls`) y 25 HIGH de la biblioteca estándar, corregidas en versiones posteriores de Go
+- Descripción: primer escaneo de esta imagen (Trivy 0.76.2, §6.9 punto 8). Alcance real: `gosu` solo lo usa `docker-entrypoint.sh` cuando arranca como root para bajar a `postgres`; nuestros `db` corren con `user: 1000:1000`, `cap_drop: ALL` y `no-new-privileges`, así que no se ejecuta (y aunque se ejecutara no podría cambiar de usuario) y además no hace TLS. `libxml2` solo entra en las funciones XML de SQL (`xmlparse`, `xpath`…): hace falta ejecutar SQL arbitrario como `app_rw` (la app no las usa y no construye SQL a mano, RS-35). Aun así, son críticas/altas en una imagen desplegable y la regla de bloqueo se aplica.
+- Responsable: infrastructure
+- Cómo corregir: (1) actualizar a un digest actual de `postgres:19.x-alpine` (misma versión mayor, ADR-003) con `libxml2` ≥ 2.13.9-r3 en los dos compose y en `docs/infraestructura.md`, y volver a escanear; (2) si el `gosu` del digest nuevo sigue marcado, dos opciones: imagen derivada sin `/usr/local/bin/gosu` (el *entrypoint* no lo usa con UID no root; comprobar `initdb` y los scripts de `docker-entrypoint-initdb.d`), o pedir a Cybersecurity una excepción fechada **solo** para ese binario por versión, que se concedería si: ningún servicio `db` de DEV/TESTING/DEMO/PROD arranca como root, todos tienen `no-new-privileges` y `cap_drop: ALL` (comprobado con `podman-compose config`), ningún `command`/`entrypoint` llama a `gosu`, y revisión a los 30 días. Lo que tiene corrección (`libxml2`) no admite excepción.
+- Cómo verificar: Trivy sobre `podman save` del digest nuevo → 0 críticas/altas (o solo las de `gosu` como *suppressed* con la excepción); `sh tests/run.sh integration` y `e2e` en verde con el digest nuevo.
+- Estado: abierto (**alta, bloquea la puerta de la Etapa 2**)
+
+## SEC-050: La imagen de Caddy tiene dos vulnerabilidades altas (`go-jose` sin corrección y `x/net` con corrección)
+- Severidad: alta (el escáner: 2 altas; riesgo real bajo con el Caddyfile actual)
+- Ubicación: compose.test.yaml:275 (`docker.io/library/caddy:2.11.9-alpine@sha256:003a9780…`; la misma imagen está prevista para DEMO y PROD, docs/infraestructura.md §8); `/usr/bin/caddy`: `github.com/go-jose/go-jose/v3` v3.0.5 (CVE-2026-116587, HIGH, denegación de servicio con parámetros RSA manipulados en un JWK, `affected`, sin corrección) y `golang.org/x/net` v0.60.0 (CVE-2026-78661, HIGH, denegación de servicio en `x/net/html`, corregida en 0.62.0)
+- Descripción: primer escaneo de esta imagen (§6.9 punto 8). Caddy es el borde: atiende a todos los dispositivos de la red del local. Con `deploy/proxy/Caddyfile` (`admin off`, sin `acme_server`, sin `templates` ni `markdown`) Caddy no analiza JWK enviados por clientes ni HTML de respuestas, y en PROD con ACME solo habla con la CA pública. Riesgo real bajo, pero son altas en la imagen más expuesta y la regla de bloqueo se aplica.
+- Responsable: infrastructure
+- Cómo corregir: (1) actualizar, por digest, a la última versión 2.x de Caddy cuyo binario lleve `x/net` ≥ 0.62.0 (y `go-jose` corregido, si ya existe), en `compose.test.yaml` y `docs/infraestructura.md`, y repetir los e2e (cabeceras de RS-26, SSE sin búfer, CA interna); (2) para lo que siga sin corrección (`go-jose`), pedir a Cybersecurity una excepción fechada por `purl` y versión; se concedería si el Caddyfile sigue sin `acme_server`, con `admin off` y sin módulos que analicen JWK de clientes, con caducidad a los 30 días o al salir la corrección, lo que llegue antes.
+- Cómo verificar: Trivy sobre `podman save` del digest nuevo → 0 críticas/altas salvo las cubiertas por la excepción (*suppressed*); `sh tests/run.sh e2e` en verde.
+- Estado: abierto (**alta, bloquea la puerta de la Etapa 2**)
 
 ---
 
-### Resumen de la revisión 2.3 (Etapa 2, HU-01, 2026-11-25)
+### Resumen de la revisión 2.6 (Etapa 2, HU-01, 2026-11-26)
+- **SEC-038 (alta): VERIFICADO.** RS-05b 4/4 en verde y prueba propia de la
+  2.3 repetida: 5 verificaciones de 300 desde una IP (antes 300), 10 de 3000
+  (antes 516), el acierto al final de la ráfaga `429`/`423` con 0 sesiones y
+  `currentPin` sin cambiar el PIN. El código de HU-01 ya no tiene altos ni
+  críticos abiertos.
+- **Altos o críticos abiertos: SEC-048, SEC-049 y SEC-050 (alta,
+  infrastructure). Bloquean la puerta de la Etapa 2** (regla de imágenes sin
+  críticas/altas): `libzstd1` en la base distroless de la app (con
+  corrección), `libxml2` y `gosu` en `postgres:19.0-alpine` (1 crítica y 26
+  altas, con corrección) y `go-jose`/`x/net` en `caddy:2.11.9-alpine`. Riesgo
+  real bajo en los tres (no alcanzables con la configuración actual), pero
+  hay que actualizar los digests; solo lo que no tenga corrección puede ir a
+  excepción fechada (condiciones en cada hallazgo).
+- **T-45: corregido sin relajar la CSP** (Caddyfile sin cambios, sin
+  `unsafe-eval`; el *bundle* ya no lleva zod ni la sonda `new Function`).
+- Verificados: SEC-039, SEC-040, SEC-041, SEC-042 (prueba propia; faltan sus
+  regresiones automáticas, D-2.5-02), SEC-044 y SEC-045.
+- SEC-043: aplazamiento aceptado hasta la decisión del software-engineer
+  (D-2.5-03 d), antes de HU-06 y como tarde antes de la puerta de la Etapa 3,
+  junto con la cola acotada del semáforo argon2.
+- Nuevo: **SEC-047** (baja; developer + testing): la clave del cerrojo por
+  cuenta (JS `toLowerCase()`) no coincide con `lower()` de PostgreSQL; 16
+  variantes del nombre → 16 verificaciones en paralelo (no entra en cuentas
+  bloqueadas).
+- D-2.5-01..05: sin objeciones; aprobados el `503` + `Retry-After: 5` del tope
+  de flujos, `session-policy.ts` y los eventos nuevos.
+- Suites (imagen `sha256:66fcdf09…`, reconstruida desde el commit): `unit`
+  177/177; `security` 73 + 241 omitidos; `integration` 254 + 244 omitidos
+  (RS-05b 4/4); `e2e` 73 pasan, 1 intermitente en WebKit (CA-N06, 8/8 al
+  repetirlo; se pasa a testing), 2 omitidos, `serie-pin` 5/5, `serie-red`
+  1/1. `pnpm audit` (completo y `--prod`): 0.
+- Abiertos que no bloquean: SEC-003 (media), SEC-025 (baja, HU-06), SEC-033
+  (baja, con EXC-01), SEC-034 (media; ampliado a todas las imágenes),
+  SEC-035..SEC-037, SEC-043, SEC-046 y SEC-047 (baja).
+- Contenedores: ningún contenedor ni imagen corre como root, usa
+  `--privileged`, monta el socket ni la red del host; todas las pruebas de
+  esta revisión se hicieron en Podman rootless con `--cap-drop=ALL`,
+  `no-new-privileges` y raíz de solo lectura.
+
+
+### Resumen de la revisión 2.3 (Etapa 2, HU-01, 2026-11-25; histórico, sustituido por el de 2.6)
 - **Altos o críticos abiertos: SEC-038 (alta). Bloquea la puerta de la
   Etapa 2.** `verifyPin` no resiste peticiones simultáneas: una ráfaga desde
   un solo dispositivo hace cientos de verificaciones de PIN (300 de 300; 516
