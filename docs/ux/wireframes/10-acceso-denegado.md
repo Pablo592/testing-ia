@@ -60,7 +60,7 @@ Encargado: la barra superior tiene además "☰ Gestión", como en el resto de p
 
 | Ancho | Cambios |
 |---|---|
-| 375 px | Bloque a todo el ancho con 16 px de margen; texto alineado a la izquierda; enlace a todo el ancho. En la barra superior, el `h1` puede ocupar 2 líneas (no se trunca) |
+| 375 px | Bloque a todo el ancho con 16 px de margen; texto alineado a la izquierda; enlace a todo el ancho. En la barra superior, el `h1` va en 1 línea y se ve "Acceso" (" denegado" en `sr-only`; nombre accesible "Acceso denegado"), design-system §5.11.1 [2.13a]. El único elemento visible con el texto completo es el `h1` a >= 768 px; a 375 px la prueba E2E debe usar el nombre accesible |
 | 768 px | Bloque centrado, ancho máx. 560 px; enlace de 240 px como mínimo |
 | 1440 px | Igual que 768 px |
 
