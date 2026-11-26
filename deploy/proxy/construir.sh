@@ -24,6 +24,12 @@ fi
 [ "$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null)" = "true" ] \
   || { echo "ERROR: podman no esta en modo rootless" >&2; exit 1; }
 
+# SEC-052 (g): la etiqueta `revision` lleva -sucio si las entradas de esta imagen
+# (deploy/proxy/) tienen cambios sin commit (tambien ficheros nuevos).
+REVISION=$(git rev-parse HEAD 2>/dev/null || echo desconocida)
+if [ -n "$(git status --porcelain --untracked-files=all -- deploy/proxy 2>/dev/null || echo fallo)" ]; then
+  REVISION="$REVISION-sucio"
+fi
 IMAGEN=localhost/mi-app-proxy:2.11.9-alpine
 # La base sale del Containerfile (sin --build-arg del usuario): se lee de ahi.
 BASE=$(sed -n 's/^ARG CADDY_BASE=\(.*\)$/\1/p' deploy/proxy/Containerfile)
@@ -32,7 +38,7 @@ case $BASE in
   *) echo "ERROR: CADDY_BASE no es docker.io/library/caddy:<version>@sha256:<digest>" >&2; exit 1 ;;
 esac
 podman build --format docker --pull=missing --no-cache \
-  --label "org.opencontainers.image.revision=$(git rev-parse HEAD 2>/dev/null || echo desconocida)" \
+  --label "org.opencontainers.image.revision=$REVISION" \
   -f deploy/proxy/Containerfile -t "$IMAGEN" deploy/proxy
 
 fallo() {

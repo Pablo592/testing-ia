@@ -22,10 +22,16 @@ fi
 [ "$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null)" = "true" ] \
   || { echo "ERROR: podman no esta en modo rootless" >&2; exit 1; }
 
+# SEC-052 (g): la etiqueta `revision` lleva -sucio si las entradas de esta imagen
+# (deploy/db/) tienen cambios sin commit (tambien ficheros nuevos).
+REVISION=$(git rev-parse HEAD 2>/dev/null || echo desconocida)
+if [ -n "$(git status --porcelain --untracked-files=all -- deploy/db 2>/dev/null || echo fallo)" ]; then
+  REVISION="$REVISION-sucio"
+fi
 IMAGEN=localhost/mi-app-db:19.0-alpine3.24
 # Sin --build-arg del usuario: la base y la version minima salen del Containerfile.
 podman build --format docker --pull=missing --no-cache \
-  --label "org.opencontainers.image.revision=$(git rev-parse HEAD 2>/dev/null || echo desconocida)" \
+  --label "org.opencontainers.image.revision=$REVISION" \
   -f deploy/db/Containerfile -t "$IMAGEN" deploy/db
 
 fallo() {

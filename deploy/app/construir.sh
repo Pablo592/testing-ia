@@ -46,19 +46,27 @@ for f in package.json pnpm-lock.yaml pnpm-workspace.yaml apps/api/package.json a
 done
 
 REPO=localhost/mi-app
+# SEC-052 (e)/(f): "arbol limpio" = `git status --porcelain --untracked-files=all`
+# vacio en TODO el arbol (deploy/, compose.*.yaml, Caddyfile, tests/...: lo que
+# decide la aprobacion aunque no entre en la imagen), mas los ficheros ignorados
+# por git dentro de apps/ y packages/ que el containerignore no excluye (SEC-037).
+# Si git falla, el arbol NO se considera limpio.
+estado_arbol() {
+  git status --porcelain --untracked-files=all 2>/dev/null || echo "git-status-fallo"
+  git ls-files --others --ignored --exclude-standard -- apps packages 2>/dev/null \
+    | grep -vE '(^|/)(node_modules|dist|\.vite|\.turbo|coverage|\.secrets)(/|$)|\.tsbuildinfo$|(^|/)\.env($|\.)|\.(secret|pem|key)$' || true
+}
+ARBOL_INICIAL=$(estado_arbol)
+COMMIT_CORTO=$(git rev-parse --short=12 HEAD 2>/dev/null || echo sin-git)
 if [ -n "${1:-}" ]; then
   ETIQUETA=$1
 else
-  ETIQUETA=$(git rev-parse --short=12 HEAD 2>/dev/null || echo sin-git)
-  # Cambios sin commit en TODO lo que entra en la imagen (misma lista que
-  # deploy/app/containerignore, SEC-037) o ficheros ignorados por git dentro de
-  # apps/ y packages/ que el containerignore no excluye (SEC-037).
-  SUCIO=$(git status --porcelain -- apps packages package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc 'tsconfig*.json' tests/package.json deploy/app/Containerfile deploy/app/containerignore 2>/dev/null || true)
-  IGNORADOS=$(git ls-files --others --ignored --exclude-standard -- apps packages 2>/dev/null \
-    | grep -vE '(^|/)(node_modules|dist|\.vite|\.turbo|coverage|\.secrets)(/|$)|\.tsbuildinfo$|(^|/)\.env($|\.)|\.(secret|pem|key)$' || true)
-  if [ -n "$SUCIO" ] || [ -n "$IGNORADOS" ]; then
-    ETIQUETA="$ETIQUETA-sucio"
-  fi
+  ETIQUETA=$COMMIT_CORTO
+fi
+# Cambios sin commit en cualquier parte: la etiqueta lleva -sucio (asi APP_VERSION
+# lo refleja), tambien con etiqueta propia.
+if [ -n "$ARBOL_INICIAL" ]; then
+  case $ETIQUETA in *-sucio*) ;; *) ETIQUETA="$ETIQUETA-sucio" ;; esac
 fi
 REVISION=$(git rev-parse HEAD 2>/dev/null || echo desconocida)
 
@@ -187,6 +195,16 @@ escanear() { # escanear <nombre> <imagen> [excepciones]
     echo "Trivy $1: OK (informe: $SCAN_DIR/$ETIQUETA-$1.json)"
   else
     echo "Trivy $1: FALLA" >&2; ESCANEO=1
+    # SEC-052 (c): la etiqueta fija de db/proxy rechazados pasa a -rechazada
+    # (los compose no pueden usar una imagen rechazada).
+    case $1 in
+      db) T=$DB_TAG ;;
+      proxy) T=$PROXY_TAG ;;
+      *) T="" ;;
+    esac
+    if [ -n "$T" ] && podman tag "$T" "$T-rechazada" 2>/dev/null; then
+      podman untag "$T" "$T" 2>/dev/null || true
+    fi
   fi
 }
 escanear app "$REPO@$DIGEST" deploy/app/trivyignore.yaml
@@ -194,26 +212,37 @@ escanear db "$DB_IMAGE"
 escanear proxy "$PROXY_IMAGE" deploy/scan/trivyignore-proxy.yaml
 [ "$ESCANEO" -eq 0 ] || rechazar "Trivy: HIGH/CRITICAL sin excepcion vigente en app, db o proxy (SEC-034)"
 
-# Registro de escaneo aprobado (SEC-052 punto 3). Hoy solo se escribe: la
-# comprobacion en tests/run.sh y en el despliegue de DEMO/PROD esta pendiente
-# (docs/infraestructura.md §14.1). Una imagen -sucio (cambios sin commit) NO se
-# registra como aprobada (SEC-052 punto 3b) y se borra un registro previo.
-case $ETIQUETA in
-  *-sucio*)
-    rm -f "$SCAN_DIR/aprobadas/${DIGEST#sha256:}"
-    echo "AVISO: imagen -sucio (cambios sin commit): no se registra como aprobada (SEC-052)" >&2 ;;
-  *)
-    mkdir -p "$SCAN_DIR/aprobadas"
-    {
-      echo "fecha=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      echo "etiqueta=$ETIQUETA"
-      echo "commit=$REVISION"
-      echo "app=$REPO@$DIGEST"
-      echo "db=$DB_IMAGE"
-      echo "proxy=$PROXY_IMAGE"
-      echo "excepciones_sha256=$(cat deploy/app/trivyignore.yaml deploy/scan/trivyignore-proxy.yaml | sha256sum | cut -d' ' -f1)"
-    } > "$SCAN_DIR/aprobadas/${DIGEST#sha256:}" ;;
-esac
+# Registro de escaneo aprobado (SEC-052 punto 3, requisitos (e)-(h)). Lo exige
+# tests/containers/tx-cont-03.sh (GATE=1). Solo se registra si:
+#   - la etiqueta es el commit corto de 12 caracteres (sin etiqueta propia), y
+#   - el arbol estaba limpio al empezar Y sigue igual al terminar (nada cambio
+#     durante el build), y el commit es conocido.
+# En cualquier otro caso no se registra y se borra un registro previo del digest.
+REG="$SCAN_DIR/aprobadas/${DIGEST#sha256:}"
+ARBOL_FINAL=$(estado_arbol)
+NOREG=""
+[ "$ETIQUETA" = "$COMMIT_CORTO" ] || NOREG="etiqueta distinta del commit corto de 12 ($COMMIT_CORTO)"
+[ -z "$ARBOL_INICIAL" ] || NOREG="cambios sin commit en el arbol (-sucio)"
+[ "$ARBOL_FINAL" = "$ARBOL_INICIAL" ] || NOREG="el arbol cambio durante la construccion"
+printf '%s' "$REVISION" | grep -Eq '^[0-9a-f]{40}$' || NOREG="commit desconocido"
+if [ -n "$NOREG" ]; then
+  rm -f "$REG"
+  echo "AVISO: la imagen NO se registra como aprobada para la puerta (SEC-052): $NOREG" >&2
+else
+  mkdir -p "$SCAN_DIR/aprobadas"
+  {
+    echo "fecha=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "etiqueta=$ETIQUETA"
+    echo "commit=$REVISION"
+    echo "tree=$(git rev-parse 'HEAD^{tree}')"
+    echo "arbol_limpio=si"
+    echo "app=$REPO@$DIGEST"
+    echo "db=$DB_IMAGE"
+    echo "proxy=$PROXY_IMAGE"
+    echo "excepciones_sha256=$(cat deploy/app/trivyignore.yaml deploy/scan/trivyignore-proxy.yaml | sha256sum | cut -d' ' -f1)"
+  } > "$REG.tmp.$$"
+  mv -f "$REG.tmp.$$" "$REG"
+fi
 
 echo "Imagen: $REPO:$ETIQUETA"
 echo "APP_IMAGE=$REPO@$DIGEST"

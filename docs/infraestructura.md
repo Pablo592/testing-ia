@@ -1576,7 +1576,7 @@ otras etiquetas del mismo ID no se tocan).
 | Integridad de pnpm (`PNPM_INTEGRITY`, sha512; SEC-035) | `Containerfile` de la app y de `deploy/dev` |
 | `.npmrc` sin credenciales (`_auth*`, `_password`, `username`, `certfile`, `keyfile`; no muestra el valor; SEC-036) | `Containerfile`, tras `COPY . .`; y el final busca `.npmrc`, `.env*`, `*.pem`, `*.key` en `/app` (excepto `node_modules`) |
 | `node_use_quic` = `false`; `/app/dist` sin `node:quic`, `--experimental-quic` ni `dgram`; ningún `.node` con `NEEDED libssl/libcrypto` ni símbolos `OSSL_QUIC_*`, `SSL_new_listener`, `SSL_set_quic_tls_cbs` (SEC-033, condiciones 3 y 4) | `construir.sh`, sobre la imagen real (node en contenedor endurecido; `podman create` + `export`, `readelf`/`nm` fuera de la imagen) |
-| Etiqueta `-sucio` con la lista del `containerignore` (`apps packages package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig*.json tests/package.json` y `deploy/app/Containerfile|containerignore`) y con ficheros ignorados por git dentro de `apps/` y `packages/` (SEC-037); el script no acepta `--build-arg` del usuario (solo pasa los suyos: `AUDIT_NONCE`, `APP_VERSION`) | `construir.sh` |
+| Etiqueta `-sucio` con cualquier cambio sin commit en **todo** el arbol (`git status --porcelain --untracked-files=all`, SEC-052 e/f) y con ficheros ignorados por git dentro de `apps/` y `packages/` (SEC-037); el script no acepta `--build-arg` del usuario (solo pasa los suyos: `AUDIT_NONCE`, `APP_VERSION`) | `construir.sh` |
 | Imagen de db derivada: Alpine 3.24, `libxml2` ≥ 2.13.9-r3, sin `gosu`, sin paquetes atrasados (`apk --no-cache version -l '<'` vacío; SEC-049, SEC-051, SEC-055) | `deploy/db/construir.sh` (la llama `construir.sh`) |
 | Imagen del proxy derivada: Alpine 3.24, sin paquetes atrasados, `/usr/bin/caddy` con el sha256 de la imagen oficial (SEC-055, EXC-03) | `deploy/proxy/construir.sh` (la llama `construir.sh`) |
 | Condiciones de EXC-03 y EXC-02 sobre el Caddyfile y los compose (SEC-054, §8.2) | `deploy/scan/comprobar-excepciones.sh`, antes de escanear |
@@ -1600,16 +1600,51 @@ referencias. Necesita red para bajar la BD de Trivy.
 (`unset`) y usa el digest escrito en el script; muestra qué escáner usó. Para
 cambiar de versión se edita el digest (y §8).
 
-**Registro de escaneo aprobado (SEC-052, punto 3): PENDIENTE, antes de DEMO
-(Etapa 4).** Hoy `construir.sh`, si todo pasa, escribe
-`~/.local/state/mi-app/escaneos/aprobadas/<digest-app>` con fecha, etiqueta, commit, digests de
-app/db/proxy y sha256 de los ficheros de excepciones. Una imagen `-sucio` no se
-registra y `rechazar()` borra el registro de ese digest (SEC-052 punto 3a/3b). Falta que lo exijan:
-(a) `tests/run.sh` (de Testing, al menos en la ejecución de la puerta): rechazar
-un `APP_IMAGE` sin ese registro o con más de 7 días; (b) el despliegue de
-DEMO/PROD (Infrastructure, al crear `compose.demo.yaml`/Quadlet). Mientras
-tanto, una imagen hecha con `podman build` directo o rechazada puede usarse por
-digest en `tests/run.sh`.
+**Registro de escaneo aprobado (SEC-052, punto 3 y requisitos (e)-(h); tarea 2.12a).**
+Si todo pasa, `construir.sh` escribe `~/.local/state/mi-app/escaneos/aprobadas/<digest-app>`
+(`SCAN_DIR` lo cambia) con estos campos, uno por linea, en este orden (los lee
+`tests/containers/tx-cont-03.sh` campo a campo, sin cargarlo como codigo):
+
+```
+fecha=<UTC, AAAA-MM-DDThh:mm:ssZ>
+etiqueta=<commit corto de 12>
+commit=<40 hex>
+tree=<git rev-parse HEAD^{tree}>
+arbol_limpio=si
+app=localhost/mi-app@sha256:<digest>
+db=localhost/mi-app-db@sha256:<digest>
+proxy=localhost/mi-app-proxy@sha256:<digest>
+excepciones_sha256=<sha256 de trivyignore.yaml de app + trivyignore-proxy.yaml>
+```
+
+Reglas:
+- **Solo se registra** si la etiqueta es el commit corto de 12 (`construir.sh`
+  sin argumento) y `git status --porcelain --untracked-files=all` esta vacio en
+  **todo** el arbol (incluidos `deploy/`, `compose.*.yaml`, Caddyfile y `tests/`,
+  no solo la lista del `containerignore`), mas los ficheros ignorados dentro de
+  `apps/` y `packages/` que el `containerignore` no excluye. El estado se mira al
+  empezar y otra vez antes de escribir: si el arbol cambio durante el build, no se
+  registra. Si `git` falla, el arbol no se considera limpio.
+- Con cambios sin commit en cualquier parte, la etiqueta lleva `-sucio` (asi
+  `APP_VERSION` lo refleja), tambien con etiqueta propia
+  (`construir.sh <etiqueta>` -> `<etiqueta>-sucio`). Una etiqueta propia nunca se
+  registra (TX-CONT-03 exige etiqueta = commit corto). En los casos sin registro se
+  borra el registro previo del mismo digest y se avisa por stderr.
+- El registro se escribe a un fichero temporal y se renombra (no queda a medias).
+- `rechazar()` borra el registro de ese digest (3a). Si Trivy rechaza db o proxy,
+  su etiqueta fija pasa tambien a `-rechazada` (SEC-052 (c)).
+- `deploy/db/construir.sh` y `deploy/proxy/construir.sh` ponen en
+  `org.opencontainers.image.revision` `<commit>-sucio` si `deploy/db/` o
+  `deploy/proxy/` tienen cambios sin commit, ficheros nuevos incluidos (g).
+- (h) Se borraron del registro real las entradas `19d162e3...` (sin `etiqueta` ni
+  `commit`) y `9be1188a...` (`commit=fb427fa`, sin `arbol_limpio`). Las entradas
+  antiguas que no cumplan se borran a mano; el registro vigente lo crea la 2.11b.
+- Lo exige `tests/run.sh` con `GATE=1` (TX-CONT-03: 7 dias, etiqueta = commit,
+  `arbol_limpio=si`, excepciones, digests de db/proxy). **Pendiente, antes de
+  DEMO:** que el despliegue de DEMO/PROD (`compose.demo.yaml`/Quadlet) lo exija
+  tambien, y la 2.12 (SEC-056 M1..M12). Sin `GATE=1` el aviso no aborta.
+- Procedimiento de la puerta: `sh deploy/app/construir.sh` sin argumento, desde
+  el commit final y con el arbol limpio; luego `GATE=1 APP_IMAGE=... sh tests/run.sh ...`.
 
 La imagen de herramientas de DEV no se despliega y no se escanea.
 
