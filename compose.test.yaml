@@ -55,6 +55,9 @@ x-hardening: &hardening
 
 x-app-env: &app-env
   NODE_ENV: production
+  # Campo `env` de los logs (D-2.2-07). APP_VERSION viene horneada en la imagen
+  # (construir.sh): no se redefine aquí para que DEMO/PROD usen el mismo valor.
+  APP_ENV: test
   TZ: ${APP_TZ:-UTC}
   LOG_LEVEL: info
   DATABASE_HOST: db

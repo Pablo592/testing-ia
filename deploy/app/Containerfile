@@ -131,7 +131,13 @@ COPY --from=build --chown=1000:1000 /out/app/ /app/
 # Binario exacto de Node: /nodejs/bin/node. Se añade a PATH para que "node"
 # también funcione en compose/Quadlet (command: ["node", "dist/migrate.js"]).
 # HOME en /tmp (tmpfs) porque la raíz es de solo lectura.
+# APP_VERSION (campo `version` de los logs, D-2.2-07): la pasa construir.sh con la
+# etiqueta (<commit corto>[-sucio]). Va al final para no invalidar la caché. Es la
+# identidad de la imagen: DEMO y PROD usan el mismo digest, luego el mismo valor.
+# APP_ENV NO se hornea: lo pone cada entorno (compose/Quadlet).
+ARG APP_VERSION=dev
 ENV NODE_ENV=production \
+    APP_VERSION=${APP_VERSION} \
     HOME=/tmp \
     PATH=/nodejs/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 

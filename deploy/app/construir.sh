@@ -67,6 +67,7 @@ podman build \
   --pull=missing \
   --ignorefile deploy/app/containerignore \
   --label "org.opencontainers.image.revision=$REVISION" \
+  --build-arg "APP_VERSION=$ETIQUETA" \
   --build-arg "AUDIT_NONCE=$(date +%s)-$$" \
   -f deploy/app/Containerfile \
   -t "$REPO:$ETIQUETA" \

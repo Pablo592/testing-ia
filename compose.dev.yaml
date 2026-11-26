@@ -73,6 +73,8 @@ x-node-image: &node-image
 
 x-api-env: &api-env
   NODE_ENV: development
+  # Campo `env` de los logs (D-2.2-07). APP_VERSION no se pone: en DEV vale `dev`.
+  APP_ENV: dev
   TZ: UTC
   LOG_LEVEL: debug
   DATABASE_HOST: db
