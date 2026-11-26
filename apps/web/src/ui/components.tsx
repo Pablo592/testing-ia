@@ -104,6 +104,17 @@ export function Keypad({ onDigit, onDelete, digitsDisabled, deleteDisabled, acti
   );
 }
 
+/**
+ * Título corto de la barra a <= 767 px (design-system §5.11.1, H-2.8c-01): el
+ * texto visible es un prefijo del título completo; el resto va en un
+ * `span.sr-only` dentro del h1 (el nombre accesible sigue siendo el completo).
+ * Solo se acortan los títulos que no caben a 320 px.
+ */
+const SHORT_TITLES: Readonly<Record<string, string>> = {
+  'Resumen del día': 'Resumen',
+  'Acceso denegado': 'Acceso',
+};
+
 /** h1 de la barra superior: recibe el foco en cada cambio de pantalla (§5.11). */
 export function ScreenTitle({ title, focusKey, headingRef }: { title: string; focusKey: string; headingRef?: RefObject<HTMLHeadingElement | null> }) {
   const own = useRef<HTMLHeadingElement>(null);
@@ -111,9 +122,17 @@ export function ScreenTitle({ title, focusKey, headingRef }: { title: string; fo
   useEffect(() => {
     ref.current?.focus();
   }, [focusKey]);
+  const short = SHORT_TITLES[title];
   return (
     <h1 className="topbar-title" tabIndex={-1} ref={ref}>
-      {title}
+      {short !== undefined && title.startsWith(short) ? (
+        <>
+          {short}
+          <span className="sr-only">{title.slice(short.length)}</span>
+        </>
+      ) : (
+        title
+      )}
     </h1>
   );
 }

@@ -109,14 +109,29 @@
     grid-template-areas: 'title user';
   }
   /* H-2.6-01: el h1 ocupa siempre una línea para que la barra mida lo mismo en
-     todas las pantallas; si no cabe ("Resumen del día" junto a "Gestión") se
-     recorta con elipsis. El texto completo sigue en el DOM (nombre accesible). */
+     todas las pantallas. La elipsis es solo una red de seguridad: los títulos
+     largos muestran el título corto (§5.11.1) y nunca la activan. */
   .topbar-title {
+    position: relative;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
     overflow-wrap: normal;
     max-width: 100%;
+  }
+  /* H-2.8c-01 (§5.11.1): resto del título completo, oculto a la vista pero en el
+     árbol de accesibilidad. Nunca display:none, visibility:hidden ni hidden. */
+  .topbar-title .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
   }
   /* El panel se ancla a la barra (no al botón): ancho completo, justo debajo. */
   .menu {
