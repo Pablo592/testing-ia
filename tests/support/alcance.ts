@@ -4,7 +4,7 @@
 // Los casos que necesitan rutas de una historia posterior se ejecutan cuando
 // esa historia está en la lista. No sirve para saltarse tests que fallan: un
 // test de una historia en la lista se ejecuta siempre.
-export const HISTORIAS_EN_ALCANCE: readonly string[] = ['HU-01'];
+export const HISTORIAS_EN_ALCANCE: readonly string[] = ['HU-01', 'HU-05'];
 
 export function enAlcance(...historias: string[]): boolean {
   return historias.every((h) => HISTORIAS_EN_ALCANCE.includes(h));

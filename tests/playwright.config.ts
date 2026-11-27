@@ -78,5 +78,7 @@ export default defineConfig({
     { name: 'visual', testMatch: /visual\/.*\.visual\.ts$/, use: { ...chromium } },
     // Semilla de datos para k6 (tests/run.sh perf); no abre navegador.
     { name: 'semilla-perf', testMatch: /performance\/.*\.semilla\.ts$/ },
+    // Arnés realtime sobre la pila real (HU-05/CA-F04, §5.6.1); sin navegador, un worker (Toxiproxy es compartido).
+    { name: 'arnes-perf', testMatch: /performance\/.*\.arnes\.ts$/, fullyParallel: false },
   ],
 });

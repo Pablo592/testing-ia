@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import {
   codigoFuente,
+  hallazgosAdr006,
   hallazgosRs16c,
   hallazgosRs25,
   hallazgosRs35,
@@ -175,6 +176,45 @@ describe('RS-35: sin SQL armado con datos de entrada en apps/api', () => {
         'const sql2 = sql.val(valor);',
       ].join('\n');
       expect(hallazgosRs35('src/x.ts', bien), informe(hallazgosRs35('src/x.ts', bien))).toEqual([]);
+    });
+  });
+});
+
+describe('ADR-006: los importes no pasan por coma flotante (HU-05/CA-F02, CA-F06)', () => {
+  const SHARED = fileURLToPath(new URL('../../packages/shared/', import.meta.url));
+  const fuentesShared = existsSync(SHARED) ? codigoFuente(`${SHARED}src`, SHARED) : [];
+
+  test('[HU-05/CA-F02][HU-05/CA-F06][ADR-006] ni apps/api, ni apps/web ni packages/shared usan parseFloat ni Math.round(importe * 100)', () => {
+    const h = [
+      ...recorrer(fuentesApi, (rel, src) => hallazgosAdr006(`apps/api/${rel}`, src)),
+      ...recorrer(fuentesWeb, (rel, src) => hallazgosAdr006(`apps/web/${rel}`, src)),
+      ...recorrer(fuentesShared, (rel, src) => hallazgosAdr006(`packages/shared/${rel}`, src)),
+    ];
+    expect(h, `\n${informe(h)}`).toEqual([]);
+  });
+
+  describe('el detector detecta el defecto', () => {
+    test.each([
+      ['parseFloat', 'const euros = parseFloat(texto.replace(",", "."));'],
+      ['Number.parseFloat', 'const euros = Number.parseFloat(texto);'],
+      ['Math.round(parseFloat(x) * 100)', 'const cents = Math.round(parseFloat(texto) * 100);'],
+      ['Math.round(Number(x) * 100) en un precio', 'const priceCents = Math.round(Number(texto) * 100);'],
+      ['Math.floor(euros * 100)', 'const cents = Math.floor(euros * 100);'],
+      ['Math.trunc con importe', 'const importe = Math.trunc(entrada * 100);'],
+    ])('%s', (_n, linea) => {
+      expect(hallazgosAdr006('src/x.ts', `${linea}\n`).length, linea).toBeGreaterThan(0);
+    });
+
+    test('lo correcto, los porcentajes y los comentarios no dan falsos positivos', () => {
+      const bien = [
+        '// nunca parseFloat(x) * 100: se parsea la cadena',
+        '/* Math.round(precio * 100) está prohibido */',
+        'const cents = Number(entera) * 100 + Number(decimales.padEnd(2, "0"));',
+        'const porcentaje = Math.round((parte / total) * 100);',
+        'const progreso = Math.floor(hechos * 100 / total);',
+        'const m = /^(\\d{1,3})(?:[.,](\\d{1,2}))?$/.exec(texto);',
+      ].join('\n');
+      expect(hallazgosAdr006('src/x.ts', bien), informe(hallazgosAdr006('src/x.ts', bien))).toEqual([]);
     });
   });
 });

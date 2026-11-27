@@ -7,8 +7,9 @@
 #   El filtro (solo unit | integration | security | e2e | a11y | visual) se pasa tal
 #   cual a Vitest/Playwright: p. ej. `sh tests/run.sh integration integration/api/HU-01-login`
 #   o `sh tests/run.sh e2e HU-01-csp` o `sh tests/run.sh visual -g "P-01"`. Sin filtro se ejecuta toda la suite.
-#   unit | integration | security | e2e | a11y | visual | perf | containers |
-#   trazabilidad | all
+#   typecheck | unit | integration | security | e2e | a11y | visual | perf |
+#   containers | trazabilidad | all
+#   `typecheck` ejecuta `tsc --noEmit` sobre tests/ (sin red, mismo ejecutor que unit).
 #
 # Variables (imágenes SIEMPRE por digest, repo@sha256:...):
 #   APP_IMAGE         imagen de la app (deploy/app/Containerfile) — obligatoria
@@ -26,6 +27,10 @@
 #   E2E_WORKERS       workers de Playwright en paralelo (por defecto 3; D-2.2-03)
 #   APP_TZ            zona de app (por defecto UTC; segunda ejecución con America/New_York)
 #   RONDAS            rondas de k6 (por defecto 3 en Etapa 2; 20 en Etapa 3)
+#   MUESTRAS_PROPAGACION  muestras del arnés de HU-05/CA-F04 en la pila real (perf; 30 por defecto,
+#                     >= 200 en la Etapa 3)
+#   RED_EMULADA       1 = el arnés de HU-05/CA-F04 añade latencia en Toxiproxy (RTT +40 ms, jitter
+#                     20 ms; sin pérdida de paquetes, T-52). Solo en perf, Etapa 3
 #   GATE              1 = ejecución de PUERTA (SEC-052 punto 3, docs/seguridad.md §6.12):
 #                     si APP_IMAGE no tiene un registro de escaneo aprobado vigente
 #                     (tests/containers/tx-cont-03.sh: máximo 7 días, commit y
@@ -54,8 +59,8 @@ cd "$ROOT"
 SUITE=${1:-}
 [ "$#" -gt 0 ] && shift
 case "$SUITE" in
-  unit|integration|security|e2e|a11y|visual|perf|containers|trazabilidad|all) ;;
-  *) echo "uso: sh tests/run.sh {unit|integration|security|e2e|a11y|visual|perf|containers|trazabilidad|all}" >&2; exit 2 ;;
+  typecheck|unit|integration|security|e2e|a11y|visual|perf|containers|trazabilidad|all) ;;
+  *) echo "uso: sh tests/run.sh {typecheck|unit|integration|security|e2e|a11y|visual|perf|containers|trazabilidad|all}" >&2; exit 2 ;;
 esac
 
 # --- Comprobación de enlaces simbólicos (SEC-026) ---------------------------
@@ -147,7 +152,7 @@ fi
 # Requisito 1: punto de montaje del tmpfs que tapa .secrets/ (SEC-018).
 mkdir -p -m 0700 .secrets
 # Carpetas de salida (únicas rutas en escritura desde los contenedores).
-mkdir -p tests/results tests/screenshots/HU-01
+mkdir -p tests/results tests/screenshots/HU-01 tests/screenshots/HU-05
 # Requisito 5: antes de cualquier up/run.
 comprobar_enlaces
 
@@ -198,7 +203,7 @@ if [ "$SUITE" = "all" ]; then
     export REGISTRO_VERIFICADO=1 REGISTRO_ESTADO
   fi
   sh "$0" containers || { echo "containers falla: se detiene (la pila incumple la política)" >&2; exit 1; }
-  for s in trazabilidad unit integration security e2e a11y visual perf; do
+  for s in trazabilidad typecheck unit integration security e2e a11y visual perf; do
     sh "$0" "$s" || rc=1
   done
   exit $rc
@@ -386,6 +391,9 @@ case "$SUITE" in
   trazabilidad)
     ejecutar unit runner-unit node tests/tools/trazabilidad.ts || RC=$?
     ;;
+  typecheck)
+    ejecutar unit runner-unit pnpm --dir tests exec tsc -p tsconfig.json || RC=$?
+    ;;
   unit)
     ejecutar unit runner-unit pnpm --dir tests run test:unit "$@" || RC=$?
     ;;
@@ -437,6 +445,21 @@ case "$SUITE" in
             -e SSL_CERT_FILE=/caddy-data/caddy/pki/authorities/local/root.crt \
             --summary-export "$RESULTS_DIR_CTR/k6-resumen.json" \
             /workspace/tests/performance/k6/main.js || RC=$?
+        fi
+        # HU-05/CA-F04 y CA-N03 (2.20): el arnés realtime (10 dispositivos, siembra su menu-200 por la
+        # API) y, con ese menú ya creado, la lectura de GET /menu con k6 (informativa). Van aparte del
+        # login de HU-01 para que la falta de una historia no oculte el resultado de la otra.
+        # MUESTRAS_PROPAGACION (30 por defecto; >= 200 en la Etapa 3) y RED_EMULADA=1 (latencia del
+        # supuesto 12 en Toxiproxy) llegan al ejecutor por -e.
+        RUN_ENV_EXTRA="-e MUESTRAS_PROPAGACION=${MUESTRAS_PROPAGACION:-} -e RED_EMULADA=${RED_EMULADA:-}" \
+          ejecutar e2e runner-e2e $PW --project=arnes-perf --workers=1 || RC=$?
+        if [ -s "$RESULTADOS/k6-usuarios.json" ]; then
+          RUN_ENV_EXTRA="-e SSL_CERT_FILE=/caddy-data/caddy/pki/authorities/local/root.crt" ejecutar perf runner-perf run \
+            -e K6_USERS_FILE="$RESULTS_DIR_CTR/k6-usuarios.json" \
+            -e RONDAS="${RONDAS:-3}" \
+            -e SSL_CERT_FILE=/caddy-data/caddy/pki/authorities/local/root.crt \
+            --summary-export "$RESULTS_DIR_CTR/k6-resumen-HU-05.json" \
+            /workspace/tests/performance/k6/HU-05-menu-200.js || RC=$?
         fi
         ;;
       containers)

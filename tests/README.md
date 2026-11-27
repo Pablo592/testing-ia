@@ -19,11 +19,12 @@ Siempre en contenedores, con `tests/run.sh` (nunca `pnpm`/`node`/`npx` en el
 host, `docs/infraestructura.md` §7.1):
 
 ```sh
+sh tests/run.sh typecheck       # tsc --noEmit sobre tests/ (sin red)
 sh tests/run.sh unit            # Vitest, sin red
 sh tests/run.sh integration     # Vitest + buildApp(FakeClock) + PostgreSQL efímero
 sh tests/run.sh e2e             # Playwright contra proxy -> app -> db (incluye las series con PIN erróneo y con cortes de red)
-sh tests/run.sh a11y | visual   # axe / capturas para UX (tests/screenshots/HU-01/)
-sh tests/run.sh perf            # k6 (Etapa 3; en Etapa 2 solo control rápido)
+sh tests/run.sh a11y | visual   # axe / capturas para UX (tests/screenshots/HU-01/ y HU-05/)
+sh tests/run.sh perf            # k6 (login de HU-01, GET /menu con menu-200) y el arnés realtime de HU-05/CA-F04 (Etapa 3; en Etapa 2 solo control rápido)
 sh tests/run.sh containers      # TX-CONT-01/02 en el host sobre la pila en marcha (y el aviso del registro de escaneo)
 GATE=1 sh tests/run.sh <suite>  # ejecución de PUERTA: aborta si APP_IMAGE no tiene registro de escaneo vigente (ver abajo)
 sh tests/run.sh trazabilidad    # cruza criterios de las historias con los títulos de los tests
@@ -93,8 +94,8 @@ tests/
 ├── security/             matriz de autorización y denegación por defecto; estático RS-16c/RS-25/RS-35 (se ejecuta con integration)
 ├── e2e/                  Playwright: *.e2e.ts (paralelo), *.pin.e2e.ts (serie, PIN erróneo) y *.red.e2e.ts (serie, cortes de Toxiproxy)
 ├── a11y/                 axe + comprobaciones de teclado/etiquetas
-├── visual/               capturas 375/768/1024/1440/1920 para UX
-├── performance/k6/       escenarios k6
+├── visual/               capturas 375/768/1024/1440/1920 para UX (HU-05: 375/768/1024/1440)
+├── performance/          k6/*.js (escenarios k6), *.semilla.ts (datos para k6) y *.arnes.ts (arnés realtime sobre la pila real)
 ├── containers/           TX-CONT-01 (rootless), TX-CONT-02 (excepciones y db/proxy derivadas), TX-CONT-03 (registro de escaneo), TX-CMD-01 (host)
 ├── support/              helpers (reloj, app, http, sse, bd, logs, métricas, semilla e2e)
 ├── tools/                trazabilidad
@@ -337,6 +338,124 @@ Reglas de la pila TESTING que afectan a los tests (`docs/infraestructura.md` §6
   después la app (su pool) y por último borra la BD. Un `DROP` que falla es una
   fuga de conexiones del test o de la app.
 
+## Contrato con el código (HU-05, tarea 2.20)
+
+Los tests de HU-05 se escribieron **antes** de la implementación (como los de
+HU-01) y **fallan hasta que exista**. La arquitectura manda: `docs/arquitectura.md`
+§5.1 solo da las **rutas**, los permisos y dos códigos (`409
+CATEGORY_HAS_ACTIVE_PRODUCTS {count}` y los eventos `product.updated` /
+`menu.changed`); todo lo demás de esta sección (formas de respuesta, códigos
+`CATEGORY_NAME_TAKEN` y `PRODUCT_NAME_TAKEN`, nombres de columnas de auditoría)
+es una **propuesta de Testing** marcada como tal y pendiente de confirmar por el
+Software Engineer (hallazgo T-50). Si el Developer necesita otra forma, no toca los
+tests: avisa y se ajusta el punto único de adaptación (`tests/support/menu.ts`
+para la API y `tests/support/e2e/menu.ts` para la pantalla).
+
+Cómo se ejecuta cada parte (siempre con `tests/run.sh`; `APP_IMAGE` por digest):
+
+```sh
+sh tests/run.sh typecheck                                    # tsc --noEmit de tests/ (sin red)
+sh tests/run.sh unit                                         # incluye unit/shared/texto-api y unit/shared/dinero
+sh tests/run.sh integration integration/api/HU-05            # API + BD (11 ficheros) ; integration/realtime/HU-05 para SSE
+sh tests/run.sh security                                     # matriz de autorización (filas de HU-05) y ADR-006 estático
+sh tests/run.sh e2e HU-05                                    # P-09 en tablet-h y tablet-h-webkit (1280x800)
+sh tests/run.sh a11y HU-05 | visual HU-05                    # axe + teclado + reflujo; capturas en tests/screenshots/HU-05/
+MUESTRAS_PROPAGACION=200 RED_EMULADA=1 sh tests/run.sh perf  # arnés de CA-F04 (Etapa 3) y GET /menu con menu-200
+```
+
+### 7.1 API: rutas, cuerpos, respuestas y códigos (`tests/support/menu.ts`)
+
+| Ruta (todas bajo `/api/v1`) | Permiso | Cuerpo | Respuesta esperada |
+|---|---|---|---|
+| `GET /menu` | `menu:read` (W, K, M) | — | `200 { categories: [ { id, name, products: [ { id, name, available, priceCents? } ] } ] }`: sin archivar / sin desactivar, por `position`. **Barra no recibe ninguna clave que case con `/cents\|price\|total\|amount\|tendered\|change/i`** (RS-19). `Cache-Control: no-store` (RS-27). Admite `X-Activity: passive` (SEC-030). Sin categorías → `categories: []` |
+| `GET /menu?includeInactive=true` | `menu:manage` (solo M) | — | Igual, más `active` en cada producto y los desactivados. **W y K reciben `403 FORBIDDEN`** (propuesta T-50 c: no se filtra lo desactivado; el servidor lo decide, no la interfaz) |
+| `POST /categories` | `menu:manage` | `{ name }` (`apiName(1, 30)`) | `201` con `{ id, name }` (o envuelto en `{ category }`: `idDe()` admite ambas). Va al **final** del orden. Repetido (`lower(name)` sobre el valor normalizado, entre las no archivadas) → `409 CATEGORY_NAME_TAKEN` |
+| `PATCH /categories/:id` | `menu:manage` | `{ name }` | `200`; `404` si no existe o está archivada; `409 CATEGORY_NAME_TAKEN`; cambiar solo mayúsculas del propio nombre no es duplicado |
+| `DELETE /categories/:id` | `menu:manage` | — | Archiva (`archived_at`, fila conservada): `200` o `204`. Con productos **activos** (agotados cuentan, desactivados no) → `409 CATEGORY_HAS_ACTIVE_PRODUCTS` con `error.details = { count }` y sin cambios. No existe o ya archivada → `404`; id que no es UUID → `400` o `404` (nunca `500`) |
+| `POST /products` | `menu:manage` | `{ categoryId, name, priceCents, available? }` (`name`: `apiName(1, 40)`; `priceCents`: entero 1–99999; `available` booleano, por defecto `true`) | `201` con `{ id, name, priceCents, available }` (o envuelto en `{ product }`). Al final de su categoría. Categoría inexistente o archivada → `404` o `422`. Repetido en la categoría (`lower(name)` entre activos) → `409 PRODUCT_NAME_TAKEN` |
+| `PATCH /products/:id` | `menu:manage` | cualquiera de `{ name, categoryId, priceCents, active }` | `200` con el producto. Mover a otra categoría con el mismo nombre → `409 PRODUCT_NAME_TAKEN`; reactivar con un activo del mismo nombre → `409`; `404` si no existe. **Auditoría** (CA-N02): una fila `audit_log` por cambio de **precio** (no por renombrar, desactivar ni repetir el valor): `action = 'price.changed'`, `entity_type = 'product'`, `entity_id = <id>`, `actor_id = <encargado>`, `at` = hora del reloj de la app, `details = { old_price_cents, new_price_cents }`; sin PIN ni hashes. Log `product.price_changed { product_id, old_price_cents, new_price_cents }` |
+| `PATCH /products/:id/availability` | `product:set_availability` (W, M) | `{ available }` y **nada más** | `200`; cualquier otro campo → `400 not_allowed` (RS-20); `available` ausente → `required`; no booleano (incluido `0`, `1`, `"false"`, `null`) → `type`. K → `403`. Log `product.availability_changed { product_id, available }` |
+| `PUT /menu/order` | `menu:manage` | `{ categories: [id…], products: { categoryId: [id…] } }` | `200` o `204`. `categories` = **todas** las no archivadas en el orden nuevo; `products` = mapa (puede ser `{}`) de categoría → **todos** los productos de esa categoría (activos o no) en el orden nuevo; las categorías que no aparecen conservan su orden. Repetidos, desconocidos, de otra categoría, que faltan, archivados o ids que no son UUID → `400` o `422`, sin cambios y sin `5xx`. Posiciones sin repetir tras cada orden |
+
+Validación, común a todas las escrituras: `400 VALIDATION_FAILED` con
+`details.issues = [{ path, rule }]` y reglas `required`, `type`, `min`, `max`,
+`min_length`, `max_length`, `format`, `not_allowed` (§3 de este contrato, mismo
+traductor `issuesFromZod`); **nunca** repite el valor recibido. Un rol sin permiso
+recibe `403 FORBIDDEN` **antes** de validar el cuerpo y sin dejar rastro en la BD;
+sin `Origin` válido, `403 ORIGIN_NOT_ALLOWED`; cuerpo que no es JSON, `415`; con
+PIN provisional, `403 PIN_CHANGE_REQUIRED`.
+
+### 7.2 Eventos SSE (`GET /events`, `docs/arquitectura.md` §6)
+
+Se publican **tras el COMMIT**, a todos los flujos abiertos, con `emittedAt` ISO 8601:
+
+| Evento | Cuándo | Datos |
+|---|---|---|
+| `product.updated` | disponibilidad, precio o activo | `{ productId, available, active, priceCents?, emittedAt }`. A barra **sin ninguna clave de importe** (RS-19, recorrido recursivo). `productId` o `id` valen para el producto |
+| `menu.changed` | crear categoría o producto, archivar, reordenar | `{ emittedAt }`. La toma de pedidos recarga `GET /menu` (pasivo) |
+
+Renombrar o mover un producto publica `product.updated` o `menu.changed` (basta uno). Una escritura rechazada (`400`, `403`, `409`) **no** emite ningún evento de menú.
+
+### 7.3 `@mi-app/shared/money` (ADR-006)
+
+Subruta nueva del paquete (`exports` de `packages/shared/package.json`):
+
+- `parseCents(texto: string): number | null`: céntimos enteros de un importe escrito con **coma o punto** y como mucho 2 decimales (`"2,50"`, `"2.5"`, `"2"`); `null` si no es de ese tipo (vacío, letras, 3 decimales, signo, `1e2`, más de un separador, `"2,"`). **Parsea la cadena**; no comprueba el rango de HU-05 (lo hacen el formulario y la API). Prohibidos `parseFloat` y `Math.round(x * 100)` con importes: lo vigila `security/estatico.sec.test.ts` (regla ADR-006) en `apps/api`, `apps/web` y `packages/shared`.
+- `formatCents(cents: number): string`: `"1,30 €"` (es-ES; el espacio antes del euro puede ser U+00A0). `parseCents` y `formatCents` son inversas para todo 1–99999.
+
+### 7.4 `apiText` y `apiName` (`@mi-app/shared/api`, `docs/arquitectura.md` §5 y §18.2; `docs/seguridad.md` §6.14 C10 y C11)
+
+- Los dos se implementan como `transform` de zod (C11): el valor que llega a la ruta es el **normalizado** (NFC; en `apiName` además `trim()` y tramos de U+0020 → uno).
+- Rechazo con una sola incidencia `{ path: ['name'], rule: 'format' }` (en `apiText`: `\p{Cc}` incluido C1, U+2028/2029, U+202A–U+202E, U+2066–U+2069 y sustitutos sueltos; en `apiName`, además `\p{Cf}`, `\p{Co}`, `\p{Cn}` y todo `\p{Z}` distinto de U+0020). Longitud sobre el texto ya normalizado con `String.length`: `min_length` / `max_length`. El traductor `issuesFromZod` debe producir esas reglas también para los *issues* personalizados del `transform`.
+- `apiText` sigue aceptando U+200E, U+200F, U+061C, U+200D, NBSP y U+3000 (texto libre); `apiName` los rechaza.
+- **El `name` del login** (`apiText(1, 30)`) pasa de `401` a `400 VALIDATION_FAILED` `format` con un C1, U+202E, U+2066, U+2028/2029 o un sustituto suelto; con `"José"` descompuesto entra en la cuenta `José` y comparte el carril `user:<id>`. Los 13 casos nuevos de `integration/api/HU-01-nombre-control.int.test.ts` **fallan con el código de HU-01 (dan `401`) y deben pasar con HU-05**; las marcas U+200E/U+200F/U+061C siguen dando `401`.
+- `create-initial-manager` (`createInitialManager`, `runCommand`) valida y normaliza el nombre con `apiName` (C10): nombre inválido → `InvalidNameError` (el CLI sale con `1`, `stderr` explica el error sin el PIN) y no crea nada; válido → se guarda NFC y sin espacios sobrantes. Los límites 1–30 se miden tras normalizar.
+- Pregunta abierta (docs/testing.md §14.10): `apiName` hace `trim()` antes de rechazar, y `trim()` quita también NBSP, U+FEFF, U+3000, tabulador, saltos de línea y U+2028/2029 **en los extremos**. Los tests no afirman nada sobre esos casos en los extremos de un `apiName`.
+
+### 7.5 Base de datos (`docs/arquitectura.md` §4.1; migración nueva)
+
+`tests/integration/api/HU-05-bd.int.test.ts` inserta como `app_rw`, sin pasar por la API, con **exactamente** estas columnas (cualquier otra columna `NOT NULL` debe tener valor por defecto):
+
+- `categories (id, name, position, archived_at)` y `products (id, category_id, name, price_cents, available, active, position, updated_at)`.
+- Nombre de categoría ≤ 30 y de producto ≤ 40 (`22001`, o `23514` con `CHECK`); `price_cents` entre 1 y 99999 (`23514`); `UNIQUE (lower(name)) WHERE archived_at IS NULL` en `categories` y `UNIQUE (category_id, lower(name)) WHERE active` en `products` (`23505`; los archivados/desactivados no cuentan y reactivar con un activo del mismo nombre falla); `products.category_id` con clave foránea (`23503`).
+- **Propuesta de Testing (T-50 a):** `app_rw` **no tiene `DELETE` ni `TRUNCATE`** en `categories` ni en `products` (`42501`): "borrar" no existe, se archiva (CA-F08) o se desactiva (CA-F05), y el histórico de pedidos y ventas referencia la fila. La arquitectura solo dice "sin `DELETE` en tablas de auditoría y cobros"; si el Software Engineer decide otra cosa, se ajusta ese test con la aprobación del PO.
+- Los tests de la API leen `categories.position`, `archived_at`, `products.price_cents`, `available`, `active`, `position` y `audit_log` (`action`, `actor_id`, `entity_type`, `entity_id`, `at`, `details`). Si cambian, se ajusta solo `tests/support/menu.ts`.
+
+### 7.6 Interfaz: P-09 "Menú" (`/menu`, `docs/ux/wireframes/06-gestion-menu.md`; `tests/support/e2e/menu.ts`)
+
+| Elemento | Selector / texto |
+|---|---|
+| Pantalla | ruta `/menu`, `h1` único "Menú"; solo encargado (los demás roles: "Acceso denegado" como en HU-01) |
+| Categorías | una fila por categoría con `data-testid="categoria-<id>"`; dentro, un `button` cuyo nombre accesible **empieza** por el nombre ("Cafés (8)") y que lleva `aria-current="true"` cuando está elegida; botones `aria-label` exactos **"Subir <nombre>"**, **"Bajar <nombre>"**, **"Editar <nombre>"**, **"Borrar <nombre>"** (≥ 48 px de alto; los de icono, 48 de ancho). El primero no puede subir ni el último bajar (`disabled`) |
+| Productos | una fila por producto de la categoría elegida con `data-testid="producto-<id>"`, con el nombre, el precio con `formatCents` ("1,60 €") y el estado en texto: "Disponible", "AGOTADO" o "DESACTIVADO"; botones "Subir/Bajar/Editar <nombre>" y **"Más acciones de <nombre>"** (menú con `menuitem` "Marcar agotado" / "Marcar disponible", "Desactivar" y "Activar"). Tras "Subir/Bajar" el foco sigue en la fila del producto movido y aparece el toast "Orden actualizado" (`role="status"`). El orden en el DOM es el orden de la lista |
+| Alta y edición de producto | botón "Nuevo producto" (con la categoría elegida) → diálogo `role="dialog"` "Nuevo producto" / "Editar producto" con **un** `<form>` y 4 campos obligatorios, cada uno con `<label for>` visible que acaba en "(obligatorio)": **"Nombre (obligatorio)"**, **"Categoría (obligatorio)"** (`select`, preselecciona la elegida), **"Precio con IVA incluido (obligatorio)"** (`inputmode` decimal o numérico; se escribe "2,50" o "2.5") y `radiogroup` **"Disponible (obligatorio)"** con radios "Disponible" (por defecto) y "Agotado". Botones "Cancelar" y **"Guardar producto"** (pasa a "Guardando…" y se deshabilita; un solo envío). Éxito: toast "Producto guardado" y el diálogo se cierra. Al editar, bajo el precio: "El nuevo precio se aplicará a los pedidos que se envíen a partir de ahora" |
+| Errores (CA-F06, CA-U03) | junto al campo, `aria-invalid="true"` y descripción accesible (`aria-describedby`): **"Escribe un nombre de 1 a 40 caracteres."**, **"El precio debe estar entre 0,01 y 999,99 € con 2 decimales como máximo."**, **"Ya existe un producto con ese nombre en esta categoría."**; el foco va al **primer campo erróneo**; el diálogo no se cierra y lo escrito se conserva. El precio se valida con `parseCents` y rango 1–99999 antes de enviar (`0`, `-1`, `2,505`, `abc`, `1000`, `1e2` y vacío dan el error del precio). Un `500` muestra un bloque `role="alert"` dentro del formulario y los datos no se pierden |
+| Alta de categoría | botón **"Nueva categoría"** → diálogo "Nueva categoría" con **"Nombre (obligatorio)"** y botón **"Guardar categoría"**. **Texto propuesto por Testing (T-51: el wireframe 06 no dibuja este formulario; UX debe fijarlo):** error de nombre `/Escribe un nombre de 1 a 30 caracteres/` y de repetido `/Ya existe una categoría con ese nombre/` |
+| Borrar categoría | con productos activos, diálogo cuyo nombre empieza por "No se puede borrar <nombre>", texto **"No se puede borrar <nombre>: tiene <n> productos activos. Desactívalos o muévelos a otra categoría."** (`n` = `details.count` del `409`) y botón "Entendido"; al cerrar, el foco vuelve al botón "Borrar <nombre>". Sin productos activos se archiva sin diálogo de bloqueo |
+| Desactivar | diálogo **"¿Desactivar <nombre>?"** con "Dejará de aparecer en la toma de pedido. Se conserva en el histórico.", botones "Volver" y **"Desactivar producto"**. Escape equivale a "Volver" y devuelve el foco al `⋯` |
+| Estados | vacío: **"Todavía no hay categorías. Crea la primera para empezar a añadir productos."** y "Nueva categoría" (sin "Nuevo producto"); categoría vacía: **"<nombre> no tiene productos."** y "Nuevo producto"; cargando: 1 o más `data-testid="esqueleto-menu"` y, a partir de 1 s, "Cargando menú…" en un `role="status"`; error de carga: `role="alert"` y botón **"Reintentar"** |
+| Tiempo real | un `product.updated` o `menu.changed` actualiza la lista sin recargar, en ≤ 5 s (CA-F04) |
+| Diálogos | foco atrapado, Escape cierra, el foco vuelve a quien los abrió; objetivos ≥ 24x24 px (WCAG 2.5.8); sin desplazamiento horizontal a 320 px ni con el texto al 200 % (WCAG 1.4.10) |
+
+### 7.7 Lo que depende de HU-02 (`enAlcance('HU-02')`)
+
+`integration/api/HU-05-pedidos.int.test.ts` (CA-F03 y CA-F05 con `POST /orders`: precio y nombre congelados en `order_lines.unit_price_cents` y `product_name`) y `e2e/HU-05-modo-agotados.e2e.ts` (CA-U02 y CA-F04 en la toma P-04) se ejecutan cuando HU-02 entre en `tests/support/alcance.ts`; hasta entonces **se omiten** y no cuentan como cubiertos en la matriz de resultados (docs/testing.md §12). Selectores de ese modo (wireframe 03): botón "Marcar agotados", banner "Modo agotados: toca un producto para cambiar su disponibilidad." con "Terminar", producto con `aria-disabled="true"` y la insignia "AGOTADO". Los selectores de P-03/P-04 (rejilla de mesas, pestañas de categoría `tab`, botón de producto) los fija el Testing de HU-02.
+
+### 7.8 Condición C10 (nombres de usuario existentes)
+
+Al implementar HU-05 se comprueba, en DEV y en TESTING, que no hay nombres de usuario no normalizados ni con controles: `SELECT id FROM users WHERE name IS NOT NFC NORMALIZED OR name ~ '[[:cntrl:]]'` → 0 filas. En TESTING lo hace `integration/api/HU-05-texto-api.int.test.ts` (BD del fichero y la de la pila); en DEV, Infrastructure, con `podman exec -u 1000` (nunca root) o con `psql` del contenedor de la BD.
+
+### 7.9 Rendimiento (`tests/performance/`)
+
+- **`HU-05-agotado.arnes.ts`** (proyecto `arnes-perf`, suite `perf`): CA-F04 y CA-N03 sobre la pila real. 8 camareros + barra + encargado (10 dispositivos), `menu-200` creado por la API, un cambio de disponibilidad por muestra y como medida el **último** dispositivo en verlo; p95 ≤ 5000 ms y ningún evento perdido. `MUESTRAS_PROPAGACION` (30 por defecto, ≥ 200 en la Etapa 3); `RED_EMULADA=1` añade latencia en Toxiproxy (RTT +40 ms y jitter 20 ms). Escribe `propagacion-agotado.json` en la carpeta de resultados. **Limitación (T-52):** Toxiproxy no emula la pérdida del 1 % del supuesto 12.
+- **`k6/HU-05-menu-200.js`** (después del arnés): `GET /menu` con `menu-200` por 10 dispositivos a la vez; informativo (sin umbral de tiempo; falla solo si el menú no llega entero, el encargado/camarero no ven `priceCents` enteros o barra ve alguna clave de importe).
+- El control en proceso de CA-F04 está en `integration/realtime/HU-05-agotado-propagacion.int.test.ts`.
+- Lo demás de la lista cerrada de CA-N03 (HU-02/CA-N01, CA-U05, CA-F23, CA-N05) depende de HU-02.
+
+### 7.10 Qué falla hoy y por qué
+
+Sin la implementación de HU-05 fallan, y deben pasar con ella: los unitarios `texto-api` y `dinero`; todos los `integration/api/HU-05-*` y `integration/realtime/HU-05-*`; los 13 casos nuevos de `HU-01-nombre-control`; `HU-05-texto-comandos` (nombres inválidos y NFC); las filas de HU-05 de la matriz de autorización; y todos los e2e, a11y y visuales de P-09 (la pantalla es "Esta pantalla todavía no está disponible."). Todo lo de HU-01 sigue en verde.
+
 ## Puntos de adaptación (si el Developer elige otros nombres)
 
 | Cambio | Único fichero que se toca |
@@ -350,6 +469,9 @@ Reglas de la pila TESTING que afectan a los tests (`docs/infraestructura.md` §6
 | Ayudas de `@mi-app/api/config` (`ConfigError`) | `tests/support/config.ts` |
 | Servicio y forma de invocar los comandos en la imagen (T-41) | `tests/containers/tx-cmd-01.sh` (`TX_CMD_SERVICE`, `TX_CMD_PREFIJO`) |
 | BD por fichero, clon de la plantilla | `tests/support/bd-fichero.ts`, `tests/support/bd-admin.ts` |
+| HU-05: rutas, formas de respuesta, códigos de error, columnas de `categories`, `products` y `audit_log` (§7.1, §7.5) | `tests/support/menu.ts` (`ClienteMenu`, `COD`, `idDe`, `categoriasDe`, `filaCategoria`, `filaProducto`, `auditoriaDe`) |
+| HU-05: textos, selectores y `data-testid` de P-09 (§7.6) | `tests/support/e2e/menu.ts` (`TEXTOS_MENU`, `PantallaMenu`, `FormularioProducto`, `ApiMenu`) |
+| Menú `menu-200` y claves de importe de RS-19 | `tests/support/menu-puro.ts` |
 
 ## Historias en alcance
 
@@ -358,7 +480,9 @@ Etapa 2. Los casos que dependen de rutas de historias posteriores (p. ej.
 HU-01/CA-F10 necesita `POST /orders` y `POST /payments`; las filas de la matriz
 de autorización de HU-02..HU-08) se ejecutan cuando su historia entra en la
 lista. Testing la actualiza al empezar cada historia; no es un mecanismo para
-saltarse tests fallidos.
+saltarse tests fallidos. Desde la tarea 2.20 están en alcance **HU-01 y HU-05**;
+lo de HU-05 que necesita HU-02 (`HU-05-pedidos.int.test.ts`, `HU-05-modo-agotados.e2e.ts`)
+se omite hasta que HU-02 entre en la lista (§7.7).
 
 ## Comprobaciones de seguridad que no son de comportamiento (SEC-045)
 

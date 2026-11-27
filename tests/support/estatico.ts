@@ -258,6 +258,32 @@ export function hallazgosRs35(rel: string, src: string): Hallazgo[] {
   return out;
 }
 
+// --- ADR-006: los importes no pasan por coma flotante -----------------------
+
+// `cents?` solo como palabra o sufijo (priceCents, cents): "porcentaje" y "centro" no son dinero.
+const PALABRAS_DINERO = /cents?(?![a-z])|pric|prec|euro|eur\b|amount|import/i;
+
+/**
+ * ADR-006 (docs/arquitectura.md §8; HU-05/CA-F02, CA-F06): el precio que escribe
+ * el encargado ("2,50") se convierte a céntimos parseando la CADENA, "nunca
+ * `parseFloat(x) * 100`". Detecta `parseFloat` en cualquier fichero de
+ * apps/api, apps/web y packages/shared, y `Math.round|floor|ceil|trunc(… * 100)`
+ * en una línea que habla de dinero (céntimos, precio, euros, importe). Multiplicar
+ * un ENTERO por 100 (`Number(entera) * 100 + Number(dec)`) es exacto y no se
+ * señala; tampoco un porcentaje (`Math.round(parte / total * 100)`).
+ */
+export function hallazgosAdr006(fichero: string, src: string): Hallazgo[] {
+  const codigo = sinComentarios(src);
+  const out: Hallazgo[] = [];
+  out.push(...buscar('ADR-006', fichero, codigo, /\bparseFloat\b/));
+  for (const [i, linea] of codigo.split('\n').entries()) {
+    if (/\bMath\s*\.\s*(?:round|floor|ceil|trunc)\s*\([^;]*\*\s*100\b/.test(linea) && PALABRAS_DINERO.test(linea)) {
+      out.push({ regla: 'ADR-006', fichero, linea: i + 1, texto: linea.trim().slice(0, 160) });
+    }
+  }
+  return out;
+}
+
 export function informe(h: Hallazgo[]): string {
   return h.map((x) => `${x.regla} ${x.fichero}:${x.linea}  ${x.texto}`).join('\n');
 }
