@@ -76,3 +76,33 @@ La decisión **no cambia**. Con HU-09 fuera del MVP desaparecen `PATCH
 /settings`, su control optimista y el `FOR SHARE` de `table_count`: el número
 de mesas es una constante de configuración leída al arrancar, así que no hay
 concurrencia que controlar entre crear un pedido y cambiar el número de mesas.
+
+## Revisión 2026-11-27 (tarea 2.21): menú (HU-05)
+
+La decisión para pedidos, líneas y cobros **no cambia**. Se fija cómo se
+aplica al menú, que el ADR no cubría (`docs/arquitectura.md` §4.1, §5.3, §6):
+
+- **Sin ids de cliente:** categorías y productos los crea el servidor
+  (`randomUUID()`). HU-05 no pide idempotencia, y el reintento de un alta
+  tras perder la red choca con el nombre único (`409 *_NAME_TAKEN`), así que
+  no crea duplicados. La UI recarga el menú y el encargado ve que ya existe.
+- **Sin `version` ni `expectedVersion`:** escribe casi siempre un solo
+  encargado; en las ediciones gana la última, y el evento SSE actualiza la
+  otra pantalla. Los eventos de producto no llevan `version` (§6).
+- **Cerrojo de transacción en vez de bloqueo de filas o versión:** toda
+  escritura de `menu:manage` empieza con
+  `SELECT pg_advisory_xact_lock(MENU_LOCK)`, que serializa las comprobaciones
+  que abarcan varias filas (nombre repetido, productos activos al archivar,
+  conjunto completo de `PUT /menu/order`, categoría no archivada) y las
+  posiciones. Es el mismo patrón que `CASH_CLOSING_LOCK` y no deja bloqueos
+  colgados (se libera con la transacción). El cambio de disponibilidad no lo
+  toma: es un `UPDATE` de una fila.
+- **Opciones descartadas:** `version` por categoría o por menú (más código en
+  cliente y servidor para un conflicto que casi no ocurre); `SERIALIZABLE`
+  (exige reintentos en todas las escrituras); solo índices únicos (no cubren
+  "conjunto completo" ni "sin productos activos").
+- **Consecuencias:** (+) reglas de varias filas sin carreras y sin
+  restricciones diferidas sobre `position`; (−) las escrituras del encargado
+  se serializan entre sí (sin efecto a esta escala: un encargado, decenas de
+  escrituras al día); (−) dos encargados editando el mismo producto a la vez
+  no reciben aviso de conflicto.

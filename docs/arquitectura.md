@@ -63,6 +63,14 @@
 > derivadas y etapa de construcción Debian (IMG-02). Se deciden además SEC-043
 > (clave del límite por IP y capacidad), el tope de la cola del semáforo
 > argon2 y la regla general de texto (D-2.5-03). Registro en la §18.
+>
+> Revisión 2026-11-27 (tarea 2.21, Etapa 2, T-50 y T-53 de Testing): contrato
+> de HU-05 antes de implementarla: tablas `categories` y `products` con
+> columnas, índices y privilegios (§4.1), rutas, cuerpos, respuestas y códigos
+> del menú, con la ruta nueva `GET /menu/manage` en lugar de
+> `?includeInactive=true` (§5.1, §5.3), cerrojo del menú, auditoría del precio,
+> eventos `product.updated` y `menu.changed` (§6) y los extremos de `apiName`
+> (§5, §18.2). Registro en la §19.
 
 ## 1. Visión general
 
@@ -415,7 +423,8 @@ estructura interna).
 | `@mi-app/shared/lockout` | `lockoutForFailures(failedAttempts): { kind: 'none' } \| { kind: 'temporary'; minutes: 5 \| 15 \| 60 } \| { kind: 'manual' }` (efecto de **llegar** a ese número de fallos consecutivos: 5, 10, 15 → temporal de 5, 15 y 60 min; ≥ 20 → manual; el resto, incluidos los fallos entre escalones, → `none`) |
 | `@mi-app/shared/retry` | `retryMinutes(retryAfterSeconds): number` (minutos redondeados hacia arriba, mínimo 1; I-03); `secondsUntil(untilMs, nowMs): number` (segundos restantes redondeados hacia arriba, mínimo 1; lo usa el servidor para `retryAfterSeconds`) [2.2c] |
 | `@mi-app/shared/business-date` | `businessDate(instant: Date): string` (`YYYY-MM-DD` en `Europe/Madrid`), `BUSINESS_TIME_ZONE` (§4) [2.2c] |
-| `@mi-app/shared/api` | esquemas zod y DTOs de la API (`LoginBody`, `ChangePinBody`, `EmptyBody`, `UnauthenticatedDetails`, `apiText`, `PIN_FIELD_MAX`, tipos `ApiError`, `MeResponse`…); reexporta `api-constants` [2.2c] |
+| `@mi-app/shared/api` | esquemas zod y DTOs de la API (`LoginBody`, `ChangePinBody`, `EmptyBody`, `UnauthenticatedDetails`, `apiText`, `PIN_FIELD_MAX`, tipos `ApiError`, `MeResponse`…); reexporta `api-constants` [2.2c]. Con HU-05: `apiName` y los esquemas y DTO del menú (§5.3) [2.21] |
+| `@mi-app/shared/money` | `parseCents(text: string): number \| null` y `formatCents(cents: number): string`, sin zod (la web los importa como valores); contrato de `tests/README.md` §7.3, aceptado (ADR-006) [2.21] |
 | `@mi-app/shared/api-constants` | constantes sin dependencias: `API_PREFIX`, `SESSION_COOKIE`, `REVOKED_REASONS`, tipo `RevokedReason` [2.2c, H-2.3-11] |
 | `@mi-app/shared/zod-csp` | efecto: `config({ jitless: true })` de zod; **primer** import de `apps/web/src/main.tsx` (T-45). El servidor no lo usa [2.2c] |
 | `@mi-app/api/app` | `buildApp`, tipos `AppDeps`, `Clock`, `DatabaseDeps` (§2.1) |
@@ -535,14 +544,55 @@ de variables de `app` en §10.1):
   ADR nuevo; los contratos de lectura (`localConfig`, `delayThresholdMinutes`
   de la cola) no cambian.
 
-**categories**: `id`, `name varchar(30)`, `position int`, `archived_at null`.
-Único `lower(name)` entre no archivadas (índice parcial). "Borrar" = archivar,
-y solo si no tiene productos activos (HU-05).
+**categories** (HU-05) [2.21, T-50]
+| Columna | Tipo | Notas |
+|---|---|---|
+| id | uuid PK | lo genera el servidor (`randomUUID()`); el menú no usa ids de cliente (ADR-008, revisión 2026-11-27) |
+| name | `varchar(30) NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 30)` | valor ya normalizado por `apiName(1, 30)` (§5) |
+| position | `integer NOT NULL` | orden en la toma de pedidos, ascendente; puede tener huecos (solo se compara) |
+| archived_at | `timestamptz null` | "Borrar" = archivar (hora del `Clock`). Una categoría archivada no se lee, no se edita ni se restaura en el MVP: para toda ruta es inexistente (§5.3) |
 
-**products**: `id`, `category_id FK`, `name varchar(40)`,
-`price_cents integer CHECK (price_cents BETWEEN 1 AND 99999)`,
-`available boolean` (agotado/disponible), `active boolean` (desactivado),
-`position int`, `updated_at`. Único `(category_id, lower(name))` entre activos.
+Índice único parcial `categories_name_lower_key (lower(name)) WHERE archived_at IS NULL`.
+Sin `created_at`/`updated_at`: nada los lee (YAGNI).
+
+**products** (HU-05) [2.21, T-50]
+| Columna | Tipo | Notas |
+|---|---|---|
+| id | uuid PK | lo genera el servidor |
+| category_id | `uuid NOT NULL REFERENCES categories(id)` | sin `ON DELETE` (nada se borra) |
+| name | `varchar(40) NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 40)` | `apiName(1, 40)` |
+| price_cents | `integer NOT NULL CHECK (price_cents BETWEEN 1 AND 99999)` | IVA incluido (ADR-006) |
+| available | `boolean NOT NULL DEFAULT true` | `false` = agotado |
+| active | `boolean NOT NULL DEFAULT true` | `false` = desactivado |
+| position | `integer NOT NULL` | orden dentro de la categoría, entre **todos** sus productos (activos o no) |
+| updated_at | `timestamptz NOT NULL` | hora del `Clock` de la última escritura |
+
+Índices: único parcial `products_category_name_lower_key (category_id, lower(name)) WHERE active`
+y `products_category_position_idx (category_id, position)` (lectura del menú y clave foránea).
+
+- **Posiciones:** alta de categoría → `COALESCE(max(position), -1) + 1` entre
+  las no archivadas; alta de producto → lo mismo entre todos los productos de
+  su categoría; mover un producto → al final de la categoría nueva;
+  `PUT /menu/order` → `0 … n−1` en el orden de la lista; archivar no toca las
+  demás. Sin `UNIQUE` sobre `position` (obligaría a restricciones diferidas al
+  renumerar): que no se repitan lo garantiza el cerrojo del menú (§5.3).
+  Lectura `ORDER BY position, id`.
+- **Invariante:** ningún producto activo en una categoría archivada. Lo
+  garantizan, bajo el cerrojo del menú, el `409 CATEGORY_HAS_ACTIVE_PRODUCTS`
+  al archivar y el `422 CATEGORY_NOT_FOUND` al crear, mover o reactivar.
+- **Mayúsculas:** `lower()` usa el `LC_CTYPE` de la BD (`C.UTF-8` en los
+  compose, proveedor libc), que pasa a minúsculas también las letras con tilde,
+  igual que en `users_name_lower_key`. Lo comprueba el caso "CAFÉ SOLO" de
+  CA-F07. Si alguna imagen de la BD no lo cumpliera, se avisa al Software
+  Engineer; no se cambia la comparación por otra.
+- **Privilegios [2.21, T-50 a]:** `app_rw` tiene `SELECT, INSERT, UPDATE` en
+  las dos tablas y **ni `DELETE` ni `TRUNCATE`** (tampoco `REFERENCES` ni
+  `TRIGGER`), como ya fija `docs/permisos.md` §4: un `DELETE` o `TRUNCATE`
+  como `app_rw` falla con `42501`. "Borrar" no existe: una categoría se
+  archiva (CA-F08) y un producto se desactiva (CA-F05), y el histórico
+  (`order_lines`, HU-02) los referencia. La migración concede los privilegios
+  explícitamente, sin `GRANT ALL`. No hace falta un trigger como el de
+  `audit_log`: el privilegio basta y ninguna ruta borra.
 
 **daily_counters**: `business_date date PK`, `last_number int`. El número
 correlativo se obtiene con
@@ -646,7 +696,16 @@ entidades, p. ej. una fecha de negocio de `cash_closings`; D-2.2-06 b);
 `(at)`; un segundo trigger rechaza también `TRUNCATE`. `user.unlocked`
 guarda `details.was_lock_kind` ∈ `manual` \| `temporary` \| `none` (`none`
 si `unlock-user` desbloquea a alguien sin bloqueo vigente, D-2.2-06 c; el log
-`staff.unlocked` lleva el mismo valor). Las mismas restricciones
+`staff.unlocked` lleva el mismo valor). **`price.changed` (HU-05/CA-N02)
+[2.21, T-50 e]:** una fila por cada cambio **efectivo** de `price_cents` (no
+al renombrar, mover, desactivar ni al mandar el mismo precio), en la misma
+transacción que el `UPDATE`: `at` = la misma hora del `Clock` que
+`products.updated_at`, `actor_id` = usuario de la sesión, `authorized_by`
+nulo (no hay autorización de otro), `entity_type = 'product'`,
+`entity_id` = id del producto, `details` = exactamente
+`{ "old_price_cents": <int>, "new_price_cents": <int> }`. El precio anterior
+se lee con `SELECT … FOR UPDATE` de la fila, así varios cambios seguidos
+forman una cadena sin huecos. Las mismas restricciones
 (sin `DELETE`) aplican a `payments`, `payment_orders` y `cash_closings`
 (en `payments` y `payment_orders` solo se permite `UPDATE` de las columnas de
 anulación).
@@ -1054,7 +1113,22 @@ interface ApiError {
   | Esquema | Campos | Proceso, en este orden |
   |---|---|---|
   | `apiText(min, max)` | texto libre: `customerRef`, `note`, `reasonText`, `reason` de la anulación; y el `name` del login (que solo se compara) | 1. normaliza a **NFC**; 2. rechaza con `rule: 'format'` si contiene un carácter `\p{Cc}` (C0 U+0000–U+001F, DEL U+007F y **C1 U+0080–U+009F**), U+2028/U+2029, un control bidireccional (U+202A–U+202E, U+2066–U+2069) o un sustituto UTF-16 suelto (`!s.isWellFormed()`); 3. longitud `min`/`max` (`min_length`/`max_length`) sobre el texto ya normalizado |
-  | `apiName(min, max)` | nombres que se muestran a otras personas y son únicos: `users.name` al crear o renombrar (HU-07, encargado inicial), `categories.name`, `products.name` (HU-05) | 1. NFC; 2. `trim()` y cada tramo de espacios U+0020 seguidos → uno; 3. las reglas de `apiText` **más**: rechaza `\p{Cf}` (invisibles: U+00AD, U+200B–U+200F, U+2060–U+2064, U+FEFF…), `\p{Co}`, `\p{Cn}` y cualquier `\p{Z}` distinto de U+0020 (NBSP, U+2000–U+200A, U+202F, U+3000…); 4. longitud |
+  | `apiName(min, max)` | nombres que se muestran a otras personas y son únicos: `users.name` al crear o renombrar (HU-07, encargado inicial), `categories.name`, `products.name` (HU-05) | 1. NFC; 2. `String.prototype.trim()` (quita **en los extremos** el conjunto de ECMAScript: U+0009–U+000D, U+0020, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 y U+FEFF; T-53) y cada tramo de espacios U+0020 seguidos → uno; 3. sobre el resultado, las reglas de `apiText` **más**: rechaza `\p{Cf}` (invisibles: U+00AD, U+200B–U+200F, U+2060–U+2064, U+FEFF…), `\p{Co}`, `\p{Cn}` y cualquier `\p{Z}` distinto de U+0020 (NBSP, U+2000–U+200A, U+202F, U+3000…); 4. longitud |
+
+  - **Extremos de `apiName` [2.21, T-53]:** el orden de la tabla es el
+    deseado. Los caracteres del conjunto de `trim()` **en los extremos se
+    quitan sin error**; los mismos caracteres **en medio** se rechazan
+    (`format`). "Café" seguido de NBSP se guarda "Café" (y es duplicado de
+    "Café"); "Café" + NBSP + "solo" da `400 format`. Los invisibles que no
+    son espacio para ECMAScript (U+200B, U+00AD, U+2060, U+180E…) se rechazan
+    en cualquier posición, también en los extremos. Motivo: lo que se guarda y
+    se compara nunca contiene ninguno de esos caracteres (el objetivo de la
+    regla y de C11), y quitar un espacio invisible al pegar un nombre es mejor
+    que un error sobre algo que el encargado no ve. Para C10 equivale: un
+    fichero de secreto del encargado inicial con BOM o saltos de línea finales
+    da el nombre limpio (`readSecret` ya quita un `\n`/`\r\n` final).
+    `apiText` **no** recorta nada (texto libre y `name` del login, sin
+    cambios).
 
   - Lo que se guarda es el valor **ya normalizado**; la unicidad
     (`lower(name)`) se calcula sobre él, así "José" compuesto y descompuesto,
@@ -1297,11 +1371,12 @@ Permisos: **W** = camarero/cajero, **K** = barra/cocina, **M** = encargado
 | `POST /auth/pin` | sesión **con `mustChangePin = true`** | HU-07/CA-F04, CA-F09 | **Solo el cambio obligatorio del PIN provisional** (ronda 1.1f: ninguna historia pide el cambio voluntario; un PIN que se sospecha visto lo restablece el encargado con `reset-pin`). Con `mustChangePin = false` → `403 FORBIDDEN` sin verificar nada (no suma a ningún contador). `{currentPin, newPin}` → `204`; pone `must_change_pin = false`; revoca las demás sesiones del usuario; única ruta (con `/auth/me` y logout) permitida con `mustChangePin`. `currentPin` pasa por `verifyPin` (SEC-016): `403 PIN_INVALID` (incorrecto; no `401`, la sesión sigue válida); `423 LOCKED {retryAfterSeconds}`; `423 ACCOUNT_LOCKED_MANUAL` (al llegar a 20 fallos: todas las sesiones del usuario, incluida esta, quedan revocadas); `429 TOO_MANY_ATTEMPTS {retryAfterSeconds}` (solo por IP, antes del hash; sin límite por sesión, T-20); `400` si `newPin` incumple las reglas de PIN. El resto de rutas con `mustChangePin` → `403 PIN_CHANGE_REQUIRED` (§5). **[2.2c] Orden:** `403 FORBIDDEN` sin PIN provisional (guarda) → zod → `validatePin(newPin, rol)` (`400` **sin** verificar `currentPin` ni contar intento: las reglas son públicas) → `verifyPin(currentPin)` → solo si acierta, hash del PIN nuevo → en la transacción condicionada del acierto (§7), `pin_hash`, `pin_digits`, `must_change_pin = false` y revocación de las demás sesiones (`revoked_reason = 'pin_changed'`); `503` si la cola de argon2 está llena (pendiente, SEC-043) |
 | `POST /session/activity` | sesión | HU-01 | latido de interacción (como mucho 1/min si hay toques sin otras peticiones); `204`. El cliente nunca lo marca pasivo; si no pudo enviarse por falta de red y hubo toques, lo envía al recibir `hello`, antes de los *snapshots* (§7, SEC-030) |
 | `GET /events` | sesión | HU-02..HU-06 | flujo SSE (§6). [2.2c] No cuenta como actividad (`activity: false`); `503 SERVICE_UNAVAILABLE` + `Retry-After: 5` antes de abrir el flujo si se pasaría del tope global (§6) |
-| `GET /menu` | W, K, M | HU-02, HU-05 | categorías y productos activos ordenados, con `available` (K sin precio) |
-| `PATCH /products/:id/availability` | W, M | HU-05 | `{available}` |
-| `POST /categories` · `PATCH /categories/:id` · `DELETE /categories/:id` | M | HU-05 | `DELETE` archiva; `409 CATEGORY_HAS_ACTIVE_PRODUCTS {count}` |
-| `POST /products` · `PATCH /products/:id` | M | HU-05 | precio en `priceCents`; cambio de precio auditado; `active:false` desactiva |
-| `PUT /menu/order` | M | HU-05 | `{categories:[id…], products:{categoryId:[id…]}}` |
+| `GET /menu` | W, K, M (`menu:read`) | HU-02, HU-05 | toma de pedidos: categorías no archivadas con sus productos **activos**, por `position`, con `available` (K sin precio). La *query* se ignora. Forma en §5.3 |
+| `GET /menu/manage` | M (`menu:manage`) | HU-05 | P-09: lo mismo **más** los productos desactivados, cada uno con `active` [2.21, T-50 c] (§5.3) |
+| `PATCH /products/:id/availability` | W, M (`product:set_availability`) | HU-05 | `{available}` y nada más → `200 {product}`; `404` (§5.3) |
+| `POST /categories` · `PATCH /categories/:id` · `DELETE /categories/:id` | M (`menu:manage`) | HU-05 | `{name}` → `201`/`200 {category}`; `DELETE` archiva → `204`; `404`; `409 CATEGORY_NAME_TAKEN`; `409 CATEGORY_HAS_ACTIVE_PRODUCTS {count}` (§5.3) |
+| `POST /products` · `PATCH /products/:id` | M (`menu:manage`) | HU-05 | alta `{categoryId, name, priceCents, available?}` → `201 {product}`; edición parcial `{name?, categoryId?, priceCents?, available?, active?}` → `200 {product}` (`active:false` desactiva); `404`; `409 PRODUCT_NAME_TAKEN`; `422 CATEGORY_NOT_FOUND`; cambio de precio auditado (§4.1, `price.changed`) (§5.3) |
+| `PUT /menu/order` | M (`menu:manage`) | HU-05 | `{categories:[id…], products:{categoryId:[id…]}}` → `204`; `422 MENU_ORDER_MISMATCH` (§5.3) |
 | `GET /tables/:n/open-orders` | W, M | HU-02 | aviso "La mesa X ya tiene un pedido abierto" (`status = 'open'`); `:n` con la misma regla que `tableNumber` de `POST /orders` (`400` fuera de 1–99 o no entero, `422 TABLE_OUT_OF_RANGE` por encima de `TABLE_COUNT`) |
 | `POST /orders` | W, M | HU-02 | `{id, type, tableNumber?, customerRef?, lines:[{id, productId, quantity, note?}]}` → `201` pedido con número del día, `businessDate` y precios del servidor. **`tableNumber` (T-19):** con `type = "table"` es obligatorio y debe ser un entero JSON (no cadena, sin coerción) entre 1 y 99; si falta, es 0, negativo, > 99, no entero o no numérico → `400` de validación con `path: ["tableNumber"]`; con `type = "counter"` no se admite (presente, aunque sea `null`, → `400` con `path: ["tableNumber"]`). Entero entre 1 y 99 pero > `TABLE_COUNT` (21–99 con 20 mesas) → `422 TABLE_OUT_OF_RANGE {tableCount}`. Ninguno crea pedido ni consume número del día; `422 ORDER_TOO_MANY_LINES` (> 100); `quantity` 1–99; mismo `id` del mismo usuario → `200` con el mismo pedido; `id` de otro usuario → `409` sin datos |
 | `GET /orders/floor` | W, M | HU-02, HU-03, HU-04 | **lista de sala** (§4.2): `{serverTime, businessDate, orders:[staffDto]}`; incluye abiertos, cobrados sin servir del día y "Listos para servir" |
@@ -1443,6 +1518,127 @@ las ve el usuario. Se acepta la propuesta de Testing (`tests/README.md` §5):
   recorridos de directorio, `apps/api/src/http/spa.ts`): solo se sirve lo que
   está en ese mapa; caché larga (`immutable`) solo bajo `/assets/`.
 
+### 5.3 Contrato del menú (HU-05) [2.21, T-50]
+
+Acepta la propuesta de Testing (`tests/README.md` §7.1, §7.2 y §7.5) con los
+cambios marcados. Esquemas zod en `@mi-app/shared/api` (`CategoryBody`,
+`CreateProductBody`, `UpdateProductBody`, `AvailabilityBody`,
+`MenuOrderBody` y los DTO de abajo); importes con `@mi-app/shared/money`
+(§3.1).
+
+**Reglas comunes**
+- **Cuerpos `.strict()`:** clave desconocida → `not_allowed` (RS-20; el
+  cliente no impone `id`, `position`, `archivedAt` ni nada del servidor).
+  `name` con `apiName` (categoría 1–30, producto 1–40, §5). `priceCents`:
+  entero JSON 1–99 999, sin coerción (`"250"`, `1.5`, `null`, `true` →
+  `type`; `0`, `-1` → `min`; `100000` → `max`). `available` y `active`:
+  booleanos JSON (`0`, `1`, `"false"`, `null` → `type`). Ids del cuerpo con
+  `z.uuid()` (`format`). Varias incidencias a la vez se devuelven todas.
+- **Orden (§5):** guarda (`Origin` → sesión → PIN provisional → permiso: un
+  rol sin permiso recibe `403 FORBIDDEN` sin `details`, sin validar el cuerpo
+  y sin tocar la BD) → `415`/`400` → *handler*.
+- **`:id` de la URL:** si no es un UUID → `404 NOT_FOUND`, igual que uno que
+  no existe y sin consultar la BD (nunca `500` por `22P02`). Una categoría
+  archivada es inexistente: `404` si está en la URL, `422 CATEGORY_NOT_FOUND`
+  si está en el cuerpo **[cambio sobre la propuesta (h): se fija `422`]**:
+  el `404` queda para el recurso de la URL, así el cliente distingue "el
+  producto que editas ya no existe" de "la categoría elegida ya no existe".
+- **Sin cambios, sin efectos:** una escritura válida que no cambia nada
+  (mismo nombre, mismo precio, mismo `available`, `{}` en `PATCH
+  /products/:id`) responde igual que con cambio (`200` con el recurso) pero no
+  escribe, no audita, no registra log de cambio y no publica evento.
+- **Cerrojo del menú:** toda escritura de `menu:manage` es una transacción
+  cuya **primera** sentencia es `SELECT pg_advisory_xact_lock(MENU_LOCK)`
+  (constante con nombre, como `CASH_CLOSING_LOCK`): serializa altas,
+  renombrados, archivados, ediciones y reordenaciones, así las comprobaciones
+  (nombre repetido, productos activos, conjunto completo de `PUT /menu/order`,
+  categoría no archivada) y las posiciones no tienen carreras. `PATCH
+  /products/:id/availability` **no** lo toma: es un `UPDATE … WHERE id = $1`
+  de una fila, el camino más frecuente y el de CA-F04.
+- **Nombres repetidos [T-50 b, aceptado tal cual]:** comprobación previa bajo
+  el cerrojo con `lower(name) = lower($normalizado)` → `409
+  CATEGORY_NAME_TAKEN` (entre no archivadas) o `409 PRODUCT_NAME_TAKEN`
+  (entre los activos de la categoría), sin `details`. Un `23505` en
+  `categories_name_lower_key` o `products_category_name_lower_key` se traduce
+  al mismo `409`, nunca `500`. El propio nombre (también con otras
+  mayúsculas) no es duplicado.
+- **Eventos** tras el `COMMIT` (§6) y logs de `docs/logging.md` §3.3
+  (`product.availability_changed`, `product.price_changed`,
+  `product.created`, `product.updated`, `category.archived`,
+  `menu.reordered`, …).
+
+**Formas de respuesta [T-50 d, aceptado con cambios]**
+
+```ts
+type CategoryDto = { id: string; name: string };
+type ProductDto  = { id: string; categoryId: string; name: string; priceCents: number; available: boolean; active: boolean };
+// GET /menu — W y M:
+type MenuResponse = { categories: Array<{ id: string; name: string;
+  products: Array<{ id: string; name: string; priceCents: number; available: boolean }> }> };
+// GET /menu — K (serializador propio, como toKitchenDto): products sin priceCents;
+//   ninguna clave que case con /cents|price|total|amount|tendered|change/i (RS-19).
+// GET /menu/manage — solo M: products con todos los productos (activos o no) y además `active: boolean`.
+```
+
+Las escrituras devuelven el recurso **envuelto** (`{ category }`, `{ product }`),
+como `{ user }` y `{ payment }` en el resto de la API; `DELETE` y `PUT
+/menu/order` no tienen cuerpo de respuesta (`204`).
+
+| Ruta | Cuerpo | Éxito | Errores propios |
+|---|---|---|---|
+| `GET /menu` | — | `200 MenuResponse`: categorías no archivadas `ORDER BY position, id`; dentro, productos con `active` `ORDER BY position, id`; categoría sin productos → `products: []`; sin categorías → `categories: []`. `Cache-Control: no-store` (§5); admite `X-Activity: passive` | — |
+| `GET /menu/manage` | — | `200`: lo mismo con **todos** los productos de cada categoría no archivada y `active` en cada uno | — |
+| `POST /categories` | `{ name }` | `201 { category }`, al final del orden | `409 CATEGORY_NAME_TAKEN` |
+| `PATCH /categories/:id` | `{ name }` | `200 { category }` | `404`; `409 CATEGORY_NAME_TAKEN` |
+| `DELETE /categories/:id` | — | `204`; `archived_at` = hora del `Clock`; la fila y sus productos (desactivados) se conservan | `404` (no existe o ya archivada); `409 CATEGORY_HAS_ACTIVE_PRODUCTS` con `details = { count }` = productos con `active = true` (los agotados cuentan, los desactivados no) |
+| `POST /products` | `{ categoryId, name, priceCents, available? }` (`available` por defecto `true`) | `201 { product }`, al final de su categoría | `422 CATEGORY_NOT_FOUND` (no existe o archivada); `409 PRODUCT_NAME_TAKEN` |
+| `PATCH /products/:id` | parcial: `{ name?, categoryId?, priceCents?, available?, active? }` | `200 { product }`; mover → al final de la categoría nueva | `404`; `422 CATEGORY_NOT_FOUND` (`categoryId` inexistente o archivada, o `active: true` con su categoría archivada); `409 PRODUCT_NAME_TAKEN` (nombre nuevo, mover o reactivar con un activo del mismo nombre en la categoría de destino). Orden: `404` → `422` → `409` |
+| `PATCH /products/:id/availability` | `{ available }` y nada más | `200 { product }`; vale para cualquier producto existente (activo o no) | `404` |
+| `PUT /menu/order` | ver abajo | `204` | `422 MENU_ORDER_MISMATCH` |
+
+- **`available` en `PATCH /products/:id` [cambio sobre la propuesta (d)]:**
+  el formulario de edición de P-09 tiene los 4 campos de CA-U01, también
+  "Disponible": se guarda en una sola petición atómica, no en dos. El
+  encargado ya tiene `product:set_availability`, así que no amplía nada.
+  `PATCH /products/:id/availability` sigue siendo la única vía del camarero y
+  sigue admitiendo solo `available` (RS-20).
+- **Auditoría del precio [T-50 e, aceptado tal cual]:** §4.1 (`price.changed`).
+
+**`GET /menu/manage` en vez de `GET /menu?includeInactive=true` [T-50 c,
+aceptado con cambios].** Se acepta lo que pide (lo desactivado solo lo ve el
+encargado, decidido en el servidor) con una ruta propia que declara
+`{ permission: 'menu:manage' }`: así la guarda responde el `403 FORBIDDEN`
+**antes del *handler*** como en todas las rutas (ADR-005, "cada ruta declara
+un permiso"), la matriz de RS-17 la cubre sola y no hay ninguna comprobación
+de permisos dentro de un *handler* que dependa de un parámetro. `GET /menu`
+no admite parámetros: la *query* se ignora (un `?includeInactive=true` de
+cualquier rol recibe el menú normal, sin desactivados). P-09 lee `GET
+/menu/manage` al montarse y al recibir `hello` o `menu.changed`, y aplica
+`product.updated` en su sitio (§6); la toma de pedidos (HU-02) usa `GET /menu`.
+
+**`PUT /menu/order` [T-50 f, aceptado con precisiones]**
+- Esquema: `{ categories: uuid[], products: Record<uuid, uuid[]> }`, ambos
+  obligatorios, `products` puede ser `{}`. Formato → `400` (`required`,
+  `type`, `format`, `not_allowed`). Sin tope propio de elementos: lo acota el
+  `bodyLimit` de 64 KiB (≈ 1 700 UUID).
+- Comprobación bajo el cerrojo del menú; cualquier fallo → `422
+  MENU_ORDER_MISMATCH` sin `details` y sin cambiar nada:
+  1. `categories` sin repetidos y, como conjunto, **igual** a las categorías
+     no archivadas (falta una, sobra una, desconocida o archivada → `422`);
+  2. cada clave de `products` es una categoría no archivada, y su lista, sin
+     repetidos e igual al conjunto de **todos** sus productos (activos o no).
+- Efecto: `position = índice` (`0 … n−1`) en todas las categorías y en los
+  productos de cada categoría presente en `products`; las ausentes de
+  `products` conservan el orden de sus productos. Una sola transacción: el
+  resultado es siempre uno de los órdenes pedidos, nunca una mezcla, y con el
+  cerrojo dos reordenaciones simultáneas se aplican una tras otra (`204` las
+  dos; gana la última). Un `menu.changed`; log `menu.reordered`.
+- Con el menú vacío, `{ categories: [], products: {} }` es el conjunto
+  completo → `204`.
+- Por qué `422` y no `409`: el cuerpo está bien formado pero no casa con el
+  estado actual, y no hay versión que devolver. La UI, ante el `422`, recarga
+  `GET /menu/manage` y avisa (texto de UX).
+
 ## 6. Tiempo real (ADR-004)
 
 - **Transporte:** Server-Sent Events en `GET /api/v1/events` (un único flujo por
@@ -1467,12 +1663,37 @@ las ve el usuario. Se acepta la propuesta de Testing (`tests/README.md` §5):
 | `order.updated` | `cancelled` | staff | kitchen **solo si** `kitchenFlag = cancelled` | staff | HU-06 |
 | `order.updated` | `paid`, `payment_voided` | staff | — (barra no ve cobros) | staff | HU-04 |
 | `payment.created` · `payment.voided` | fila de "Cobrados hoy" | ✓ | — | ✓ | HU-04 |
-| `product.updated` | disponibilidad/precio/activo | ✓ | ✓ (sin precio) | ✓ | HU-05 |
-| `menu.changed` | estructura/orden → recarga `GET /menu` | ✓ | ✓ | ✓ | HU-05 |
+| `product.updated` | disponibilidad/precio/desactivación: `{ productId, available, active, priceCents, emittedAt }` [2.21] | ✓ | ✓ (**sin** `priceCents`) | ✓ | HU-05 |
+| `menu.changed` | estructura/orden: `{ emittedAt }` → recarga `GET /menu` (P-09: `GET /menu/manage`) [2.21] | ✓ | ✓ | ✓ | HU-05 |
 | `session.revoked` (y se cierra el flujo) | `reason`: `logout` \| `user_disabled` \| `pin_reset` \| `pin_changed` \| `account_locked_manual` (el mismo valor que `details.revokedReason` del `401`, §5; elige el banner de P-01) [2.1c] | sesión afectada | sesión afectada | sesión afectada | HU-01, HU-07 |
 | `session.updated` (cambio de rol → recarga `/auth/me` y reconecta; si la promoción a encargado deja `mustChangePin`, el servidor cierra el flujo tras el evento y la app abre el cambio obligatorio del PIN, §5) | — | sesión afectada | sesión afectada | sesión afectada | HU-07 |
 | `ping` cada 2 s | `serverTime`, `businessDate` | ✓ | ✓ | ✓ | latido |
 
+- **Eventos del menú [2.21, T-50 g, aceptado con precisiones]** (HU-05;
+  publicados tras el `COMMIT` a **todos** los flujos abiertos, solo si la
+  escritura cambió algo; una escritura rechazada o sin cambios no publica):
+  - `product.updated`, cuando solo cambian `available`, `priceCents` y/o
+    `active` a `false`: `PATCH /products/:id/availability` y `PATCH
+    /products/:id` en esos casos. Datos: el estado actual completo de esos
+    campos, `{ productId, available, active, priceCents, emittedAt }`; a barra
+    el mismo objeto **sin** `priceCents` (lo serializa el *hub* por rol, como
+    los pedidos; RS-19). El cliente lo aplica en su sitio: `active: false` →
+    lo quita de la toma (P-09 lo marca "DESACTIVADO"); un `productId` que no
+    tiene, lo ignora.
+  - `menu.changed`, `{ emittedAt }`, en todo lo demás: crear, renombrar o
+    archivar una categoría; crear un producto; `PATCH /products/:id` que
+    cambia `name` o `categoryId` o reactiva (`active` a `true`; el cliente no
+    tiene ese producto); `PUT /menu/order`. Si un mismo `PATCH` cambia algo de
+    las dos listas, solo `menu.changed` (la recarga lo trae todo). El cliente
+    recarga su *snapshot* (`GET /menu` o, en P-09, `GET /menu/manage`) con
+    `X-Activity: passive`.
+  - **Sin `version`:** los productos no la tienen (ADR-008, revisión
+    2026-11-27); entre eventos de producto gana el último que llega. Que dos
+    cambios casi simultáneos del mismo producto se publiquen en orden inverso
+    al de sus `COMMIT` es posible pero improbable (la segunda transacción
+    espera el bloqueo de fila de la primera); se acepta porque cualquier
+    orden es un estado válido que alguien eligió y la siguiente recarga
+    (`hello` o `menu.changed`) lo corrige.
 - **Cambio de día:** no hay temporizador en servidor. El `ping` lleva
   `businessDate`; cuando el cliente de sala ve que cambia, recarga
   `GET /orders/floor` y `GET /payments/today` (los cobrados sin servir del día
@@ -1483,7 +1704,7 @@ las ve el usuario. Se acepta la propuesta de Testing (`tests/README.md` §5):
   `hello`; el cliente entonces recarga `GET /auth/me` (trae `localConfig` tras
   un reinicio de `app`) y **cada pantalla montada** pide su snapshot (P-05:
   `GET /kitchen/queue`; P-02: `GET /orders/floor` + `GET /payments/today`;
-  las que muestran productos: `GET /menu`) y lo **reemplaza** por completo. No
+  las que muestran productos: `GET /menu`; P-09: `GET /menu/manage`) y lo **reemplaza** por completo. No
   hay snapshot global de la *layout* (§5.2: "Acceso denegado" no carga datos).
   Todas estas recargas van con `X-Activity: passive` (§7, SEC-030). Los eventos que lleguen durante la carga se
   aplican si su `version` es mayor que la del snapshot. No se usa
@@ -1931,7 +2152,7 @@ Fuente de las reglas de seguridad: `docs/seguridad.md` §6 y `docs/permisos.md`
 | `session:self`, `events:subscribe`, `telemetry:write` | ✓ | ✓ | ✓ |
 | `menu:read` | ✓ | ✓ (sin precios) | ✓ |
 | `product:set_availability` | ✓ | | ✓ |
-| `menu:manage` | | | ✓ |
+| `menu:manage` (escrituras del menú y `GET /menu/manage`, §5.3) | | | ✓ |
 | `order:create`, `order:read` (lista de sala, detalle), `order:modify`, `order:cancel` | ✓ (quitar/cancelar fuera de Pendiente: **A**) | | ✓ |
 | `order:serve` (Servido y su deshacer) **[nuevo]** | ✓ | | ✓ |
 | `kitchen:read`, `kitchen:transition` (Empezar, Listo, Deshacer, confirmar etiqueta) | | ✓ | ✓ |
@@ -2412,6 +2633,7 @@ sin ADR nuevo.
 | SEC-043 / D-2.5-03 d | Clave del límite por IP: IPv4 completa (también la incrustada en IPv6) y **/64** para IPv6. Despliegue publicado solo por IPv4 en DEMO/PROD para que una Wi-Fi IPv6 no comparta cupo. La poda nunca borra entradas bloqueadas ni con fallos en la ventana; con el mapa lleno, **falla cerrado** (`429`, 60 s) para claves nuevas | **Pendiente de implementar**: antes de HU-06 y como tarde antes de la puerta de la Etapa 3 | §7, §10 |
 | SEC-038 punto 4 / D-2.5-03 a | Cola del semáforo argon2 acotada a **32**; llena → `503 SERVICE_UNAVAILABLE` + `Retry-After: 5`, sin contar fallo; log `auth.verify.busy` | **Pendiente de implementar**, junto con SEC-043 | §5, §7 |
 | SEC-042 / D-2.5-03 c | Regla general de texto: `apiText` (NFC; rechaza `\p{Cc}` incluido C1, U+2028/2029, controles bidireccionales y sustitutos sueltos) para texto libre y el login; `apiName` (además `trim`, espacios colapsados y rechazo de `\p{Cf}`, `\p{Co}`, `\p{Cn}` y espacios Unicode distintos de U+0020) para nombres únicos y visibles | **Pendiente de implementar** con HU-05 (primera historia que crea nombres) | §5, §12 |
+| T-53 (Testing, baja) [2.21] | **Confirmado el orden NFC → `trim()` → colapsar U+0020 → rechazar → longitud.** El `trim()` es el de ECMAScript (U+0009–U+000D, U+0020, U+00A0, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000, U+FEFF): esos caracteres **en los extremos se quitan sin error** y **en medio se rechazan** (`format`); los invisibles que no son espacio para ECMAScript (U+200B, U+00AD, U+2060, U+180E…) se rechazan en cualquier posición. No se adelanta el rechazo al `trim()`: lo guardado nunca contiene esos caracteres (objetivo de la regla, C11 intacta) y el encargado no recibe un error por un espacio invisible pegado al final. Mismo efecto en `create-initial-manager` (C10) | **Pendiente de implementar** con HU-05; confirmación de Cybersecurity (C10/C11) | §5 |
 
 ### 18.3 Lo que genera esta revisión para otros agentes
 
@@ -2434,3 +2656,44 @@ sin ADR nuevo.
 - **cybersecurity:** confirmar las decisiones de 18.2 (SEC-043 y cola del
   semáforo; regla de texto, que sigue sus recomendaciones de la §6.9 punto 3
   y las amplía para los nombres con `apiName`).
+
+## 19. Registro de la tarea 2.21 (Etapa 2, 2026-11-27): contrato de HU-05 (T-50, T-53)
+
+Fuentes: `tests/README.md` §7 («Contrato con el código (HU-05)») y
+`docs/testing.md` §14.10 (hallazgos T-50 y T-53 de la 2.20), HU-05,
+wireframe 06, `docs/permisos.md` §3–§4 y `docs/seguridad.md` §6.14 (C10, C11).
+Ninguna decisión cambia un ADR. Una amplía el alcance de ADR-008 al menú
+(sin ids de cliente ni versión, cerrojo de transacción): revisión
+2026-11-27 de ADR-008. `GET /menu/manage` se elige precisamente para **no**
+cambiar ADR-005 (permiso declarado por ruta, `403` antes del *handler*).
+
+| Punto | Veredicto | Decisión | Dónde |
+|---|---|---|---|
+| T-50 (a) `app_rw` sin `DELETE`/`TRUNCATE` en `categories` y `products` | **Aceptado tal cual** | Ya lo fijaba `docs/permisos.md` §4; ahora también la §4.1. `SELECT, INSERT, UPDATE`; borrar → `42501`. Sin trigger extra | §4.1 |
+| T-50 (b) `CATEGORY_NAME_TAKEN`, `PRODUCT_NAME_TAKEN` | **Aceptado tal cual** | `409` sin `details`; comprobación previa bajo el cerrojo y `23505` del índice traducido al mismo `409` | §5.3 |
+| T-50 (c) lo desactivado solo para el encargado | **Aceptado con cambios** | Ruta propia `GET /menu/manage` (`menu:manage`) en vez de `?includeInactive=true`: la guarda da el `403` antes del *handler*, la matriz RS-17 la cubre y ningún *handler* decide permisos por un parámetro. `GET /menu` ignora la *query* | §5.1, §5.3, §7 |
+| T-50 (d) formas de respuesta | **Aceptado con cambios** | Recurso envuelto (`{ category }`, `{ product }`); `201` al crear, `200` al editar, **`204`** al archivar y reordenar (se fija uno de los dos propuestos); DTO de §5.3. Además `PATCH /products/:id` admite `available` (el formulario de edición guarda los 4 campos de CA-U01 en una petición) | §5.3 |
+| T-50 (e) auditoría `price.changed` | **Aceptado tal cual** | `details = { old_price_cents, new_price_cents }`, `entity_type = 'product'`, `authorized_by` nulo, misma hora que `updated_at`, solo con cambio efectivo, precio anterior con `FOR UPDATE` | §4.1 |
+| T-50 (f) `PUT /menu/order` | **Aceptado con precisiones** | Conjunto completo de categorías no archivadas y de todos los productos de cada categoría mencionada; formato → `400`; incoherencia con el estado → **`422 MENU_ORDER_MISMATCH`** sin cambios; `204`; cerrojo del menú; menú vacío con listas vacías → `204` | §5.3 |
+| T-50 (g) eventos SSE | **Aceptado con precisiones** | `product.updated { productId, available, active, priceCents, emittedAt }` (barra sin `priceCents`) solo para disponibilidad, precio y desactivación; `menu.changed { emittedAt }` para todo lo demás (también renombrar, mover y reactivar); sin `version` | §6 |
+| T-50 (h) categoría inexistente o archivada en el cuerpo | **Aceptado con cambios** | Se fija **`422 CATEGORY_NOT_FOUND`** (el `404` es para el recurso de la URL); también al mover o reactivar en una categoría archivada | §5.3 |
+| T-50 (extra) `:id` que no es UUID | Decisión nueva | `404 NOT_FOUND` como un id inexistente, sin consultar la BD | §5.3 |
+| T-50 (extra) concurrencia del menú | Decisión nueva | `pg_advisory_xact_lock(MENU_LOCK)` como primera sentencia de toda escritura de `menu:manage`; la disponibilidad no lo toma; sin `UNIQUE` en `position` | §4.1, §5.3, ADR-008 |
+| T-53 extremos de `apiName` | **Confirmado el orden actual** | Los caracteres del `trim()` de ECMAScript se quitan en los extremos y se rechazan en medio; los demás invisibles, en cualquier posición | §5, §18.2 |
+
+### 19.1 Lo que genera esta revisión para otros agentes
+
+- **cybersecurity:** confirmar (a) (privilegios de la migración nueva) y (c)
+  (`GET /menu/manage` con `menu:manage`, `GET /menu` sin parámetros), y añadir
+  la fila de `GET /menu/manage` a `docs/permisos.md` §3; confirmar T-53 frente
+  a C10/C11 (extremos quitados, también en el nombre del encargado inicial).
+- **testing:** ajustar los puntos de adaptación a `GET /menu/manage` y a la
+  matriz (lista exacta en el informe de la 2.21); opcional: fijar los
+  códigos elegidos (`204`, `422 CATEGORY_NOT_FOUND`, `422
+  MENU_ORDER_MISMATCH`, `404` con id no UUID), `available` en `PATCH
+  /products/:id` y casos de extremos de `apiName`; actualizar `tests/README.md`
+  §7.1, §7.2 y §7.4.
+- **ux-designer:** textos para `422 MENU_ORDER_MISMATCH` (el menú cambió en
+  otro dispositivo: se recarga y se avisa) y `422 CATEGORY_NOT_FOUND` en el
+  formulario de producto (la categoría elegida ya no existe), junto con T-51.
+- **developer (HU-05):** implementar §4.1, §5.3 y §6 tal como quedan.
